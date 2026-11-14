@@ -1,0 +1,96 @@
+#include "@CODEC@"
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <map>
+#include <string>
+#include <vector>
+using s64 = int64_t;
+#define R_FAILED(result) ((result) != 0)
+#define R_SUCCEEDED(result) ((result) == 0)
+namespace ams::fs {
+struct FileHandle { std::string path; };
+inline constexpr int OpenMode_Read = 1, OpenMode_Write = 2;
+struct WriteOption { static constexpr int Flush = 1; };
+struct ResultPathNotFound { static bool Includes(int result) { return result == 1; } };
+std::map<std::string, std::vector<uint8_t>> files;
+bool read_only = false, write_failure = false, rename_failure = false, corrupt_write = false;
+unsigned opened = 0, closed = 0, reads = 0, writes = 0;
+int OpenFile(FileHandle *out, const char *path, int mode) {
+    if (read_only && mode == OpenMode_Write) return 3;
+    if (!files.count(path)) return 1;
+    out->path = path; opened++; return 0;
+}
+void CloseFile(FileHandle) { closed++; }
+int GetFileSize(int64_t *size, FileHandle file) { *size = files[file.path].size(); return 0; }
+int ReadFile(size_t *bytes, FileHandle file, int64_t offset, void *out, size_t capacity) {
+    assert(offset == 0); reads++;
+    const auto &data = files[file.path]; *bytes = std::min(capacity, data.size());
+    std::memcpy(out, data.data(), *bytes); return 0;
+}
+int CreateDirectory(const char *path) { assert(std::string(path) == "sdmc:/lanywhere");return read_only ? 3 : 0; }
+int DeleteFile(const char *path) { if(read_only)return 3;return files.erase(path) ? 0 : 1; }
+int CreateFile(const char *path, size_t size) {
+    if (read_only) return 3;
+    if (files.count(path)) return 2;
+    files[path].resize(size);
+    return 0;
+}
+int WriteFile(FileHandle file, int64_t offset, const void *bytes, size_t size, int flags) {
+    assert(offset == 0 && flags == WriteOption::Flush); writes++;
+    if(write_failure)return 3;
+    files[file.path].assign(static_cast<const uint8_t *>(bytes),static_cast<const uint8_t *>(bytes)+size);
+    if (corrupt_write) files[file.path][0] = 0;
+    return 0;
+}
+int RenameFile(const char *from, const char *to) {
+    if(read_only || (rename_failure && std::string(from).find(".tmp") != std::string::npos))return 3;
+    const auto found = files.find(from);if(found == files.end())return 1;if(files.count(to))return 2;
+    files[to] = found->second;files.erase(found);return 0;
+}
+}
+std::deque<uint32_t> random_values;
+uint32_t lanplay_random() { assert(!random_values.empty());const auto value=random_values.front();random_values.pop_front();return value; }
+namespace ams::mitm::lanplay {
+constexpr uint32_t Network = 0x0a0d0000u;
+@VIRTUAL@
+@ADDRESS@
+}
+using namespace ams::mitm::lanplay;
+static constexpr const char *Path = "sdmc:/lanywhere/lanplay-ip.bin";
+static constexpr const char *TemporaryPath = "sdmc:/lanywhere/lanplay-ip.bin.tmp";
+static constexpr const char *PreviousPath = "sdmc:/lanywhere/lanplay-ip.bin.previous";
+std::vector<uint8_t> Record(uint32_t address) { std::vector<uint8_t> out(8);std::memcpy(out.data(),"LPIP",4);Put32(out.data()+4,address);return out; }
+int main() {
+    namespace fs=ams::fs;
+    random_values={0,0xffff,0x2501,0xfefe,0x1234};
+    assert(VirtualAddress(false)==0x0a0d1234 && random_values.empty());
+    assert(fs::files[Path]==Record(0x0a0d1234) && !fs::files.count(TemporaryPath));
+    const auto writes=fs::writes;
+    assert(VirtualAddress(false)==0x0a0d1234 && fs::writes==writes);
+    random_values={0x1234,0x5678};
+    assert(VirtualAddress(true)==0x0a0d5678 && random_values.empty());
+    assert(fs::files[PreviousPath]==Record(0x0a0d1234));
+    assert(fs::files[Path]==Record(0x0a0d5678));
+    fs::files.erase(Path);
+    assert(VirtualAddress(false)==0x0a0d1234); // interrupted install reads last valid identity
+    fs::files.clear();fs::files[Path]=Record(0x0a0d1111);fs::files[Path].push_back(99);
+    random_values={0x2222};assert(VirtualAddress(false)==0x0a0d2222); // exact record size
+    fs::files[Path]=Record(0x0a0d3333);fs::files.erase(PreviousPath);
+    fs::write_failure=true;random_values={0x4444};assert(VirtualAddress(true)==0x0a0d4444);
+    assert(fs::files[Path]==Record(0x0a0d3333) && !fs::files.count(TemporaryPath));
+    fs::write_failure=false;fs::corrupt_write=true;random_values={0x5555};assert(VirtualAddress(true)==0x0a0d5555);
+    assert(fs::files[Path]==Record(0x0a0d3333));
+    fs::corrupt_write=false;fs::rename_failure=true;random_values={0x6666};assert(VirtualAddress(true)==0x0a0d6666);
+    assert(fs::files[Path]==Record(0x0a0d3333)); // failed install restores primary
+    fs::files.clear();fs::files[PreviousPath]=Record(0x0a0d3333);
+    random_values={0x9999};assert(VirtualAddress(true)==0x0a0d9999);
+    assert(fs::files[PreviousPath]==Record(0x0a0d3333) && VirtualAddress(false)==0x0a0d3333);
+    fs::rename_failure=false;fs::files.clear();fs::read_only=true;
+    random_values={0x7777};assert(VirtualAddress(false)==0x0a0d7777 && fs::files.empty());
+    fs::read_only=false;fs::files[Path]=std::vector<uint8_t>(8,0);random_values={0x8888};
+    assert(VirtualAddress(false)==0x0a0d8888); // corrupt magic is replaced
+    assert(fs::opened==fs::closed);
+}

@@ -41,3 +41,12 @@ Still required before claiming hardware compatibility or latency improvement:
 0.8.0 开发验证已覆盖 Switch 交叉构建、真实回环 TCP/UDP 测速、推荐与缓存失效、房间身份、目录退出后的协议连接、205 项原有输入场景及新增筛选测试；另完成 114 张主机渲染图和 296 项教程文字检查。中国服务机对 11 个公共入口的只读 PING 有回应，但没有在这些入口上完成真实双机游戏。
 
 Switch 实机安装与重启、双机建房加入、跨地区同房、好友测速、标准/fork 互通边界、换网和断线恢复，以及同组玩家的实际延迟对比均保留为待验收。不能据此宣称所有游戏可玩或延迟已经降低。
+
+
+## 0.8.1 Beta — saved LAN Play address
+
+Source inspection found that 0.8.0 accesses `sdmc:/lanywhere/lanplay-ip.bin` through C stdio, while this sysmodule mounts the SD card through Atmosphère's filesystem interface. The 0.8.1 change targets that persistence mismatch.
+
+The actual Switch storage function passed host filesystem-boundary tests for saved identity reuse, missing/corrupt records, collision renewal, failed writes/renames and previous-file recovery. A clean Switch cross-build and paired 0.8.1 metadata/source verification passed. SD ZIP SHA-256: `27d956cd765b754d205ff1a6e337e5cc434883c0c16e1dbfa8b302de6a93a58a`. Release publication also requires CI and signed-update readback. Physical Switch restart/address reuse and two-console play remain unverified. The 0.8.0 public-node results above describe unchanged transport behavior, not a second hardware test.
+
+中文：已定位 0.8.0 的 LAN Play 地址保存接口与模块实际 SD 挂载方式不一致；0.8.1 针对此问题修复。实际 Switch 存储函数的主机边界回归、干净交叉构建与同版组件校验通过；发版仍须 CI 和签名更新回读。实机重启后的地址复用和双机游戏仍待实测。

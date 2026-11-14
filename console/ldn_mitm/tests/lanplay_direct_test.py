@@ -13,6 +13,33 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class NativeLanPlayTransport(unittest.TestCase):
+    def test_switch_virtual_address_uses_mounted_filesystem(self):
+        source = (ROOT / "console/ldn_mitm/source/lanplay_direct.cpp").read_text()
+        def function(signature):
+            start = source.index(signature)
+            opening = source.index("{", start)
+            depth = 1
+            end = opening + 1
+            while depth:
+                depth += (source[end] == "{") - (source[end] == "}")
+                end += 1
+            return source[start:end]
+        address = function("uint32_t VirtualAddress(bool renew) {")
+        for forbidden in ["fopen", "fwrite", "fread", "mkdir", "fsync"]:
+            self.assertNotIn(forbidden, address)
+        main = (ROOT / "console/ldn_mitm/source/ldnmitm_main.cpp").read_text()
+        self.assertIn('fs::MountSdCard("sdmc")', main)
+        harness = (ROOT / "console/ldn_mitm/tests/lanplay_address_store_harness.cpp.in").read_text()
+        harness = harness.replace("@ADDRESS@", address).replace("@VIRTUAL@", function("bool Virtual(uint32_t ip) {"))
+        harness = harness.replace("@CODEC@", str(ROOT / "console/ldn_mitm/source/lanplay_codec.hpp"))
+        with tempfile.TemporaryDirectory(prefix="lanywhere-switch-storage-") as temp:
+            cpp = Path(temp) / "address.cpp"
+            executable = Path(temp) / "address"
+            cpp.write_text(harness)
+            subprocess.run(shlex.split(os.environ.get("CXX", "c++")) +
+                ["-std=c++17", "-D__SWITCH__", "-Wall", "-Wextra", "-Werror", str(cpp), "-o", str(executable)], check=True)
+            subprocess.run([str(executable)], check=True)
+
     def test_switch_thread_priority_uses_stratosphere_conversion(self):
         implementation = ROOT / "console/Atmosphere-libs/libstratosphere/source/os/impl"
         header = (implementation / "os_thread_manager_impl.os.horizon.hpp").read_text()

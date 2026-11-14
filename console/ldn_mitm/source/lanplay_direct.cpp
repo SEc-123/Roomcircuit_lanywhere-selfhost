@@ -1501,28 +1501,72 @@ uint32_t VirtualAddress(bool renew) {
     uint8_t saved[8]{};
     uint32_t address = 0;
 #if defined(__SWITCH__)
-    FILE *file = std::fopen("sdmc:/lanywhere/lanplay-ip.bin", "rb");
-    if (file) {
-        if (std::fread(saved, 1, sizeof(saved), file) == sizeof(saved) && !std::memcmp(saved, "LPIP", 4))
-            address = Le32(saved + 4);
-        std::fclose(file);
-    }
+    // This sysmodule mounts sdmc through ams::fs, not libnx's stdio devoptab.
+    namespace fs = ams::fs;
+    constexpr const char *Path = "sdmc:/lanywhere/lanplay-ip.bin";
+    constexpr const char *TemporaryPath = "sdmc:/lanywhere/lanplay-ip.bin.tmp";
+    constexpr const char *PreviousPath = "sdmc:/lanywhere/lanplay-ip.bin.previous";
+    auto read = [](const char *path, uint32_t *out) {
+        fs::FileHandle file;
+        if (R_FAILED(fs::OpenFile(&file, path, fs::OpenMode_Read)))
+            return false;
+        uint8_t record[8]{};
+        size_t bytes = 0;
+        int64_t size = 0;
+        const bool valid = R_SUCCEEDED(fs::GetFileSize(&size, file)) && size == static_cast<int64_t>(sizeof(record)) &&
+                           R_SUCCEEDED(fs::ReadFile(&bytes, file, 0, record, sizeof(record))) &&
+                           bytes == sizeof(record) && !std::memcmp(record, "LPIP", 4) &&
+                           Virtual(Le32(record + 4));
+        fs::CloseFile(file);
+        if (valid)
+            *out = Le32(record + 4);
+        return valid;
+    };
+    const bool primary_valid = read(Path, &address);
+    if (!primary_valid)
+        read(PreviousPath, &address);
 #endif
     if (Virtual(address) && !renew)
         return address;
+    const uint32_t previous_address = address;
     do {
         address = Network | (lanplay_random() & 0xffff);
-    } while (!Virtual(address));
+    } while (!Virtual(address) || (renew && address == previous_address));
 #if defined(__SWITCH__)
-    ::mkdir("sdmc:/lanywhere", 0777);
+    // Stage and verify before replacing the last valid identity. Any storage
+    // failure keeps this session usable and leaves the old file recoverable.
+    static_cast<void>(fs::CreateDirectory("sdmc:/lanywhere"));
     std::memcpy(saved, "LPIP", 4);
     Put32(saved + 4, address);
-    file = std::fopen("sdmc:/lanywhere/lanplay-ip.bin", "wb");
-    if (file) {
-        std::fwrite(saved, 1, sizeof(saved), file);
-        std::fflush(file);
-        ::fsync(fileno(file));
-        std::fclose(file);
+    static_cast<void>(fs::DeleteFile(TemporaryPath));
+    if (R_FAILED(fs::CreateFile(TemporaryPath, sizeof(saved))))
+        return address;
+    fs::FileHandle file;
+    bool written = false;
+    if (R_SUCCEEDED(fs::OpenFile(&file, TemporaryPath, fs::OpenMode_Write))) {
+        written = R_SUCCEEDED(fs::WriteFile(file, 0, saved, sizeof(saved), fs::WriteOption::Flush));
+        fs::CloseFile(file);
+    }
+    uint32_t verified = 0;
+    written = written && read(TemporaryPath, &verified) && verified == address;
+    if (written && primary_valid) {
+        const auto deleted = fs::DeleteFile(PreviousPath);
+        written = R_SUCCEEDED(deleted) || fs::ResultPathNotFound::Includes(deleted);
+    }
+    bool moved_previous = false;
+    if (written && primary_valid) {
+        const auto moved = fs::RenameFile(Path, PreviousPath);
+        moved_previous = R_SUCCEEDED(moved);
+        written = moved_previous;
+    } else if (written) {
+        // A recovered previous record may be the only valid copy; preserve it.
+        const auto deleted = fs::DeleteFile(Path);
+        written = R_SUCCEEDED(deleted) || fs::ResultPathNotFound::Includes(deleted);
+    }
+    if (!written || R_FAILED(fs::RenameFile(TemporaryPath, Path))) {
+        if (moved_previous)
+            static_cast<void>(fs::RenameFile(PreviousPath, Path));
+        static_cast<void>(fs::DeleteFile(TemporaryPath));
     }
 #else
     (void)saved;
