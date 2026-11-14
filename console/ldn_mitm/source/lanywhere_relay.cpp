@@ -80,7 +80,7 @@ namespace ams::mitm::lanywhere {
 
         constinit os::SdkMutex g_lock;        // estado de la sala
         constinit os::SdkMutex g_queue_lock;  // cola de paquetes
-        constinit os::SdkMutex g_send_lock;   // escrituras en el TCP (hilo de la sala e hilos de ldn)
+        constinit os::SdkMutex g_send_lock;   // TCP/UDP writes and socket replacement
         constinit os::SdkMutex g_room_lifecycle_lock;
         constinit os::SdkMutex g_match_lock;
         u8 g_room_ticket[MatchTicketSize];
@@ -474,6 +474,7 @@ namespace ams::mitm::lanywhere {
         }
 
         bool UdpSend(u8 type, const void *body, size_t size) {
+            std::scoped_lock lock(g_send_lock);
             return UdpSendTo(g_udp, g_server, g_token, type, body, size);
         }
 
