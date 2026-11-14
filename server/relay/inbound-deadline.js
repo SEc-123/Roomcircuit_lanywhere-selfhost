@@ -2,10 +2,13 @@
 
 const { SUBSCRIBE, REQUEST_BYTES } = require('./appointment-push');
 const { REQUEST: REGIONAL_LOBBY } = require('./regional-directory');
+const { MANIFEST_REQUEST, CHUNK_REQUEST } = require('./update-format');
 
 // Framing is checked by the caller before this function; command-specific
 // validation remains in the normal protocol handlers.
 function knownCommand(type, body) {
+    if (type === MANIFEST_REQUEST) return body.length === 0;
+    if (type === CHUNK_REQUEST) return body.length === 36;
     return ((type >= 1 && type <= 0x0d) || type === 0x20 || type === 0x21 ||
             type === 0x22 || type === 0x24 || type === 0x26 || (type === 0x27 && body.length === 48) ||
             ((type === 0x28 || type === REGIONAL_LOBBY) && body.length === 8) ||

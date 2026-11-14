@@ -14,6 +14,7 @@
 #define HidNpadButton_AnyUp (1ULL << 14)
 #define HidNpadButton_AnyLeft (1ULL << 16)
 #define HidNpadButton_AnyRight (HidNpadButton_Right | (1ULL << 17))
+#define TOUCH_UPDATE (1ULL << 59)
 #define TOUCH_CARD (1ULL << 62)
 #define TOUCH_NETWORK_CHOICE (1ULL << 61)
 /* SOURCE_PAGE_LIMIT */
@@ -135,6 +136,12 @@ static int step(View *target, u64 down) {
 // Error-screen touch handling uses the actual main.c functions too. Graphics,
 // pad input and the outer applet loop are dependencies, not duplicate routes.
 typedef struct { int unused; } PadState;
+static bool test_update;
+static unsigned update_calls;
+static void draw_update_entry(bool shortcut) { (void)shortcut; }
+static bool update_ui_open(PadState *pad, bool (*allowed)(void *), void *context) { (void)pad;(void)allowed;(void)context;update_calls++;return test_update; }
+static bool update_ui_changed(void) { return false; }
+static bool ui_chinese(void) { return g_zh; }
 typedef struct { int x,y,w,h; u64 button; } TouchZone;
 static TouchZone g_zones[24];
 static int g_zone_count, applet_ticks;
@@ -153,8 +160,8 @@ static void gfx_rect(int x,int y,int w,int h,u32 color) {(void)x;(void)y;(void)w
 static int gfx_button(int x,int y,const char *key,const char *label) {(void)x;(void)y;(void)key;(void)label;return 120;}
 static bool appletMainLoop(void) { return applet_ticks-- > 0; }
 static void padUpdate(PadState *pad) {(void)pad;}
-static u64 padGetButtonsDown(PadState *pad) {(void)pad;return 0;}
-static u64 touch_button(void) {return touch_action_at(1130,680);}
+static u64 padGetButtonsDown(PadState *pad) {(void)pad;return test_update?HidNpadButton_StickL:0;}
+static u64 touch_button(void) {return test_update?0:touch_action_at(1130,680);}
 /* SOURCE_NO_SERVICE */
 
 static View lobby(void) {
@@ -412,6 +419,8 @@ int main(void) {
     assert(!g_guide_open&&calls.sleep==0&&touch_action_at(1130,680)==HidNpadButton_Plus);checked();
     v=lobby();g_guide_open=true;applet_ticks=2;no_service(&pad,true);assert(!g_guide_open&&calls.sleep==0);checked();
     assert(touch_action_at(1140,60)==HidNpadButton_StickR);checked();
+    test_update=true;update_calls=0;applet_ticks=2;no_service(&pad,false);assert(update_calls==1);checked();
+    update_calls=0;applet_ticks=2;no_service(&pad,true);assert(update_calls==1);checked();test_update=false;
     for(unsigned state=0;state<4;state++){
         v=lobby();
         if(state==0)g_guide_open=true;

@@ -3,7 +3,7 @@
 //
 // Muestra si el servidor responde, los grupos abiertos de todos los juegos (los crea cualquiera con "crear grupo"
 // en el modo inalámbrico local) y permite elegir si los grupos propios se ven, o jugar en una sala privada por
-// código. Todo pasa por el servicio "lanywhr" del sysmodule; la app no habla con el servidor.
+// código. Game networking uses the sysmodule; the updater connects to the release service directly.
 
 #include <errno.h>
 #include <stdio.h>
@@ -26,6 +26,9 @@
 #include "appointments_model.h"
 #include "appointments_view.h"
 #include "room_password.h"
+#include "update_ui.h"
+
+#define TOUCH_UPDATE (1ULL << 59)
 
 #define MIN_REFRESH_MS   1250
 #define STATUS_POLL_MS    250
@@ -1578,6 +1581,12 @@ static void draw_password_visibility(void)
     add_zone(x - 8, 424, LIST_W - 44, 62, HidNpadButton_B);
 }
 
+static void draw_update_entry(bool shortcut)
+{
+    const int width = gfx_button(350, 47, shortcut ? "LS" : "", update_ui_button_label());
+    add_zone(340, 36, width + 20, 52, TOUCH_UPDATE);
+}
+
 static void draw(const View *v)
 {
     gfx_begin();
@@ -1594,6 +1603,7 @@ static void draw(const View *v)
     }
     if (appointments_active()) {
         appointments_draw(&g_catalog, add_zone);
+        draw_update_entry(true);
         draw_language_control();
         save_capture_if_requested();
         gfx_end();
@@ -1607,6 +1617,7 @@ static void draw(const View *v)
     }
     gfx_text(MARGIN, 36, 40, C_TEXT, "LANywhere");
     status_pill(v);
+    draw_update_entry(!can_change_provider(v));
     draw_language_control();
     if (v->provider_panel) provider_column(v);
     else if (v->private_panel || v->private_room) private_column(v);
@@ -1957,14 +1968,13 @@ static void draw_no_service(bool incompatible)
     gfx_text(MARGIN + 28, 170, 28, C_TEXT, incompatible ?
         TR("La app y el módulo son de versiones distintas", "The app and sysmodule versions do not match") :
         TR("Falta el componente de LANywhere", "The LANywhere component is missing"));
-    gfx_text(MARGIN + 28, 222, 22, C_DIM, incompatible ?
-        TR("Reinstala la app y la carpeta «atmosphere» del mismo paquete", "Replace the app and atmosphere files from the same package") :
-        TR("Copia la carpeta «atmosphere» del paquete en la raíz de la tarjeta SD", "Copy the \"atmosphere\" folder from the package to the root of the SD card"));
+    gfx_text(MARGIN + 28, 222, 22, C_DIM, ui_text("Open Update to repair the installation."));
     gfx_text(MARGIN + 28, 254, 22, C_DIM, TR("y reinicia la consola.", "and restart the console."));
     gfx_rect(0, FOOTER_Y, GFX_W, 1, C_LINE);
     g_zone_count = 0;
     int w = gfx_button(GFX_W - MARGIN - 120, FOOTER_Y + 20, "+", TR("Salir", "Exit"));
     add_zone(GFX_W - MARGIN - 130, FOOTER_Y + 8, w + 20, 56, HidNpadButton_Plus);
+    draw_update_entry(true);
     draw_language_control();
     gfx_end();
 }
@@ -1976,6 +1986,12 @@ static void no_service(PadState *pad, bool incompatible)
         padUpdate(pad);
         const u64 down = padGetButtonsDown(pad) | touch_button();
         if (down & HidNpadButton_Plus) break;
+        if (down & (HidNpadButton_StickL | TOUCH_UPDATE)) {
+            if (update_ui_open(pad, NULL, NULL)) break;
+            g_zh = ui_chinese();
+            draw_no_service(incompatible);
+        }
+        if (update_ui_changed()) draw_no_service(incompatible);
         if (down & HidNpadButton_StickR) {
             switch_language();
             draw_no_service(incompatible);
@@ -1984,10 +2000,20 @@ static void no_service(PadState *pad, bool incompatible)
     }
 }
 
+static bool update_install_ready(void *unused)
+{
+    (void)unused;
+    LanywhereStatus status = {0};
+    if (R_FAILED(lanywhere_status(&status)) || status.state > StateError ||
+        status.state == StateConnecting || status.state == StateInRoom) return false;
+    LobbyMatch match = {0};
+    if (R_SUCCEEDED(lanywhere_match_status(&match)) && match.mode != LobbyManual &&
+        match.state >= MatchWaitScan && match.state <= MatchJoining) return false;
+    return true;
+}
+
 int main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     PadState pad;
     padInitializeDefault(&pad);
@@ -1996,15 +2022,23 @@ int main(int argc, char **argv)
     (void)game_catalog_open(&g_catalog, game_catalog_bin, game_catalog_bin_size);
     if (!gfx_init())
         return 1;
+    if (update_ui_initialize(argc > 0 ? argv[0] : NULL)) {
+        (void)update_ui_open(&pad, NULL, NULL);
+        update_ui_shutdown();
+        gfx_exit();
+        return 0;
+    }
 
     if (R_FAILED(smGetService(&g_lanywhere, "lanywhr"))) {
         no_service(&pad, false);
+        update_ui_shutdown();
         gfx_exit();
         return 0;
     }
     if (!lanywhere_protocol_supported()) {
         no_service(&pad, true);
         serviceClose(&g_lanywhere);
+        update_ui_shutdown();
         gfx_exit();
         return 0;
     }
@@ -2057,6 +2091,17 @@ int main(int argc, char **argv)
             touch = 0;
         }
         u64 down = padGetButtonsDown(&pad) | touch;
+        const bool update_shortcut = (down & HidNpadButton_StickL) && !g_guide_open &&
+            !v.password_edit.active && (appointments_active() || !can_change_provider(&v));
+        if ((down & TOUCH_UPDATE) || update_shortcut) {
+            if (update_ui_open(&pad, update_install_ready, NULL)) break;
+            g_zh = ui_chinese();
+            down = 0;
+            dirty = true;
+            next_status = 0;
+            ueventSignal(&g_refresh);
+        }
+        if (update_ui_changed()) dirty = true;
         if (down & HidNpadButton_Plus) {
             if (atomic_load(&g_inventory_running))
                 draw_busy(TR("Leyendo nombres de juegos…", "Reading game titles…"));
@@ -2480,6 +2525,7 @@ int main(int argc, char **argv)
     if (inventory_created) threadClose(&inventory);
     if (g_ns_ready) nsExit();
     serviceClose(&g_lanywhere);
+    update_ui_shutdown();
     gfx_exit();
     return 0;
 }

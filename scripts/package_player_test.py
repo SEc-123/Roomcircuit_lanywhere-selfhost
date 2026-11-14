@@ -101,7 +101,7 @@ def main():
         put(fixture, 'console/out/sd/' + overlay_path, nro)
         put(fixture, 'console/ldn_mitm/ldn_mitm.elf', b'test\0' + address.encode('ascii') + b'\0' + community)
         entries = package.package_files('fixture', None, 11460, (address, 11460))
-        assert len(entries) == 23, f'expected 23 files, found {len(entries)}'
+        assert len(entries) == 24, f'expected 24 files, found {len(entries)}'
         assert entries[overlay_path] == nro
         assert 'README.txt' in entries and 'GAMES.txt' in entries
         assert 'lanywhere/config.ini' not in entries
@@ -135,7 +135,7 @@ def main():
         put(fixture, 'app/lanywhere.nro', nro + address.encode('ascii') + b'\0' + europe + community)
         put(fixture, 'console/ldn_mitm/ldn_mitm.elf', address.encode('ascii') + b'\0' + europe + community)
         assert set(package.package_files('fixture', None, 11460, (address, 11460))) == set(entries)
-    print(f'Player package: 23 files including the overlay and catalog license, preserved config, CRC verified; {len(listed)} candidate titles')
+    print(f'Player package: 24 files including the overlay and catalog license, preserved config, CRC verified; {len(listed)} candidate titles')
 
 
 if __name__ == '__main__':

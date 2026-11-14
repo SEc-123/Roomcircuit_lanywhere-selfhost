@@ -34,6 +34,7 @@ const { groupPage } = require('./group-page');
 const { create: createUnifiedLobby } = require('./unified-lobby');
 const regionalDirectory = require('./regional-directory');
 const trafficStore = require('./traffic-store');
+const updateDistribution = require('./update-distribution');
 const appointmentStore = require('./appointments');
 const pushProtocol = require('./appointment-push');
 const upstreamGateway = require('./upstream-gateway');
@@ -355,6 +356,7 @@ function checkMonth() {
     if (paused && !wasPaused) {
         matches.drain();
         streams.shutdown();
+    updates.shutdown();
         log(`TOPE MENSUAL ALCANZADO (${(traffic.bytes / 1e9).toFixed(1)} GB): servidor en pausa hasta el mes que viene`);
         for (const room of rooms.values())
             for (const m of room.members) if (m && m.socket) sendError(m.socket, E.PAUSED, PAUSED_TEXT);
@@ -740,7 +742,21 @@ function relayControl(member, body) {
     }
 }
 
+const updates = updateDistribution.create({
+    directory: realmId ? undefined : process.env.LANYWHERE_UPDATE_DIR, send, error: sendError,
+});
+
 function onFrame(socket, type, body) {
+    if (type === updateDistribution.MANIFEST_REQUEST || type === updateDistribution.CHUNK_REQUEST) {
+        if (realmId || socket.member || appointmentPush?.has(socket) || !upstreams.isSelf(socket))
+            return sendError(socket, E.BAD_REQUEST, 'Update requires an idle connection.');
+        if (paused) return sendError(socket, E.PAUSED, PAUSED_TEXT);
+        if (draining) return sendError(socket, E.BUSY, 'Server is restarting. Try again.');
+        updates.handle(socket, type, body);
+        return;
+    }
+    if (updates.has(socket) && type !== T.PING)
+        return sendError(socket, E.BAD_REQUEST, 'Update connection is read-only.');
     if (type === pushProtocol.SUBSCRIBE) {
         if (!appointmentPush || !upstreams.isSelf(socket) || socket.member)
             return sendError(socket, E.BAD_REQUEST, 'suscripción no válida');
@@ -1062,6 +1078,7 @@ const tcp = net.createServer((socket) => {
         if (n > 0) connections.set(ip, n); else connections.delete(ip);
         if (socket.member) detach(socket.member);
         appointmentPush?.close(socket);
+        updates.close(socket);
         upstreams.onClose(socket);
         checkShutdown();
     });
@@ -1258,6 +1275,7 @@ async function finishShutdown() {
     clearTimeout(realmDiscoveryTimer);
     clearInterval(streamSweep);
     streams.shutdown();
+    updates.shutdown();
     upstreams.shutdown();
     lanplay?.close();
     if (realms) await realms.shutdown();

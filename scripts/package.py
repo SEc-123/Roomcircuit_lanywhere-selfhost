@@ -155,6 +155,8 @@ def package_files(version, server, port, embedded):
         f"Switch Online {version}（Beta，跨网真机验收待完成）\n\n"
         "安装：将包内文件合并到 SD 卡根目录，保留游戏、存档和 config.ini，重启进入虚拟系统。\n"
         "从相册打开 LANywhere Self-host。启动后显示约局，B 进入房间大厅。\n"
+        "以后可在应用内点“更新”，关闭游戏后下载安装，完成后重启虚拟系统。\n"
+        "安装中断时，从自制软件菜单打开 LANywhere Recovery。\n"
         f"{setup}\n"
         "按 RS 切换中英文，右下角可查看教程。\n"
         "大厅按 Y 选建房线路（默认自有网络），再到游戏的“本地无线”建房。\n"

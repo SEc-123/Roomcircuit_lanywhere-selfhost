@@ -34,6 +34,7 @@ fixed_english = {
     'Game TCP is unavailable on this network.', 'Legacy game TCP is unconfirmed.',
     'Reopen LANywhere to read game information.', 'Game network ID is not allowed.',
     'regional lobby is not configured',
+    'Server is restarting. Try again.', 'Update requires an idle connection.', 'Update connection is read-only.',
 }
 upstream = (root / 'server/relay/upstream-gateway.js').read_text(encoding='utf-8')
 fork = (root / 'server/relay/lanplay.js').read_text(encoding='utf-8')

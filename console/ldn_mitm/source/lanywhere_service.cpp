@@ -36,6 +36,15 @@ namespace ams::mitm::lanywhere {
 
     }
 
+    Result LanywhereService::GetBuildVersion(const sf::OutBuffer &out) {
+        if (out.GetSize() != 16) return ResultRelayFailed();
+        char version[16]{};
+        static_assert(sizeof(GITDESCVER) <= sizeof(version));
+        std::memcpy(version, GITDESCVER, sizeof(GITDESCVER));
+        std::memcpy(out.GetPointer(), version, sizeof(version));
+        R_SUCCEED();
+    }
+
     Result LanywhereService::CreateRoom(u64 game_id, const sf::InBuffer &nick) {
         AMS_UNUSED(nick);  // el nombre es el apodo de config.ini
         R_RETURN(lanywhere::CreateRoom(game_id));

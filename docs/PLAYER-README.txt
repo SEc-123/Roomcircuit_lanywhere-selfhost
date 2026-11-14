@@ -1,4 +1,4 @@
-LANywhere Self-host 0.6.2 Beta
+LANywhere Self-host 0.7.0 Beta
 
 中文
 
@@ -7,6 +7,10 @@ LANywhere Self-host 0.6.2 Beta
 安装会替换相同模块 ID 的 ldn_mitm。重启进入兼容的 Atmosphère，再从相册打开 LANywhere Self-host。
    @CONNECTION_ZH@
 默认英文。点右上角或按 RS 切换中英文，设置会保留。右下角可「查看教程」。
+
+在线更新
+打开应用后可检查新版。点「更新」，关闭游戏后安装，完成后重启虚拟系统。
+安装中断时，从自制软件菜单打开 LANywhere Recovery。
 
 建房与加入
 • 建房。约局页按 B 进大厅。默认用「自有网络」。有「建房线路」时，开房前按 Y 选择，再到游戏的「本地无线」里建房。
@@ -29,6 +33,10 @@ This replaces an existing ldn_mitm with the same module ID. Restart into compati
    @CONNECTION_EN@
 Use the top-right language control or press the right stick (RS) to switch languages. Your selection is remembered.
 Choose View guide at the bottom right for help.
+
+Online updates
+Open the app to check for updates. Select Update, close the game and install. Restart Atmosphère when prompted.
+If installation is interrupted, open LANywhere Recovery from the Homebrew Menu.
 
 Host or join
 • Host. Press B from Appointments for the lobby. My server is the default. If Hosting line appears, press Y to select a line before creating a room in Local Wireless.

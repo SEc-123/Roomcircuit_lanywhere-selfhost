@@ -88,6 +88,8 @@ test('configuration accepts documented values and rejects injection, duplicates 
     validateConfig('LANYWHERE_UDP_BIND_ADDRESS=192.0.2.10\nLANYWHERE_JOIN_TIMEOUT_MS=120000\nLANYWHERE_CREATE_PER_MIN=1000',
         { localAddresses: ['192.0.2.10'] });
     validateConfig('LANYWHERE_EU_RELAY=192.0.2.10:11460');
+    validateConfig('LANYWHERE_UPDATE_DIR=/opt/switch-online/updates');
+    assert.throws(() => validateConfig('LANYWHERE_UPDATE_DIR=relative'), /absolute directory/);
     validateConfig('LANYWHERE_ENABLE_PUBLIC_UPSTREAM=1\nLANYWHERE_ENABLE_COMMUNITY_DIRECT=1');
     assert.throws(() => validateConfig('LANYWHERE_ENABLE_COMMUNITY_DIRECT=1'), /requires LANYWHERE_ENABLE_PUBLIC_UPSTREAM=1/);
     assert.throws(() => validateConfig('LANYWHERE_ENABLE_COMMUNITY_DIRECT=2'), /between 0 and 1/);

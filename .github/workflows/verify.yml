@@ -15,7 +15,7 @@ jobs:
         with:
           node-version: '24'
       - name: Install host image test dependency
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libturbojpeg0-dev
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libturbojpeg0-dev libsodium-dev
       - name: Relay protocol and multiplayer checks
         run: npm test -- --report "$RUNNER_TEMP/switch-online-tests.json"
       - name: Shell syntax

@@ -50,7 +50,8 @@
     AMS_SF_METHOD_INFO(C, H, 30, Result, GetRegionalRoomPasscode, (RegionalPasscodeLookup lookup, ams::sf::Out<RoomPasscodeReply> reply), (lookup, reply)) \
     AMS_SF_METHOD_INFO(C, H, 31, Result, UnlockRegionalGameRoom, (RegionalAccessUnlock unlock, ams::sf::Out<u32> status), (unlock, status)) \
     AMS_SF_METHOD_INFO(C, H, 32, Result, GetRelayRegions, (ams::sf::Out<u32> mask), (mask)) \
-    AMS_SF_METHOD_INFO(C, H, 33, Result, ListCommunityRooms, (UnifiedRoomsRequest request, ams::sf::Out<UnifiedPage> page, const ams::sf::OutBuffer &out), (request, page, out))
+    AMS_SF_METHOD_INFO(C, H, 33, Result, ListCommunityRooms, (UnifiedRoomsRequest request, ams::sf::Out<UnifiedPage> page, const ams::sf::OutBuffer &out), (request, page, out)) \
+    AMS_SF_METHOD_INFO(C, H, 34, Result, GetBuildVersion, (const ams::sf::OutBuffer &out), (out))
 
 AMS_SF_DEFINE_INTERFACE(ams::mitm::lanywhere, ILanywhereService, AMS_ILANYWHERE_SERVICE, 0x594E414C)
 
@@ -68,6 +69,7 @@ namespace ams::mitm::lanywhere {
             Result StartQuickMatch();
             Result CancelMatch();
             Result GetMatchStatus(sf::Out<MatchStatus> out);
+            Result GetBuildVersion(const sf::OutBuffer &out);
             Result GetProtocolCapabilities(sf::Out<u32> out);
             Result ListGroupsV2(u32 offset, sf::Out<GroupPageV2> page, const sf::OutBuffer &out);
             Result ListGroupsPage(u32 offset, sf::Out<GroupPage> page, const sf::OutBuffer &out);

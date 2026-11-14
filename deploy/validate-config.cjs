@@ -53,6 +53,9 @@ function validateConfig(source, { localAddresses = Object.values(os.networkInter
                 throw new Error(`${prefix}: ${key} must be a generated 32-byte base64url token`);
         } else if (key === 'LANYWHERE_EU_RELAY') {
             try { parseEndpoint(value); } catch (error) { throw new Error(`${prefix}: ${error.message}`); }
+        } else if (key === 'LANYWHERE_UPDATE_DIR') {
+            if (!path.isAbsolute(value) || value.includes('\0'))
+                throw new Error(`${prefix}: ${key} must be an absolute directory`);
         } else if (key === 'LANYWHERE_LANPLAY_PROVIDERS') {
             const allowed = new Set(['lanplay-nl','lanplay-br','lanplay-id','lanplay-nl-jaysea-rust','lanplay-nl-r3ps4j-rust','lanplay-nl-r3ps4j-11452','lanplay-de-servegame',
                 'lanplay-cn-jax','lanplay-cn-gugu','lanplay-cn-olunira','lanplay-cn-shanghai']);

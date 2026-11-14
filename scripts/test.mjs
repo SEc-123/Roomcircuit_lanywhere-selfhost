@@ -71,6 +71,12 @@ try {
     await suite('Relay and legacy protocol', process.execPath, ['server/relay/test.js'], {
         ...process.env, LANYWHERE_LANPLAY_PORT: '0', LANYWHERE_PUBLIC_PORT: '0',
     });
+    await suite('Online update delivery and game isolation', process.execPath, ['--test', 'server/relay/test-update-distribution.js']);
+    await suite('Signed updater transaction and interrupted recovery', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_core_test.py']);
+    await suite('Updater network transfer and cancellation', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_network_test.py']);
+    await suite('Updater install, repair and cancellation UI', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_install_ui_test.py']);
+    await suite('Updater restart and runtime-version gate', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_startup_test.py']);
+    await suite('Signed online update package', process.env.PYTHON || 'python3', ['-B', 'scripts/test-online-update-package.py']);
     await suite('Public relay safety', process.execPath, ['server/relay/test-public-safety.js']);
     await suite('Public lobby pagination', process.execPath, ['server/relay/test-group-page.js']);
     await suite('Public lobby pagination over TCP', process.execPath, ['server/relay/test-pagination-e2e.js']);

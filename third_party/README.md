@@ -25,3 +25,5 @@ a claim that the original console games, Nintendo system software, or their asse
 are included. No games, ROMs, console keys or user credentials are in this delivery.
 
 The supplied fork's Chinese title database and nx-ovlloader heap settings were not imported.
+
+- libsodium 1.0.20 verifies Ed25519 update signatures. ISC license in `licenses/libsodium-LICENSE`.

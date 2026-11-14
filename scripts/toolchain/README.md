@@ -23,3 +23,5 @@ python3 scripts/toolchain/verify_switch_build.py . \
 用实际执行的构建命令填写 `--build-command`。报告核对主应用、Tesla 浮层和后台模块的 AArch64 Build ID、名称、版本、ExeFS 内容和源文件哈希。`--ipc-abi 5` 还核对前后台声明的命令号、版本和数据结构大小。新旧后台与前台混装的界面行为要在真机上验证。
 
 报告中的 `.bss` 是 ELF 静态零初始化区段大小。原后台约为 2.13 MiB，其中包括 1 MiB 全局分配区、128 KiB 服务分配区、320 KiB BSD 传输内存和 12 个各 16 KiB 的 IPC 线程栈。能力查询的返回值占 4 字节，匹配状态占 88 字节。检查 `.bss` 的差异可以发现额外常驻缓冲区，真实内存和会话压力要通过多台主机的完整对局验证。
+
+在线更新器使用容器内的 libsodium 1.0.20 验证 Ed25519 签名。主机测试需要 `libsodium-dev` 和 zlib 开发库。

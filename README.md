@@ -14,6 +14,8 @@ On **Appointments**, use **A** to join or leave, **L** to create, **Y** to mark 
 
 [Game candidates](compatibility/PLAYER-GAMES.txt) · [Validation status](docs/distribution/VALIDATION.md) · [Pack and store integration](docs/distribution/INTEGRATORS.md)
 
+Use **Update** in the app to install future releases, then restart Atmosphère. Install this first updater-enabled version with the SD ZIP. [Online update details](docs/distribution/ONLINE-UPDATES.md)
+
 ## Build and self-host
 
 - Run `bash scripts/build-container.sh --embedded` to build the Switch app, sysmodule and overlay with the [pinned toolchain](scripts/toolchain/README.md).
@@ -35,6 +37,8 @@ Development assisted by OpenAI Codex. Portions of the code were AI-generated.
 3. **加入。** 在大厅按 **A** 选房，再按提示打开游戏，或从 HOME 回到游戏。在「本地无线」里搜索。连接跟随房间来源。
 
 「社区 · LANywhere」的双方直连同一个公共节点，密码在游戏里用。约局开房提醒和大厅密码分享用「自有网络」。大厅列出的 Switch LAN Play 房间可以通过自有网络加入。
+
+安装首个带更新器的 SD 包后，今后可在应用内点「更新」，完成后重启虚拟系统。
 
 约局首页按 **A** 参加或退出、**L** 发起、**Y** 准备、**X** 找房。游戏内提醒需要 Ultrahand 开启 API 通知。按 **RS** 切换中英文，右下角可「查看教程」。
 

@@ -41,7 +41,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 TARGET		:=	lanywhere
 APP_TITLE	:=	LANywhere Self-host
 APP_AUTHOR	:=	augustocco
-APP_VERSION	?=	0.6.2
+APP_VERSION	?=	0.7.0
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
@@ -56,14 +56,14 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -I$(PORTLIBS)/include/freetype2 -D__SWITCH__
+CFLAGS	+=	-DLANYWHERE_APP_VERSION=\"$(APP_VERSION)\" $(INCLUDE) -I$(PORTLIBS)/include/freetype2 -D__SWITCH__
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lfreetype -lharfbuzz -lfreetype -lpng -lbz2 -lz -lturbojpeg -lstdc++ -lm -lnx
+LIBS	:= -lfreetype -lharfbuzz -lfreetype -lpng -lbz2 -lz -lturbojpeg -lsodium -lstdc++ -lm -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
