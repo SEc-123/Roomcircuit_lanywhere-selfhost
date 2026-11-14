@@ -289,7 +289,8 @@ The source counts distinguish an empty result from an incomplete search.
 
 IPC 24 reads these rows. IPC 25 selects a provider-qualified room for the next
 in-game search. The relay connection retains that provider for the active room
-and reconnects on the same route. New game rooms use an owned relay.
+and reconnects on the same route. New game rooms follow the hosting node
+selection described below.
 
 When `LANYWHERE_EU_RELAY` is configured, the hub advertises capability `8192`
 and accepts regional lobby request `0x2a`. Response `0xaa` uses the same
@@ -306,3 +307,89 @@ IPC 28 reads the hosting region, and IPC 29 sets it while idle. IDs are
 0 for the default relay and 1 for Europe. IPC 30 and 31 look up and authorize
 room passwords using the same region ID. Active connections and reconnection
 retain the endpoint that admitted the member.
+
+## Public node selection (0.8.0)
+
+Root capability `32768` adds a versioned node directory. The bundled
+`common/node-catalog.json` is the source of node IDs, endpoints, protocol and
+region evidence. The console and root relay must agree on its SHA-256 before
+using numeric node IDs. All fields below are little-endian except network
+addresses explicitly identified as network byte order. Layouts and assertions
+are in `common/node_lobby.h`.
+
+- `0x32 → 0xb2`: empty request; 40-byte reply containing catalog SHA-256 (32
+  bytes), host-enabled mask (`u32`) and fresh directory-source mask (`u32`).
+  Freshness describes the hub's discovery cache; it does not measure a player's
+  connection and need not be a subset of the host-enabled mask.
+- `0x33 → 0xb3`: 20-byte request `offset:u32, snapshot:u32, game:u64,
+  node_mask:u32`. Game zero means all games; mask zero selects no nodes.
+  Reply header is `snapshot:u32, next:u32, count:u8, available:u8, total:u8,
+  status:u8, reserved:u32`, followed by up to six 408-byte rows. Status 1 is an
+  expired/mismatched snapshot. `next=0xffffffff` ends pagination. Snapshots are
+  bounded to 16 cached views and 30 seconds, scoped to the exact game/node filter.
+
+A row is `summary[336], node_id:u32, flags:u32, locator[64]`. Flag 1 selects the
+actual public node; flag 2 retains the existing hub gateway path. A locator is
+`network_id[32], bssid[6], flavor:u8, reserved:u8, host_ip:u32, code[8],
+reserved[12]`. Flavor 1 is standard LAN Play; 2 is its supported fork. `host_ip`
+is the original outer virtual IPv4 sender in host order (`10.13.0.0/16`), not
+an address normalized by the hub. The complete original NetworkId, BSSID,
+flavor and host address identify a LAN Play session. Its displayed six-character
+code alone is insufficient for a direct join.
+
+For legacy source compatibility, original LANywhere rooms using the sentinel
+LCID retain the gateway flag. LAN Play rows use direct mode only when their
+original locator is available. A gateway row must be measured/displayed as the
+hub route, not as a direct public-node route.
+
+Child LAN Play realms expose capability `65536` and loopback-only
+`0x35 → 0xb5`: 12-byte request `game:u64, offset:u32`, a five-byte header
+`next:u32, count:u8`, then 400-byte rows (`summary[336], locator[64]`).
+The root falls back to ordinary metadata when that child capability is absent.
+The external root does not accept this child-only command.
+
+Switch IPC 35 reads the hosting node; 36 changes it while idle. IDs 0 and 1 are
+the self relay and original public LANywhere node; IDs 2–12 are catalog LAN Play
+nodes. A configured legacy Europe relay returns `0xffffffff` from IPC 35 and
+retains its existing selector. IPC 37 accepts the directory request plus a
+zero `u32` padding field (24 bytes), returning `UnifiedPage` and six 408-byte
+rows. IPC 38 takes `game:u64, node:u32, reserved:u32, locator[64]` (80 bytes).
+Unavailable commands/catalog disagreement use the existing legacy lobby; they
+must not reinterpret IDs using a mismatched catalog.
+
+Host preference is separate from selected room intent. Choosing a room pins
+its node and original session identity. An active room and socket recovery keep
+that node. Direct LAN Play traffic uses the node's IPv4/UDP transport and native
+LDN control/game TCP adapter; it does not traverse the self relay. The self
+relay still provides the directory and appointments. Self-only password sharing,
+reservations and appointment broadcasts do not apply to direct public rooms.
+
+## Temporary group measurements
+
+`0x34 → 0xb4` operates on idle root connections. It never creates a game room.
+Request size is 240 bytes: `operation:u32, code[8], participant[16], count:u32`,
+then 13 `NodeProbeSummary` records of 16 bytes. Operations are create=1, join=2,
+report=3, poll=4 and leave=5. A nonzero random participant token makes retries
+idempotent without accounts. Create sends an empty code; other requests send
+six code characters and two zero bytes. Only report carries samples.
+
+A sample is `node:u32, median_ms:u16, jitter_ms:u16, sent:u8, received:u8,
+kind:u8, status:u8, age_seconds:u16, reserved:u16`. Kind 1 is TCP; 2 is UDP.
+Status is pending=0, measured=1 or unreachable=2. Each run sends five probes;
+maximum accepted sample age is 60 seconds. Unused records and reserved fields
+must be zero.
+
+Reply size is 292 bytes: `status:u32, code[8], participant[16], ttl_seconds:u16,
+participants:u8, reported_participants:u8`, then 13 20-byte summaries containing
+node ID, worst median/jitter (`u32` each), measured/reachable member counts,
+minimum sent/received counts, probe kind, recommendation rank, and zero `u16`.
+Status is ok=0, expired=1, invalid=2, full=3 or busy=4. Error replies contain only
+the status; other bytes are zero.
+
+Groups allow eight participants and expire after ten minutes. Authenticated
+poll/report refreshes presence; a participant absent for 90 seconds is removed.
+Samples expire after 60 seconds. A node is recommended only when every present
+participant received at least four of five probes. Ranking considers the weakest
+response count, then worst median and jitter, and returns at most three distinct
+hosts. Recommendations remain advisory; the actual host uses IPC 36 and the
+ordinary in-game hosting flow.

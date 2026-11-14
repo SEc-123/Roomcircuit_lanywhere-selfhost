@@ -1,3 +1,5 @@
+#include "node_catalog.h"
+#include "node_lobby.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -74,6 +76,7 @@ enum class RelayState {Idle,InRoom,Error};static RelayState g_state=RelayState::
 static int ResultRelayFailed(){return 1;}
 /* ACTUAL_ROUTE */
 /* ACTUAL_GAME_ROUTE */
+#include "legacy_node_stubs.hpp"
 /* ACTUAL_LE16 */
 /* ACTUAL_LE32 */
 /* ACTUAL_LE64 */

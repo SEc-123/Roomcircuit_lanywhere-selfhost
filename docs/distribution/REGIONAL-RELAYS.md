@@ -1,14 +1,12 @@
 # Community and regional connections
 
-## Public LANywhere
+## Public nodes in 0.8.0
 
-The lobby and appointments stay on the configured server. With **Community · LANywhere** selected, the Switch hosts in the game’s Local Wireless mode. Guests select that room from the same lobby and search in the game. Both consoles send gameplay to the public LANywhere endpoint directly. Use the in-game password when the game requires one. Appointment alerts and lobby password sharing use My server.
+The standard release provides on-console node measurement: lobby **Y** selects a hosting node, **R** filters regions, and **X** retests. Guests use the actual node of the room selected in the unified lobby. Direct LANywhere and supported Switch LAN Play routes keep gameplay off the central directory server; legacy rooms without usable direct identity retain explicitly labeled compatibility forwarding. See [Nodes and compatibility](../REGIONS.md) for player steps, region evidence, standard/fork limits and unfinished hardware acceptance.
 
-To enable this line on the directory server, set `LANYWHERE_ENABLE_PUBLIC_UPSTREAM=1` and `LANYWHERE_ENABLE_COMMUNITY_DIRECT=1`. The built-in `lanywhere-public` destination and the client’s `RELAY_PROFILE_COMMUNITY_IPV4/PORT` must agree. The lobby offers the line after a successful directory refresh. The default hosting line is My server. Each active game stays on the endpoint where it started. Legacy community UDP is checked with registration acknowledgements so data-path loss triggers recovery even while TCP is healthy. The directory has one bounded query slot alongside the public gateway’s player slots.
+The central server still provides the room directory, appointments and optional shared measurements. Public nodes are independently operated. `LANYWHERE_ENABLE_PUBLIC_UPSTREAM=1` enables the original LANywhere directory source; `LANYWHERE_ENABLE_COMMUNITY_DIRECT=1` enables its direct hosting choice. The server's catalog and the client build must agree. A configured source's availability is separate from a player's measured connection. Short outages retry the captured room endpoint; recovery never changes it to another region. Appointment alerts and lobby password sharing use My server.
 
-Check that the public operator allows use by your client and that TCP and UDP reach the endpoint from both players’ networks. Verify actual hosting, joining, gameplay and reconnect on two Switch consoles before enabling it for players. The upstream listing returns up to six rooms per query. The original node uses legacy game UDP up to 1472 bytes per datagram and lacks the self-host game TCP extension. Use My server for games that need those extensions.
-
-Switch LAN Play room sources continue to use the existing gateway adapter. Their IPv4-over-UDP and LDN game traffic require a separate client-side transport to run directly from a Switch.
+0.8.0 标准包可在大厅按 **Y** 单人测速选节点，**R** 筛地区，**X** 重测；加入时跟随房间实际节点。支持直连的房间对局不经过自有服务器，缺少直连会话信息的旧房间继续兼容转发并明确标注。地区依据、协议边界和操作见[节点说明](../REGIONS.md)。下文的自管欧洲节点是额外部署选项，不是使用公共节点的前提。
 
 ## Optional self-managed regional connections
 

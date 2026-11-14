@@ -26,7 +26,7 @@ const report = {
     suites: [],
 };
 
-function execute(command, args, env) {
+function execute(command, args, env, timeoutMs = 60_000) {
     return new Promise((resolve, reject) => {
         // Keep subprocesses in their own group so a failed startup cannot leave a test relay running.
         const detached = process.platform !== 'win32';
@@ -38,8 +38,8 @@ function execute(command, args, env) {
             } catch (error) {
                 if (error.code !== 'ESRCH') reject(error);
             }
-            reject(new Error('Timed out after 60 seconds'));
-        }, 60_000);
+            reject(new Error(`Timed out after ${timeoutMs / 1000} seconds`));
+        }, timeoutMs);
         child.once('error', (error) => { clearTimeout(deadline); reject(error); });
         child.once('close', (code, signal) => {
             clearTimeout(deadline);
@@ -49,13 +49,13 @@ function execute(command, args, env) {
     });
 }
 
-async function suite(name, command, args, env = process.env) {
+async function suite(name, command, args, env = process.env, timeoutMs = 60_000) {
     const start = Date.now();
     const item = { name, command: [command, ...args] };
     report.suites.push(item);
     console.log(`\n${name}`);
     try {
-        await execute(command, args, env);
+        await execute(command, args, env, timeoutMs);
         item.status = 'passed';
     } catch (error) {
         item.status = 'failed';
@@ -68,9 +68,17 @@ async function suite(name, command, args, env = process.env) {
 }
 
 try {
+    await suite('Shared node catalog generation', process.env.PYTHON || 'python3', ['-B', 'scripts/compile-node-catalog.py', '--check']);
     await suite('Relay and legacy protocol', process.execPath, ['server/relay/test.js'], {
         ...process.env, LANYWHERE_LANPLAY_PORT: '0', LANYWHERE_PUBLIC_PORT: '0',
     });
+    await suite('Node directory and optional group measurements', process.execPath, ['--test', 'server/relay/test-node-directory.js']);
+    await suite('Real direct-node locators and legacy peer joins', process.execPath, ['--test', 'server/relay/test-node-real-locator.js']);
+    await suite('Preferred raw locator and compatible gateway sessions', process.execPath, ['--test', 'server/relay/test-node-locator-preference.js']);
+    await suite('Console measured node probes', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_probe_test.py']);
+    await suite('App node directory and exact selection', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_list_test.py']);
+    await suite('Node recommendations and friend measurement views', process.env.PYTHON || 'python3', ['-B', 'app/tests/nodes_model_test.py']);
+    await suite('Node filtering and input behavior', process.env.PYTHON || 'python3', ['-B', 'app/tests/nodes_input_test.py']);
     await suite('Online update delivery and game isolation', process.execPath, ['--test', 'server/relay/test-update-distribution.js']);
     await suite('Signed updater transaction and interrupted recovery', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_core_test.py']);
     await suite('Updater network transfer and cancellation', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_network_test.py']);
@@ -123,6 +131,9 @@ try {
     ]) await suite(name, process.execPath, ['--test', `server/relay/${file}`]);
     await suite('Complete runtime deployment package', process.execPath, ['--test', 'deploy/test-runtime-package.cjs']);
     await suite('Public network catalog checker', process.env.PYTHON || 'python3', ['-B', 'deploy/test-public-network-catalog.py']);
+    await suite('Native selected-node route and lifecycle', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_entry_test.py']);
+    await suite('Native node directory parser', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_directory_test.py']);
+    await suite('Native LAN Play direct transport', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/lanplay_direct_test.py'], { ...process.env, NODE: process.execPath }, 180_000);
     await suite('Native fixed discovery route and configuration', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/discovery_route_test.py']);
     await suite('Tesla overlay IPC and controls', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/overlay_test.py']);
     const lcidBinary = path.join(temp, 'lcid-policy-test');

@@ -74,7 +74,7 @@ def main():
         source_path.write_text(template)
         compiler = shlex.split(os.environ.get('CXX', 'c++'))
         subprocess.run(compiler + ['-std=c++20', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
-                      '-Wno-unused-const-variable', '-pthread', '-I' + str(ROOT / 'common'),
+                      '-Wno-unused-const-variable', '-pthread', '-I' + str(ROOT / 'common'), '-I' + str(ROOT / 'console/ldn_mitm/tests'),
                       str(source_path), '-o', str(binary)], check=True, timeout=40)
         subprocess.run([str(binary)], check=True, timeout=20)
 

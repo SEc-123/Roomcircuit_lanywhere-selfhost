@@ -59,6 +59,6 @@ void SyncAppointmentClock(u64 now){clock_syncs++;clock_sample=now;}
 with tempfile.TemporaryDirectory(prefix='appointments-native-') as temp:
  temp=Path(temp);cpp=temp/'test.cpp';exe=temp/'test';cpp.write_text(template)
  subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-function',
-   '-pthread','-I'+str(ROOT/'common'),str(cpp),'-o',str(exe)],check=True,timeout=40)
+   '-pthread','-I'+str(ROOT/'common'),'-I'+str(ROOT/'console/ldn_mitm/tests'),str(cpp),'-o',str(exe)],check=True,timeout=40)
  subprocess.run([str(exe)],check=True,timeout=25)
 print('Actual IPC13–16 and IPC22/23 wrappers plus isolated native loopback transport; no physical console or public server.')

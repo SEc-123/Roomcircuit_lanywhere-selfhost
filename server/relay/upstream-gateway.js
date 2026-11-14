@@ -11,6 +11,7 @@ const { CAPABILITY: REGIONAL_LOBBY_CAPABILITY, COMMUNITY_LOBBY_CAPABILITY } = re
 const MAGIC = 0x594e414c;
 const SELECT = 0x20, SELECTED = 0xa0, CAPS = 0x0b;
 const ROOM_PASSCODE_CAPABILITY = 512, ROOM_ACCESS_CAPABILITY = 1024, UNIFIED_LOBBY_CAPABILITY = 2048;
+const nodeLocator = require('./node-locator');
 const PUBLIC_PROVIDER_ID = 'lanywhere-public';
 const PUBLIC_PROVIDERS = Object.freeze([{ id: PUBLIC_PROVIDER_ID, host: '129.38.114.182', port: 11460, maxConnections: 8, catalogConnections: 1, connectTimeoutMs: 8000, adapterMetadata: true }]);
 const codeValid = b => b.length === 6 && /^[A-HJ-NP-Z2-9]{6}$/.test(b.toString('latin1'));
@@ -57,7 +58,7 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
         registry.set(p.id, { ...p, active: 0, catalogActive: 0, rates: new Map() });
     }
     const selfOnlyCapabilities = ROOM_PASSCODE_CAPABILITY | ROOM_ACCESS_CAPABILITY | UNIFIED_LOBBY_CAPABILITY |
-        APPOINTMENT_PUSH_CAPABILITY | REGIONAL_LOBBY_CAPABILITY | COMMUNITY_LOBBY_CAPABILITY;
+        APPOINTMENT_PUSH_CAPABILITY | REGIONAL_LOBBY_CAPABILITY | COMMUNITY_LOBBY_CAPABILITY | 32768 | 65536;
     const capabilities = p => ((p.capabilities || p.udpCaps || 0) & ~selfOnlyCapabilities) | (p.adapterMetadata ? 64 : 0);
     const routes = new Map(), localLocked = new WeakSet(), tokens = new Map();
     const lobbyQueries = new WeakMap();
@@ -173,6 +174,7 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
                 return fail(route, 4, 'upstream did not speak supported LANywhere control');
             if (route.provider.udpCaps && (type !== 0x89 || (body.readUInt32LE() & (route.provider.capabilities || route.provider.udpCaps)) !== (route.provider.capabilities || route.provider.udpCaps)))
                 return fail(route,8,'LAN Play realm lacks required UDP transport');
+            route.locatorCap = route.provider.lanplay && type === 0x89 && (body.readUInt32LE() & 65536);
             route.ready = true; clearTimeout(route.timer); selected(route.front, route.provider.id, capabilities(route.provider)); return;
         }
         if (type === streamProtocol.RESPONSE) {
@@ -243,6 +245,9 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
                     return;
                 }
             }
+        } else if (type === 0xb5 && lobbyQueries.has(route.front) && route.locatorCap) {
+            if (body.length < 5 || body[4] > 6 || body.length !== 5 + body[4] * nodeLocator.ROW_BYTES)
+                return fail(route, 4, 'invalid upstream node page');
         } else if (type === 0x8a || type === 0xa2) {
             if (!(route.provider.capabilities & (type === 0x8a ? 2 : 64)) || body.length < 5 || body[4] > 6 ||
                 body.length !== 5 + body[4] * (type === 0x8a ? 6 + 0x480 : 336)) return fail(route,4,'invalid upstream page');
@@ -269,6 +274,9 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
                 row.writeBigUInt64LE(m.value.applicationId,16); row.writeBigUInt64LE(m.value.programId,24); row[34] = 1;
                 row.write(m.value.en,80,127,'utf8'); row.write(m.value.zh,208,127,'utf8');
             }
+            route.nodeLocators ||= new Map();
+            const locator = nodeLocator.create(info, hostIp, 0, code);
+            if (locator) route.nodeLocators.set(code + ':' + gameId, locator);
             records.push(row);
         }
         return Buffer.concat([header,...records]); // Upstream exposes its first six only. Never invent another page.
@@ -395,6 +403,10 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
             if (!rate(record, body.length + 27, 'up')) { fail(route, 7, 'game stream traffic limit reached'); return true; }
             upstreamWrite(route, type, body); return true;
         }
+        if (type === 0x35 && route.provider.lanplay && lobbyQueries.has(front)) {
+            if (body.length !== 12 || !quota(route.provider, 'find')) { error(front,7,'node discovery is busy'); return true; }
+            upstreamWrite(route,type,body); return true;
+        }
         if (route.provider.adapterMetadata) {
             if (type === 0x21) { setAdapterMetadata(route,body); return true; }
             if (route.query && ![3,5].includes(type)) { error(front,7,'upstream discovery already pending'); return true; }
@@ -510,11 +522,12 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
             lobbyQueries.set(front, (type, body) => {
                 if (type === SELECTED && !request) {
                     const caps = body.readUInt32LE();
-                    request = caps & 64 ? 0x22 : caps & 2 ? 0x0c : 8;
+                    request = routes.get(front)?.locatorCap ? 0x35 : caps & 64 ? 0x22 : caps & 2 ? 0x0c : 8;
                     ask();
                     return true;
                 }
-                if (type !== (request === 0x22 ? 0xa2 : request === 0x0c ? 0x8a : 0x87)) {
+                if (request === 0x35 && type === 0x85 && body[0] === 4) { request = 0x22; ask(); return true; }
+                if (type !== (request === 0x35 ? 0xb5 : request === 0x22 ? 0xa2 : request === 0x0c ? 0x8a : 0x87)) {
                     finish(null);
                     return true;
                 }
@@ -524,19 +537,25 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
                     finish(null);
                     return true;
                 }
-                const page = request === 0x22 ? body : metadataPage(routes.get(front),
+                const page = request === 0x22 || request === 0x35 ? body : metadataPage(routes.get(front),
                     request === 8 ? body : body.subarray(4), 0n);
                 if (!page) {
                     finish(null);
                     return true;
                 }
                 for (let i = 0; i < count; i++) {
-                    const row = normalizeLobbySummary(page.subarray(5 + i * RECORD_BYTES, 5 + (i + 1) * RECORD_BYTES));
+                    const stride = request === 0x35 ? nodeLocator.ROW_BYTES : RECORD_BYTES;
+                    const start = 5 + i * stride;
+                    const row = normalizeLobbySummary(page.subarray(start, start + RECORD_BYTES));
                     if (!row) {
                         finish(null);
                         return true;
                     }
-                    rows.set(row.toString('ascii', 0, 6) + ':' + row.readBigUInt64LE(8), row);
+                    const identity = row.toString('ascii',0,6) + ':' + row.readBigUInt64LE(8);
+                    const locator = request === 0x35 ? page.subarray(start + RECORD_BYTES,start + stride) : routes.get(front)?.nodeLocators?.get(identity);
+                    if (locator && nodeLocator.valid(locator,row.readBigUInt64LE(8),row.toString('ascii',0,6),registry.get(providerId).lanplay))
+                        row.nodeLocator = Buffer.from(locator);
+                    rows.set(identity, row);
                 }
                 if (next === 0xffffffff) finish([...rows.values()]);
                 else if (++pages >= 24) finish(null); // A bounded incomplete listing is not a ready source.

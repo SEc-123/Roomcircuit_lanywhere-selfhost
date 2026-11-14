@@ -116,11 +116,15 @@ def describe_artifact(source, path, digest):
 
 
 def native_sources(source, elf_paths):
-    source_files = {source / 'UPSTREAM.json', source / 'console/Makefile'}
+    source_files = {source / 'UPSTREAM.json', source / 'console/Makefile', source / 'common/node-catalog.json', source / 'scripts/compile-node-catalog.py'}
     for name, elf in elf_paths:
         module = elf.parent
         files = [module / 'Makefile', *sorted((source / 'common').glob('*.h'))]
         files.extend(path for path in (module / 'source').rglob('*') if path.is_file())
+        if name == 'sysmodule':
+            vendor = source / 'console/lanplay-lwip'
+            files.extend(path for part in ('src', 'include') for path in (vendor / part).rglob('*') if path.is_file())
+            files.extend(vendor / name for name in ('Makefile', 'COPYING', 'UPSTREAM.json'))
         if name == 'app':
             files.append(module / 'icon.jpg')
             files.extend(source / name for name in (

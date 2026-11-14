@@ -1,4 +1,4 @@
-LANywhere Self-host 0.7.0 Beta
+LANywhere Self-host 0.8.0 Beta
 
 中文
 
@@ -13,11 +13,13 @@ LANywhere Self-host 0.7.0 Beta
 安装中断时，从自制软件菜单打开 LANywhere Recovery。
 
 建房与加入
-• 建房。约局页按 B 进大厅。默认用「自有网络」。有「建房线路」时，开房前按 Y 选择，再到游戏的「本地无线」里建房。
-• 加入。在大厅按 A 选房，按提示打开游戏，或从 HOME 回游戏。在「本地无线」里搜索。连接跟随房间来源。
-• 社区 · LANywhere。双方直连同一公共节点，密码在游戏里用。连不上时可在大厅切回「自有网络」。
-• Switch LAN Play。可加入大厅里列出的房间，连接经自有网络转发。
-• 自有网络。可在大厅分享或隐藏游戏密码。隐藏后房间仍可见，加入前在大厅输入密码。
+• 单人建房。约局页按 B 进大厅，按 Y 选节点，R 筛地区，X 重新测速。选好后回游戏，在「本地无线」里建房。
+• 推荐。最多三个，根据你这台 Switch 的网络产生。TCP/UDP 是测速方式，不是游戏内延迟，也不代表其他玩家的网络。地区未核实会明确标注。
+• 加入。统一大厅按 ZL+ZR 筛游戏和地区。A 选房，查看你到房间节点的连接，再打开游戏搜索。连接较差时可选择继续或返回。
+• 一起测速。节点页按 L 创建或输入临时码。好友留在节点页查看共同推荐；建房者选好节点后照常回游戏建房。这一步可跳过。
+• 对局线路。直连房走房间实际公共节点；旧版「社区 · LANywhere」等房间可能经自有服务器兼容转发，连接检查会明确标注。断线只尝试原节点，恢复失败需重新加入。
+• 密码与提醒。自有网络可分享或隐藏游戏密码并发送约局提醒；隐藏密码不会隐藏房间。公共节点的密码在游戏里输入。
+• 兼容范围。标准和 fork 协议不能混房；首个被游戏接受的访客确定协议，重建房间可更换。建议同版 LANywhere、同版游戏。节点可达不代表每款游戏已实测，详见项目的节点说明与验证记录。
 
 约局与双人配对
 • 约局页按 A 参加或退出、L 发起、Y 准备、X 找房。可参加多场。约局开场后保留 2 小时。
@@ -39,11 +41,13 @@ Open the app to check for updates. Select Update, close the game and install. Re
 If installation is interrupted, open LANywhere Recovery from the Homebrew Menu.
 
 Host or join
-• Host. Press B from Appointments for the lobby. My server is the default. If Hosting line appears, press Y to select a line before creating a room in Local Wireless.
-• Join. Press A on a room. Open the game when prompted, or return to it from HOME. Search in Local Wireless. The connection follows the room's source.
-• Community · LANywhere. Both consoles connect directly to the public node. Use the game's password. If the line is unreachable, switch to My server.
-• Switch LAN Play. Join listed rooms through My server.
-• My server. Share or hide a game password in the lobby. Hiding the password keeps the room visible. Enter it in the lobby to join.
+• Host on your own. Press B from Appointments, then Y to choose a node. R filters regions; X retests. Return to the game and host in Local Wireless.
+• Recommendations. Up to three, based on this Switch's network. TCP/UDP identifies the probe, not in-game latency or other players' connections. Unverified regions are labeled.
+• Join. ZL+ZR filters games and regions in the unified lobby. A selects a room and checks your connection to its node. Continue or go back if it is weak, then search in the game.
+• Test with friends. L in the node picker creates or joins a temporary code. Stay on the node screen for shared recommendations; the host chooses a node and hosts normally. This is optional.
+• Game route. Direct rooms use their public node. Legacy Community · LANywhere rooms may use My server gateway; the connection check labels this. Recovery retries the same node. Rejoin if it fails.
+• Passwords and alerts. My server supports sharing or hiding game passwords and appointment alerts. Hiding a password keeps the room visible. On public nodes, enter passwords in the game.
+• Compatibility. Standard and fork clients cannot mix in one room. The first accepted guest fixes the protocol until the host recreates the room. Use matching LANywhere and game versions. Node reachability does not prove every game works; see Nodes and compatibility and Validation.
 
 Appointments and pairing
 • A to join or leave an appointment, L to create, Y for Ready and X to find rooms. You can join several. Appointments stay listed for 2 hours after start.

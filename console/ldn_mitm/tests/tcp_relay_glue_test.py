@@ -62,6 +62,17 @@ prelude = r'''
 #include "regional_relay.h"
 using u8=uint8_t;using u16=uint16_t;using u32=uint32_t;using u64=uint64_t;using s32=int32_t;using s64=int64_t;
 static_assert(sizeof(u8)==1&&sizeof(u16)==2&&sizeof(u32)==4&&sizeof(u64)==8);
+// Legacy relay cases retain an inactive direct transport. New direct transport
+// is exercised independently with real packet peers.
+static std::atomic<bool> g_direct_session{false};
+namespace lanplay {
+struct Snapshot { bool active=false; u64 epoch=0; u32 address=0; };
+inline Snapshot State() { assert(false); return {}; }
+inline bool SendStream(u64,const void*,size_t) { assert(false); return false; }
+inline int MemberOfIp(u32) { assert(false); return -1; }
+inline ssize_t TakeControl(u8*,u8*,void*,size_t) { assert(false); return -1; }
+}
+
 namespace os {
  using SdkMutex=std::mutex;
  struct Span{s64 ms;s64 GetMilliSeconds()const{return ms;}};
@@ -77,7 +88,7 @@ static u64 ingress_epoch=0;
 namespace test_tcpstream {
  using Frame=real_tcp::Frame;using real_tcp::Parse;using real_tcp::Op;using real_tcp::PrefixBytes;using real_tcp::HeaderBytes;
  constexpr auto Command=real_tcp::Command,Response=real_tcp::Response;
- constexpr auto Capability=real_tcp::Capability,MemberFeature=real_tcp::MemberFeature;
+ constexpr auto Capability=real_tcp::Capability,MemberFeature=real_tcp::MemberFeature,LegacyCapability=real_tcp::LegacyCapability;
  // Count at the ABI seam while every decision runs in the actual Proxy.
  struct Forwarder {
   bool OnFrame(u64 epoch,const void *body,size_t size){ingress_calls++;ingress_epoch=epoch;const bool ok=proxy->OnFrame(epoch,body,size);ingress_accepted+=ok;return ok;}
@@ -375,6 +386,6 @@ with tempfile.TemporaryDirectory(prefix='tcp-relay-glue-') as temporary:
         (tmp/name).write_text(sources[name])
     cpp=tmp/'glue.cpp';exe=tmp/'glue';cpp.write_text('\n'.join(pieces))
     subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror',
-        '-Wno-unused-function','-pthread','-I'+str(ROOT/'common'),str(cpp),str(tmp/'tcp_stream_proxy.cpp'),'-o',str(exe)],check=True,timeout=45)
+        '-Wno-unused-function','-pthread','-I'+str(ROOT/'common'),'-I'+str(ROOT/'console/ldn_mitm/tests'),str(cpp),str(tmp/'tcp_stream_proxy.cpp'),'-o',str(exe)],check=True,timeout=45)
     subprocess.run([str(exe)],check=True,timeout=20)
 print('Host ABI mocks plus exact production functions and Proxy; no Switch or commercial-game acceptance.')

@@ -27,6 +27,10 @@ typedef struct { int create, join, leave, cancel, quick, select, launch, public_
     int ask_code, page, draw, busy, write_error, sleep, language, share_password, unlock_password, appointment_open, select_route, set_region; } Calls;
 static Calls calls;
 static int g_lanywhere;
+static int g_list_lock;
+static bool g_nodes_directory;
+static void mutexLock(int *p){(void)p;}
+static void mutexUnlock(int *p){(void)p;}
 static const char *room_password_edit(int *service, const char room[8], bool supports_hidden, RoomPasswordEdit *edit)
 {
     assert(service == &g_lanywhere && strcmp(room, "ABC234") == 0);
@@ -45,6 +49,15 @@ static bool g_guide_open, g_zh, g_es, g_language_save_failed;
 static atomic_bool g_inventory_running;
 static int g_guide_page;
 static LobbyRoomId g_touched_room;
+static LobbyNodeRoom g_touched_node;
+typedef struct { int unused; } PadState;
+static PadState pad;
+static bool ui_chinese(void);
+static bool accept_node=true,accept_probe=true,measured_gateway;
+static u32 picked_node=2,measured_node;
+static unsigned node_picks,node_probes;
+static bool nodes_ui_pick(PadState *p,int *service,u32 current,u32 *chosen){(void)p;(void)service;(void)current;node_picks++;*chosen=picked_node;return accept_node;}
+static bool nodes_ui_check_room(PadState *p,u32 id,bool gateway){(void)p;node_probes++;measured_node=id;measured_gateway=gateway;return accept_probe;}
 static bool accept_code = true, save_ok = true, launch_ok = true, node_reachable = true;
 static Result lanywhere_set_host_region(u32 region)
 {
@@ -60,7 +73,7 @@ static void svcSleepThread(u64 nanoseconds) { (void)nanoseconds; calls.sleep++; 
 static void draw(const View *v) { (void)v; calls.draw++; }
 static void draw_busy(const char *s) { (void)s; calls.busy++; }
 static int guide_page_count(void) { return 5; }
-enum { GuideAppointmentsPage = 3 };
+enum { GuideAppointmentsPage = 4 };
 static bool appointment_screen, appointment_list;
 static bool appointments_active(void) { return appointment_screen; }
 static bool appointments_list_active(void) { return appointment_screen && appointment_list; }
@@ -87,6 +100,8 @@ static LobbyRoomId selected_route;
 static Result route_result;
 static Result lanywhere_select_unified(LobbyRoomId id) { selected_route=id; calls.select_route++; return route_result; }
 static bool unified_ipc_missing(Result rc) { return rc == 1; }
+static LobbyNodeSelection node_selection;
+static Result lanywhere_select_node(LobbyNodeSelection request){node_selection=request;calls.select_route++;return route_result;}
 /* SOURCE_SELECT_ROOM */
 static u64 filtered_game;
 static u32 requested_snapshot;
@@ -115,7 +130,8 @@ static void config_write_error(View *v) { (void)v; calls.write_error++; }
 static int step(View *target, u64 down) {
     View v = *target;
     int phase = 0, card = -1;
-    u64 now = now_ms(), last_draw = 0;
+    u64 now = now_ms(), last_draw = 0, next_status=0;
+    (void)next_status;
     bool dirty = false, thread_ok = true;
     const char *nick = "";
     u32 page_offsets[MAX_PAGE_HISTORY] = {0};
@@ -135,7 +151,6 @@ static int step(View *target, u64 down) {
 
 // Error-screen touch handling uses the actual main.c functions too. Graphics,
 // pad input and the outer applet loop are dependencies, not duplicate routes.
-typedef struct { int unused; } PadState;
 static bool test_update;
 static unsigned update_calls;
 static void draw_update_entry(bool shortcut) { (void)shortcut; }
@@ -438,6 +453,23 @@ int main(void) {
     assert(clean_nickname("AB",nick,sizeof(nick))&&!strcmp(nick,"AB"));checked();
     assert(!clean_nickname("A",nick,sizeof(nick)));checked();
     (void)g_zh;(void)g_es;
+    v=lobby();v.node_picker_available=true;v.host_node=0;
+    step(&v,HidNpadButton_Y);assert(node_picks==1&&v.host_node==2&&v.host_region==RelayRegionCommunity);checked();
+    v=lobby();v.node_picker_available=true;v.host_node=0;accept_node=false;
+    step(&v,HidNpadButton_Y);assert(v.host_node==0);accept_node=true;checked();
+    v=lobby();v.node_directory=true;v.discovery=LobbyDiscoveryUnified;choose(&v);
+    strcpy(v.sources[0],"lanplay-nl");v.selection=lobby_room_id_on(&v.groups[0],v.sources[0]);
+    v.node_rows[0]=(LobbyNodeRoom){.group=v.groups[0],.node_id=2,.flags=NodeRoomDirect};
+    memcpy(v.node_rows[0].locator.code,"ABC234",7);v.node_rows[0].locator.flavor=1;v.node_rows[0].locator.host_ip=0x0a0d0101;
+    step(&v,HidNpadButton_A);assert(node_probes==1&&measured_node==2&&!measured_gateway&&node_selection.node_id==2&&node_selection.locator.host_ip==0x0a0d0101);checked();
+    v=lobby();v.node_directory=true;v.discovery=LobbyDiscoveryUnified;choose(&v);
+    strcpy(v.sources[0],"lanywhere-public");v.selection=lobby_room_id_on(&v.groups[0],v.sources[0]);
+    v.node_rows[0]=(LobbyNodeRoom){.group=v.groups[0],.node_id=1,.flags=NodeRoomGateway};
+    step(&v,HidNpadButton_A);assert(measured_node==0&&measured_gateway&&!strcmp(selected_route.provider,"lanywhere-public"));checked();
+    v=lobby();v.node_directory=true;v.discovery=LobbyDiscoveryUnified;choose(&v);
+    v.node_rows[0]=(LobbyNodeRoom){.group=v.groups[0],.node_id=2,.flags=NodeRoomDirect};
+    accept_probe=false;int prior_select=calls.select_route;
+    step(&v,HidNpadButton_A);assert(calls.select_route==prior_select&&v.selection.code[0]);accept_probe=true;checked();
     printf("Actual main.c slices: %u input/touch/nickname scenarios passed.\n",checks);
     return 0;
 }

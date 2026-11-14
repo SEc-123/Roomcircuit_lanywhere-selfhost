@@ -18,6 +18,9 @@ VERSION_DEFINES	:= -DGITDESCVER="\"${TARGET_VERSION}\""
 CFLAGS		+= $(VERSION_DEFINES)
 CXXFLAGS	+= $(VERSION_DEFINES)
 
+LANPLAY_LWIP := $(abspath $(TOPDIR)/../lanplay-lwip)
+LIBS += $(LANPLAY_LWIP)/build/switch/liblanplay_lwip.a
+
 #---------------------------------------------------------------------------------
 # no real need to edit anything past this point unless you need to add additional
 # rules for different file extensions
@@ -71,7 +74,7 @@ endif
 export OFILES	:=	$(addsuffix .o,$(BINFILES)) \
 			$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 
-export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
+export INCLUDE	:=	-I$(LANPLAY_LWIP)/include $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
 			$(foreach dir,$(AMS_LIBDIRS),-I$(dir)/include) \
 			-I$(CURDIR)/$(BUILD)
@@ -84,18 +87,22 @@ export BUILD_EXEFS_SRC := $(TOPDIR)/$(EXEFS_SRC)
 
 export APP_JSON := $(TOPDIR)/res/app.json
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all lanplay_lwip
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
 
-$(BUILD):
+lanplay_lwip:
+	@$(MAKE) -C $(LANPLAY_LWIP) BUILD=build/switch CC="$(CC)" AR="$(AR)" CFLAGS="$(CFLAGS)"
+
+$(BUILD): lanplay_lwip
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
+	@$(MAKE) -C $(LANPLAY_LWIP) BUILD=build/switch clean
 	@rm -fr $(BUILD) $(TARGET).kip $(TARGET).elf $(TARGET).nso $(TARGET).npdm $(TARGET).nsp
 
 #---------------------------------------------------------------------------------
@@ -113,7 +120,7 @@ $(OUTPUT).kip :	$(OUTPUT).elf
 $(OUTPUT).nsp :	$(OUTPUT).nso $(OUTPUT).npdm
 $(OUTPUT).nso :	$(OUTPUT).elf
 
-$(OUTPUT).elf :	$(OFILES)
+$(OUTPUT).elf :	$(OFILES) $(LANPLAY_LWIP)/build/switch/liblanplay_lwip.a
 
 $(OFILES) : $(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/$(ATMOSPHERE_LIBRARY_DIR)/libstratosphere.a
 

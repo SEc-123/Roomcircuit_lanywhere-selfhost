@@ -49,6 +49,6 @@ with tempfile.TemporaryDirectory(prefix='appointment-push-native-') as tmp:
  tmp=Path(tmp);cpp=tmp/'test.cpp';exe=tmp/'test';cpp.write_text(template)
  for name,data in zip(['ack','event'],vectors):(tmp/name).write_bytes(bytes.fromhex(data))
  subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-function',
-  '-pthread','-I'+str(ROOT/'common'),str(cpp),'-o',str(exe)],check=True,timeout=40)
+  '-pthread','-I'+str(ROOT/'common'),'-I'+str(ROOT/'console/ldn_mitm/tests'),str(cpp),'-o',str(exe)],check=True,timeout=40)
  subprocess.run([str(exe),str(tmp/'ack'),str(tmp/'event')],check=True,timeout=30)
 print('Real server serializers and actual native network/codec functions; localhost only, no Switch/hardware claim.')

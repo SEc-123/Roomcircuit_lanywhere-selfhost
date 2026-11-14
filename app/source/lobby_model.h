@@ -6,6 +6,8 @@
 #include "../../common/list_status.h"
 #include "../../common/regional_relay.h"
 #include "../../common/unified_lobby.h"
+#include "../../common/node_lobby.h"
+#include "../../common/node_catalog.h"
 
 #define LANYWHERE_IPC_MAJOR 5
 #define LANYWHERE_IPC_CAPABILITIES_COMMAND 10
@@ -38,6 +40,20 @@ typedef struct {
 } LobbyUnifiedGroup;
 _Static_assert(sizeof(LobbyUnifiedGroup) == UNIFIED_LOBBY_GROUP_SIZE &&
                offsetof(LobbyUnifiedGroup, provider) == 336, "unified room row IPC layout");
+
+typedef struct {
+    LobbyGroup group;
+    uint32_t node_id, flags;
+    NodeRoomLocator locator;
+} LobbyNodeRoom;
+_Static_assert(sizeof(LobbyNodeRoom) == NODE_LOBBY_ROW_SIZE, "node row IPC layout");
+
+typedef struct {
+    uint64_t game_id;
+    uint32_t node_id, reserved;
+    NodeRoomLocator locator;
+} LobbyNodeSelection;
+_Static_assert(sizeof(LobbyNodeSelection) == 80, "node selection IPC layout");
 
 enum LobbyDiscovery { LobbyDiscoveryUnknown, LobbyDiscoveryUnified, LobbyDiscoveryLegacy };
 

@@ -14,6 +14,8 @@ routes=importlib.util.module_from_spec(spec);spec.loader.exec_module(routes)
 game_type=re.search(r'typedef struct\s*\{[^}]*\}\s*GameInfo;',source).group()
 functions='\n\n'.join(routes.function(source,'static '+name) for name in (
     'const GameInfo *local_game_info(', 'CatalogMatch room_catalog_match(', 'bool game_info_has_lcid(', 'const char *room_title(', 'const GameInfo *display_game_icon(', 'const char *room_title_note(', 'const char *provider_label(', 'const char *region_label(', 'void group_card('))
+node_source=(root/'app/source/nodes_ui.c').read_text(encoding='utf-8')
+functions='\n\n'.join(routes.function(node_source,name) for name in ('const char *nodes_ui_name(', 'const char *nodes_ui_region('))+'\n'+functions
 harness=r'''
 #include <assert.h>
 #include <stdbool.h>

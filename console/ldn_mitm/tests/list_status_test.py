@@ -407,5 +407,5 @@ with tempfile.TemporaryDirectory(prefix='switch-native-list-status-') as tmp:
     tmp=Path(tmp); c=tmp/'test.cpp';exe=tmp/'test';c.write_text(template)
     for eu_flags in ([], ['-DRELAY_PROFILE_EU_IPV4=\"127.0.0.1\"','-DRELAY_PROFILE_EU_PORT=11461']):
         subprocess.run(shlex.split(os.environ.get('CXX','c++'))+eu_flags+['-std=c++17','-Wall','-Wextra','-Werror',
-        '-Wno-unused-function','-pthread','-I'+str(ROOT/'common'),str(c),'-o',str(exe)],check=True,timeout=40)
+        '-Wno-unused-function','-pthread','-I'+str(ROOT/'common'),'-I'+str(ROOT/'console/ldn_mitm/tests'),str(c),'-o',str(exe)],check=True,timeout=40)
         subprocess.run([str(exe)],check=True,timeout=25)

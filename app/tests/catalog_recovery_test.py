@@ -62,6 +62,29 @@ int main(int argc, char **argv)
     assert(!game_catalog_open(&g_catalog,data,size-1));
     assert(game_catalog_open(&g_catalog,data,size));
     assert(g_catalog.title_count > 1000);
+    CatalogGameChoice choices[6]; size_t next;
+    size_t found=0,search_offset=0;
+    bool have_sword=false;
+    do {
+        found=game_catalog_choices(&g_catalog,"sWoRd",search_offset,choices,6,&next);
+        for(size_t i=0;i<found;i++) if(choices[i].game_id==UINT64_C(0x0100ABF008968000)) have_sword=true;
+        search_offset=next;
+    } while(search_offset!=SIZE_MAX);
+    assert(have_sword);
+    assert(game_catalog_choices(&g_catalog,"宝可梦",0,choices,6,&next)>0);
+    assert(game_catalog_choices(&g_catalog,"no-such-game-000xyz",0,choices,6,&next)==0 && next==SIZE_MAX);
+    size_t offset=0,total=0;u64 previous=0;
+    do {
+        found=game_catalog_choices(&g_catalog,"",offset,choices,6,&next);
+        for(size_t i=0;i<found;i++) {
+            assert(choices[i].game_id && choices[i].game_id!=UINT64_MAX);
+            if(choices[i].title.kind==CatalogEqualId) {assert(choices[i].game_id>previous);previous=choices[i].game_id;}
+            assert(choices[i].title.kind==CatalogCommunication || choices[i].title.kind==CatalogShared || choices[i].title.kind==CatalogEqualId);
+            total++;
+        }
+        assert(next==SIZE_MAX || next>offset);offset=next;
+    } while(offset!=SIZE_MAX);
+    assert(total>=g_catalog.title_count && total<=g_catalog.alias_count+g_catalog.title_count);
     const u64 sword=UINT64_C(0x0100ABF008968000);
     LobbyGroup room={.game_id=sword}; char fallback[128];
     CatalogMatch id=room_catalog_match(&room);

@@ -34,6 +34,10 @@ fixed_english = {
     'Game TCP is unavailable on this network.', 'Legacy game TCP is unconfirmed.',
     'Reopen LANywhere to read game information.', 'Game network ID is not allowed.',
     'regional lobby is not configured',
+    'LAN Play room did not respond. Try again.', 'LAN Play connection failed. Try again.', 'LAN Play node disconnected. Rejoin the room.',
+    'Node selection requires an idle connection.', 'Node selection is unavailable. Try again.',
+    'Node selection is busy. Try again.', 'Invalid node catalog request.',
+    'Invalid node room query.', 'Invalid node locator query.',
     'Server is restarting. Try again.', 'Update requires an idle connection.', 'Update connection is read-only.',
 }
 upstream = (root / 'server/relay/upstream-gateway.js').read_text(encoding='utf-8')

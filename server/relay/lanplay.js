@@ -20,6 +20,31 @@ const crypto = require('crypto');
 const Fork = require('./lanplay-fork');
 const ForkTcp = require('./lanplay-fork-tcp');
 const StreamWire = require('./tcp-stream-protocol');
+const nodeLocator = require('./node-locator');
+
+// Direct-client routing can prefer standard TCP without changing the legacy
+// gateway's active transport. Candidates must name exactly the same session.
+const DIRECT_LOCATOR_FRESH_MS = 6000;
+function sameNetworkIdentity(first, second) {
+    return first && second && first.length === 0x480 && second.length === 0x480 &&
+        first.subarray(0, 32).equals(second.subarray(0, 32)) &&
+        first.subarray(0x20, 0x26).equals(second.subarray(0x20, 0x26));
+}
+function recordDirectInfo(bridge, info, fork, now = Date.now()) {
+    const current = bridge.fork?.raw || bridge.info;
+    if (current && !sameNetworkIdentity(current, info)) return;
+    bridge[fork ? 'directFork' : 'directStandard'] = {info: Buffer.from(info), at: now};
+}
+function preferredDirectInfo(bridge, now = Date.now()) {
+    const current = bridge.fork?.raw || bridge.info;
+    if (!current) return null;
+    for (const [field, flavor] of [['directStandard', 1], ['directFork', 2]]) {
+        const candidate = bridge[field];
+        if (candidate && now - candidate.at <= DIRECT_LOCATOR_FRESH_MS &&
+            sameNetworkIdentity(current, candidate.info)) return {info: candidate.info, flavor};
+    }
+    return now - bridge.lastSeen <= HOST_GONE_MS ? {info: current, flavor: bridge.fork ? 2 : 1} : null;
+}
 
 // --- LAN Play -----------------------------------------------------------------------------------------------------
 const P = { KEEPALIVE: 0x00, IPV4: 0x01, PING: 0x02, IPV4_FRAG: 0x03, AUTH_ME: 0x04, INFO: 0x10 };
@@ -526,6 +551,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             if (info[at + 11] && !consoleAt(info.readUInt32LE(at))) ownsSource(client, info.readUInt32LE(at), true);
         }
         let b = [...bridges.values()].find((x) => x.origin === 'emu' && x.host13 === host13);
+        if (b) recordDirectInfo(b, info, forkControl);
         if (b && (!!b.fork !== !!forkControl || (b.fork && b.fork.key !== identity.key))) return;
         if (!b) {
             const node0 = NODES;
@@ -549,6 +575,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             log(`lan play: grupo de ${ipStr(host13)} publicado en la sala ${b.code}`);
         }
         b.lastSeen = Date.now();
+        recordDirectInfo(b, info, forkControl);
         if (b.fork) {
             b.fork.raw = Buffer.from(info);
             for (const [virt, real] of b.fork.realByVirtual) {
@@ -1158,6 +1185,12 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
 
     return {
         stats: () => ({ clients: clients.size, bridges: bridges.size }),
+        locator: code => {
+            const b = bridges.get(code);
+            if (!b || b.origin !== 'emu') return null;
+            const selected = preferredDirectInfo(b);
+            return selected ? nodeLocator.create(selected.info, b.host13, selected.flavor, code) : null;
+        },
         // La IP la usa un emulador (o la pasarela): server.js no se la da a una consola.
         taken: (ip) => ip === gatewayIp || byIp.has(ip),
         close: () => {
@@ -1169,4 +1202,4 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
     };
 }
 
-module.exports = { create, Tcp, ldnFrame, ldnRead, udpPacket, parseIpv4, ipv4, fragmentIpv4, P, LT, NET, BCAST, GATEWAY_IP };
+module.exports = { create, recordDirectInfo, preferredDirectInfo, Tcp, ldnFrame, ldnRead, udpPacket, parseIpv4, ipv4, fragmentIpv4, P, LT, NET, BCAST, GATEWAY_IP };

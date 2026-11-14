@@ -86,6 +86,12 @@ enum { ListUnavailable = -3, ListConnecting = -2, ListOffline = -1 };
 static TouchZone g_zones[24];
 static int g_zone_count;
 static LobbyRoomId g_rendered_rooms[LOBBY_PAGE_SIZE];
+static LobbyNodeRoom g_rendered_node_rows[LOBBY_PAGE_SIZE];
+static const char *nodes_ui_name(uint32_t id) { return g_zh ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en; }
+static const char *nodes_ui_region(uint8_t region) {
+    const char *labels[]={"Region unverified","Asia","Europe","Americas","Oceania","Africa"};
+    return ui_text(region<6 ? labels[region] : "All regions");
+}
 static GameInfo sample_games[2];
 static const char *output_path;
 static unsigned failures;
@@ -113,7 +119,11 @@ static void save_capture_if_requested(void) { if (!gfx_save_png(output_path)) fa
         subprocess.run(command, check=True)
         catalog = build / 'game-catalog.bin'
         subprocess.run([sys.executable, str(SOURCE.parents[1] / 'scripts/compile-title-catalog.py'), str(catalog)], check=True)
-        result = subprocess.run([str(build / 'main-preview'), str(output), str(catalog)], check=True, capture_output=True, text=True)
+        result = subprocess.run([str(build / 'main-preview'), str(output), str(catalog)], capture_output=True, text=True)
+        if result.returncode:
+            print(result.stdout, end="")
+            print(result.stderr, end="", file=sys.stderr)
+            result.check_returncode()
         (output / 'extracted-main-render.c').write_text(source)
     print(result.stdout, end='')
     paths = [SOURCE / name for name in ['main.c', 'gfx.c', 'gfx.h', 'ui_text.c', 'ui_text.h', 'guide.c', 'guide.h',

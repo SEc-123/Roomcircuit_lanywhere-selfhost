@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix='lcid-entry-') as tmp:
     cpp=tmp/'test.cpp';exe=tmp/'test'
     cpp.write_text(template.replace('/* ACTUAL_ROUTES */',route).replace('/* ACTUAL_CACHE */',exact).replace('/* ACTUAL_RELAY */',relay_functions).replace('/* ACTUAL_ENTRIES */',functions))
     cc=shlex.split(os.environ.get('CXX','c++'))
-    subprocess.run(cc+['-std=c++17','-Wall','-Wextra','-Werror','-pthread','-I'+str(tmp),'-I'+str(ROOT/'console/ldn_mitm/source'),str(cpp),str(ROOT/'console/ldn_mitm/source/ldn_types.cpp'),'-o',str(exe)],check=True,timeout=40)
+    subprocess.run(cc+['-std=c++17','-Wall','-Wextra','-Werror','-pthread','-I'+str(tmp),'-I'+str(ROOT/'common'),'-I'+str(ROOT/'console/ldn_mitm/source'),str(cpp),str(ROOT/'console/ldn_mitm/source/ldn_types.cpp'),'-o',str(exe)],check=True,timeout=40)
     subprocess.run([str(exe)],check=True,timeout=10)
 print('LANDiscovery SHA256:',hashlib.sha256(source.encode()).hexdigest())
 print('Exact cache source SHA256:',hashlib.sha256(cache.encode()).hexdigest())

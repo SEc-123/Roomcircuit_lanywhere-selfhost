@@ -28,6 +28,12 @@ using namespace ams::mitm::lanywhere;
 static s64 now_ms;static int mode,attempts,installs,closed,sends,close_transport;static std::vector<int>budgets;static std::vector<s64>sleeps;
 enum class RelayState:u8{Idle=0,Connecting=1,InRoom=2,Error=3};static RelayState g_state;
 static std::mutex g_lock;static bool g_recovering;static u32 g_token,g_my_ip;static u64 g_game_id;static u8 g_my_index;
+static std::atomic<bool> g_direct_session{false};
+static struct {char room_code[8]{};} g_direct_room;
+namespace lanplay {
+struct Snapshot {bool active=false,hosting=false;u32 address=0,node=0,sent=0,received=0;u64 epoch=0,game=0;u8 member=0,members=0;char error[64]{};};
+inline Snapshot State(){assert(false);return {};}
+}
 static sockaddr_in g_server,expected_server;static char g_room_provider[33],g_code[7],g_error[64],expected_provider[33];static unsigned config_reads;
 namespace os {
 struct TimeSpan{s64 ms;static TimeSpan FromMilliSeconds(s64 n){return{n};}s64 GetMilliSeconds()const{return ms;}};

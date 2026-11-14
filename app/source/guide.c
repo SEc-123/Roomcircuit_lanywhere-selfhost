@@ -5,15 +5,15 @@
 typedef struct { const char *title, *steps[3], *key; } GuidePage;
 static const GuidePage pages_zh[] = {
     { "创建房间", {
-        "大厅显示“建房线路”时，按 Y 切换。默认自有网络。",
+        "大厅按 Y 选节点，按 R 筛选地区。",
         "回到游戏，在“本地无线”里创建房间。",
-        "房间会按线路列在统一大厅。"
-    }, "社区 · LANywhere 双方直连。约局提醒请用自有网络。" },
+        "参考主机实测延迟，或直接选择推荐节点。"
+    }, "选好后在游戏里建房。约局提醒请用自有网络。" },
     { "加入房间", {
         "在大厅按 A 选房，线路按房间来源自动切换。",
         "按提示打开游戏，或从 HOME 回游戏。",
         "在“本地无线”里搜索房间并加入。"
-    }, "Switch LAN Play 房间通过自有网络加入。" },
+    }, "选房后可查看你到节点的延迟。ZL+ZR 筛选游戏和地区。" },
     { "游戏内配对", {
         "两台都开启 LANywhere 的本地无线接管。",
         "在游戏里选本地通信，输入相同连接码。",
@@ -34,6 +34,11 @@ static const GuidePage pages_zh[] = {
         "使用“本地无线”，别选游戏的官方在线模式。",
         "仍失败：退出游戏房间，再重新选择或创建。"
     }, "社区线路连不上时，可切回自有网络。" },
+    { "一起测速", {
+        "在节点列表按 L，发起或输入临时测速码。",
+        "双方留在测速页，查看共同推荐节点。",
+        "建房者选定节点后，照常回游戏建房。"
+    }, "公开房可直接单人测速建房。好友测速自愿使用。" },
     { "在线更新", {
         "点顶部“更新”，或在首页按左摇杆 LS。",
         "关闭游戏，确认下载并安装。设置和约局会保留。",
@@ -42,15 +47,15 @@ static const GuidePage pages_zh[] = {
 };
 static const GuidePage pages_en[] = {
     { "Host a room", {
-        "If Hosting line appears, press Y to switch. Default: My server.",
+        "Press Y in the lobby to choose a node. R filters regions.",
         "Return to the game and create a room in Local Wireless.",
-        "Your room appears in All rooms under its hosting line."
-    }, "On Community · LANywhere, both consoles connect directly. Use My server for alerts." },
+        "Use measured latency or select a recommended node."
+    }, "Then host in-game. Use My server for appointment alerts." },
     { "Join a room", {
         "Select with A. The lobby uses that room's source.",
         "Open the game when prompted, or return to it from HOME.",
         "Search in Local Wireless and join the room."
-    }, "Switch LAN Play rooms join through My server." },
+    }, "Check your latency before joining. ZL+ZR filters game and region." },
     { "Pair in game", {
         "Enable LANywhere interception on both consoles.",
         "Choose local communication and enter the same link code.",
@@ -71,6 +76,11 @@ static const GuidePage pages_en[] = {
         "Choose Local Wireless in the game's menu.",
         "Still stuck? Leave the in-game room, then choose or host again."
     }, "If Community is unreachable, switch to My server." },
+    { "Test with friends", {
+        "Press L in the node list to create or enter a test code.",
+        "Stay on the node screen to compare shared results.",
+        "The host selects a node, then creates the room in-game."
+    }, "Public hosting uses your own test. Shared testing is optional." },
     { "Online update", {
         "Tap Update at the top, or press LS on the home page.",
         "Close the game, then confirm Download and install.",

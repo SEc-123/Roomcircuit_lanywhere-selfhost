@@ -1,3 +1,4 @@
+#include "node_lobby.h"
 #include <algorithm>
 #include <array>
 #include <cassert>

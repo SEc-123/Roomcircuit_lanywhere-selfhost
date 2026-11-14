@@ -159,11 +159,11 @@ def package_files(version, server, port, embedded):
         "安装中断时，从自制软件菜单打开 LANywhere Recovery。\n"
         f"{setup}\n"
         "按 RS 切换中英文，右下角可查看教程。\n"
-        "大厅按 Y 选建房线路（默认自有网络），再到游戏的“本地无线”建房。\n"
-        "大厅按 A 选房，打开游戏后搜索“本地无线”。连接跟随房间来源。\n"
-        "社区 · LANywhere：双方直连公共节点，密码在游戏里用。\n"
-        "Switch LAN Play：通过自有网络加入大厅里列出的房间。\n"
-        "约局提醒和大厅密码分享请用自有网络。完整说明见根目录 README.txt。\n\n"
+        "大厅按 Y 看节点地区和本机延迟；R 筛地区，X 重测。选好后回游戏的“本地无线”建房。\n"
+        "大厅按 ZL+ZR 筛游戏和地区，A 检查连接并选房，再回游戏加入。\n"
+        "节点页按 L 可和好友一起测速；推荐只依据参与测速的网络。\n"
+        "Switch LAN Play：原生直连房间实际节点；旧房兼容转发会单独标明。\n"
+        "对局固定所选节点，断线重试原节点。约局提醒和大厅密码分享请用自有网络。完整说明见根目录 README.txt。\n\n"
         "上游源码及作者信息 https://github.com/augustocco/lanywhere\n"
     ).encode("utf-8")
     if embedded is not None:

@@ -1,0 +1,1 @@
+{"repository":"https://github.com/lwip-tcpip/lwip","commit":"009c2256469004009488b3385ba269461e8eb616","tag":"STABLE-2_2_1_RELEASE","license":"BSD-3-Clause","scope":"unmodified core and lwip headers; local NO_SYS IPv4 transport port"}

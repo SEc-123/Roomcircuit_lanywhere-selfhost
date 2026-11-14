@@ -33,6 +33,9 @@ const matchmaking = require('./matchmaking');
 const { groupPage } = require('./group-page');
 const { create: createUnifiedLobby } = require('./unified-lobby');
 const regionalDirectory = require('./regional-directory');
+const nodeDirectory = require('./node-directory');
+const nodeFriends = require('./node-friends');
+const nodeLocator = require('./node-locator');
 const trafficStore = require('./traffic-store');
 const updateDistribution = require('./update-distribution');
 const appointmentStore = require('./appointments');
@@ -85,11 +88,11 @@ const MAX_PAYLOAD = 1472;  // un datagrama UDP con MTU 1500, como en una LAN
 const MAX_GAME_PAYLOAD = 65507, FRAGMENT_CHUNK = 1100, LEGACY_DOWNLINK_PAYLOAD = 1459;
 const UDP_FEATURES = 4 | 8;
 // Metadata extensions may add their independent capability bit here.
-const SELF_CAPABILITIES = 3 | UDP_FEATURES | 16 | 32 | 64 | streamProtocol.CAPABILITY |
+const SELF_CAPABILITIES = (process.env.LANYWHERE_LANPLAY_REALM ? 65536 : 0) | 3 | UDP_FEATURES | 16 | 32 | 64 | streamProtocol.CAPABILITY |
     ((LANPLAY_PORT || process.env.LANYWHERE_LANPLAY_REALM) ? streamProtocol.LEGACY_CAPABILITY : 0) |
     (process.env.LANYWHERE_LANPLAY_REALM ? 0 : upstreamGateway.ROOM_PASSCODE_CAPABILITY |
         upstreamGateway.ROOM_ACCESS_CAPABILITY | upstreamGateway.UNIFIED_LOBBY_CAPABILITY |
-        pushProtocol.CAPABILITY | (regionalEndpoint ? regionalDirectory.CAPABILITY : 0) |
+        pushProtocol.CAPABILITY | nodeDirectory.CAPABILITY | (regionalEndpoint ? regionalDirectory.CAPABILITY : 0) |
         (communityEndpoint ? regionalDirectory.COMMUNITY_LOBBY_CAPABILITY : 0));
 const IDLE_MS = 20000;
 const GRACE_MS = envInt('LANYWHERE_GRACE_MS', 60000, 1, 300000);
@@ -226,6 +229,12 @@ const unifiedLobby = realmId ? null : createUnifiedLobby({
         }),
     } : null,
 });
+
+const nodesLobby = realmId ? null : nodeDirectory.create({
+    source: unifiedLobby.nodeSources,
+    providerIds: upstreams.lobbyProviders(), communityDirect: Boolean(communityEndpoint),
+});
+const friends = realmId ? null : nodeFriends.create({ enabledMask: nodesLobby.enabledMask });
 
 // Panel de actividad (stats.js): hasta que arranca, no cuenta nada.
 let stats = { count() {}, event() {}, noteSearch() {}, save() {} };
@@ -757,6 +766,33 @@ function onFrame(socket, type, body) {
     }
     if (updates.has(socket) && type !== T.PING)
         return sendError(socket, E.BAD_REQUEST, 'Update connection is read-only.');
+    if ([nodeDirectory.CATALOG_REQUEST,nodeDirectory.REQUEST,nodeFriends.REQUEST].includes(type)) {
+        if (realmId || !upstreams.isSelf(socket) || socket.member || appointmentPush?.has(socket))
+            return sendError(socket, E.BAD_REQUEST, 'Node selection requires an idle connection.');
+        if (paused || draining) return sendError(socket, E.BUSY, 'Node selection is unavailable. Try again.');
+        if (type === nodeDirectory.REQUEST && !allowed(plainIp(socket.remoteAddress),'unifiedLobby'))
+            return sendError(socket,E.BUSY,'Node selection is busy. Try again.');
+        upstreams.handleFrame(socket,type,body);
+        if (type === nodeDirectory.CATALOG_REQUEST) {
+            if (body.length) return sendError(socket,E.BAD_REQUEST,'Invalid node catalog request.');
+            return send(socket,nodeDirectory.CATALOG_RESPONSE,nodesLobby.status());
+        }
+        if (type === nodeFriends.REQUEST)
+            return send(socket,nodeFriends.RESPONSE,friends.exchange(body,plainIp(socket.remoteAddress)));
+        const page = nodesLobby.page(body);
+        if (!page) return sendError(socket,E.BAD_REQUEST,'Invalid node room query.');
+        return send(socket,nodeDirectory.RESPONSE,page);
+    }
+    if (type === nodeDirectory.REALM_REQUEST) {
+        if (!realmId || !socket.remoteAddress || !['127.0.0.1','::ffff:127.0.0.1'].includes(socket.remoteAddress) ||
+            socket.member || body.length !== 12)
+            return sendError(socket,E.BAD_REQUEST,'Invalid node locator query.');
+        const {entries,nextOffset} = groupPage({rooms:rooms.values(),lcid:body.readBigUInt64LE(),
+            offset:body.readUInt32LE(8),isOpen});
+        const head=Buffer.alloc(5);head.writeUInt32LE(nextOffset);head[4]=entries.length;
+        return send(socket,nodeDirectory.REALM_RESPONSE,Buffer.concat([head,...entries.map(room=>
+            Buffer.concat([roomMetadata.summary(room),lanplay?.locator(room.code)||Buffer.alloc(nodeLocator.SIZE)]))]));
+    }
     if (type === pushProtocol.SUBSCRIBE) {
         if (!appointmentPush || !upstreams.isSelf(socket) || socket.member)
             return sendError(socket, E.BAD_REQUEST, 'suscripción no válida');
@@ -1265,6 +1301,8 @@ function beginDrain() {
     draining = true;
     matches.drain();
     unifiedLobby?.shutdown();
+    nodesLobby?.shutdown();
+    friends?.shutdown();
     appointmentPush?.shutdown();
     log('cerrando: no se aceptan nuevas salas ni uniones');
 }

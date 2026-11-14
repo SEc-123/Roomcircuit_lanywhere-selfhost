@@ -26,7 +26,8 @@ function create({ providerIds, queryProvider, selfRows, regional, community, now
             sources.delete(provider);
             return;
         }
-        const source = { time: now(), rows: rows.map(row => pack(row, provider)) };
+        const source = { time: now(), rows: rows.map(row => pack(row, provider)),
+            nodeRows: rows.map(row => ({ summary: Buffer.from(row), locator: row.nodeLocator && Buffer.from(row.nodeLocator) })) };
         if (community?.source === provider) {
             // The direct client requires a resolved LCID. Keep legacy sentinel
             // rooms reachable through their existing compatibility route.
@@ -134,7 +135,19 @@ function create({ providerIds, queryProvider, selfRows, regional, community, now
         return Buffer.concat([head, ...rows]);
     }
 
-    return { page, shutdown: () => {
+    function nodeSources() {
+        const time = now();
+        refresh(time); refreshCommunity(time);
+        const available = new Map();
+        available.set('self', selfRows().map(summary => ({ summary, locator: null })));
+        for (const provider of providerIds) {
+            const source = sources.get(provider);
+            if (source && time - source.time <= SOURCE_MAX_AGE_MS) available.set(provider, source.nodeRows);
+        }
+        return available;
+    }
+
+    return { page, nodeSources, shutdown: () => {
         closed = true;
         regional?.shutdown();
         regionalSource = null;

@@ -7,6 +7,7 @@ const {test} = require('node:test');
 const root = path.resolve(__dirname, '..');
 test('managed release includes every local runtime dependency ', () => {
     const installer = fs.readFileSync(path.join(__dirname, 'install-systemd.sh'), 'utf8');
+    assert(installer.includes('common/node-catalog.json'), 'managed node catalog must ship');
     const files = new Set(installer.match(/^relay_files=\(([^)]+)\)/m)[1].trim().split(/\s+/));
     for (const name of files) {
         const file = path.join(root, 'server/relay', name);

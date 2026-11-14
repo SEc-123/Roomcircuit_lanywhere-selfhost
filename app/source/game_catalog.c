@@ -80,3 +80,46 @@ const char *game_catalog_name(const CatalogMatch *match, bool chinese)
     if (!match) return NULL;
     return chinese ? (match->zh ? match->zh : match->en) : (match->en ? match->en : match->zh);
 }
+
+static bool text_contains(const char *text, const char *query)
+{
+    if (!query || !*query) return true;
+    if (!text) return false;
+    for (const unsigned char *start = (const unsigned char *)text; *start; start++) {
+        const unsigned char *left = start, *right = (const unsigned char *)query;
+        while (*left && *right) {
+            unsigned char a=*left, b=*right;
+            if (a>='A' && a<='Z') a+='a'-'A';
+            if (b>='A' && b<='Z') b+='a'-'A';
+            if (a!=b) break;
+            left++; right++;
+        }
+        if (!*right) return true;
+    }
+    return false;
+}
+
+size_t game_catalog_choices(const GameCatalog *catalog, const char *query, size_t offset,
+                            CatalogGameChoice *out, size_t capacity, size_t *next)
+{
+    if (next) *next = SIZE_MAX;
+    if (!catalog || !out || !capacity || offset > catalog->alias_count + catalog->title_count) return 0;
+    size_t count = 0;
+    const size_t rows = catalog->alias_count + catalog->title_count;
+    for (size_t index = offset; index < rows; index++) {
+        const bool alias = index < catalog->alias_count;
+        const uint64_t id = alias ? read64(catalog->aliases + index * AliasSize) :
+            read64(catalog->titles + (index - catalog->alias_count) * TitleSize);
+        /* A catalog title is an exact-ID filter, not a claim about its unknown LCIDs. */
+        if (!id || id == UINT64_MAX || (!alias && find_id(catalog->aliases, catalog->alias_count, AliasSize, id)))
+            continue;
+        const CatalogMatch title = game_catalog_identify(catalog, 0, id);
+        if (!title.kind || (!text_contains(title.en, query) && !text_contains(title.zh, query))) continue;
+        if (count == capacity) {
+            if (next) *next = index;
+            break;
+        }
+        out[count++] = (CatalogGameChoice){id, title};
+    }
+    return count;
+}

@@ -1,3 +1,5 @@
+#include "node_catalog.h"
+#include "node_lobby.h"
 #include <functional>
 #include "room_passcode.h"
 #include "appointments.h"
@@ -570,6 +572,39 @@ int main() {
         g_recovering=false;g_state=RelayState::Idle;
         assert(central.seen().empty()&&community.seen().empty());
         std::puts("PASS IPC32 community hosting, direct exact selection, pinned intent and optional feature exclusions");
+    }
+    {
+        PasscodeRelay central, public_node;
+        guest(central.port);
+        test_community_port = public_node.port;
+        g_host_node = 2;
+        g_relay_region = RelayRegionCommunity;
+        g_node_endpoints[2] = {};
+        g_node_endpoints[2].sin_family = AF_INET;
+        g_node_endpoints[2].sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        g_node_endpoints[2].sin_port = htons(11453);
+        GameRoute preference{}, selected{};
+        assert(CaptureHostGameRoute(&preference));
+        assert(preference.discovery.node_id == 2 && !std::strcmp(preference.discovery.provider, "lanplay-nl"));
+        assert(ipc.SelectUnifiedLobbyRoom({42, "ABC234", "self", {}}) == 0);
+        assert(CaptureGameRoute(&selected));
+        assert(!std::strcmp(selected.discovery.provider, "self") && selected.discovery.port == htons(central.port));
+        assert(g_match.ticket.server.sin_port == htons(central.port) && g_host_node == 2);
+        CancelMatch();
+        assert(CaptureHostGameRoute(&selected) && selected.discovery.node_id == 2);
+        assert(ipc.SelectUnifiedLobbyRoom({42, "ABC234", "lanplay-nl", {}}) == 0);
+        assert(CaptureGameRoute(&selected) && !DirectNodeRoute(selected.discovery));
+        assert(selected.discovery.port == htons(central.port));
+        CancelMatch();
+        DiscoveryRoute backend{};
+        assert(CaptureAppointmentRoute(&backend));
+        RememberDirectoryRegions(backend, 1u << RelayRegionCommunity);
+        assert(ipc.SelectUnifiedLobbyRoom({42, "ABC234", REGION_PROVIDER_COMMUNITY, {}}) == 0);
+        assert(CaptureGameRoute(&selected) && !std::strcmp(selected.discovery.provider, REGION_PROVIDER_COMMUNITY));
+        assert(selected.discovery.port == htons(public_node.port) && g_host_node == 2);
+        CancelMatch();
+        assert(SetRelayRegion(RelayRegionDefault) == 0 && g_host_node == 0);
+        std::puts("PASS: LAN Play hosting preference preserves self reserved, legacy gateway and direct community selections");
     }
     std::puts("PASS regional IPC28-31: direct EU exact/quick, scoped passwords, central appointments, pinned active room, A-B-A invalidation and Ready suppression");
     std::puts("PASS native IPC17–21/25: hidden/share/clear, denied and stale unlocks, binary grants, scoped matchmaking, no password in reservations, and legacy frames");

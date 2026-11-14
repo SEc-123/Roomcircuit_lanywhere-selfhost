@@ -15,6 +15,8 @@ async function fixture(t, { healthFail, rollbackFail }) {
     t.after(() => fs.rm(dir, { recursive: true, force: true }));
     const project = path.join(dir, 'project'), system = path.join(dir, 'system'), bin = path.join(dir, 'bin');
     await fs.mkdir(path.join(project, 'deploy'), { recursive: true });
+    await fs.mkdir(path.join(project, 'common'), { recursive: true });
+    await fs.copyFile(path.join(__dirname,'../common/node-catalog.json'),path.join(project,'common/node-catalog.json'));
     await fs.mkdir(path.join(project, 'server/relay'), { recursive: true });
     await fs.mkdir(bin);
     let source = await fs.readFile(installer, 'utf8');

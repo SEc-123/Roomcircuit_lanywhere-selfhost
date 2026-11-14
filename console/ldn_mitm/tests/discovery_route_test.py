@@ -29,14 +29,14 @@ def function(source, signature):
 def selection_state(source):
     start = source.index('        constexpr u64 HostRouteEpoch')
     end = source.index('        // Called with g_lock held. A reserved match', start)
-    return (profile_prelude() + community_endpoint_functions(source) + '\n' + source[start:end]
+    return (profile_prelude() + '\n[[maybe_unused]] static u32 g_host_node = 0;\n[[maybe_unused]] static sockaddr_in g_node_endpoints[NODE_CATALOG_COUNT]{};\n' + community_endpoint_functions(source) + '\n' + source[start:end]
             .replace('void RememberDirectoryRegions(', '[[maybe_unused]] void RememberDirectoryRegions(')
             .replace('void ClearSelectionLocked(', '[[maybe_unused]] void ClearSelectionLocked(')
             .replace('void SelectRouteLocked(', '[[maybe_unused]] void SelectRouteLocked('))
 
 
 def profile_prelude():
-    return ('#include "regional_relay.h"\n'
+    return ('#include "regional_relay.h"\n#include "node_catalog.h"\n#include "node_lobby.h"\n'
             '#ifndef RELAY_PROFILE_EU_IPV4\n#define RELAY_PROFILE_EU_IPV4 ""\n#endif\n'
             '#ifndef RELAY_PROFILE_EU_PORT\n#define RELAY_PROFILE_EU_PORT 11460\n#endif\n'
             '#ifndef RELAY_PROFILE_COMMUNITY_IPV4\n#define RELAY_PROFILE_COMMUNITY_IPV4 "127.0.0.1"\n#endif\n'
@@ -45,7 +45,7 @@ def profile_prelude():
 
 def community_endpoint_functions(source):
     return '\n'.join(function(source, sig) for sig in [
-        'bool CommunityEndpoint(', 'bool TrustedCommunityEndpoint('])
+        'bool CommunityEndpoint(', 'bool TrustedCommunityEndpoint(', 'bool DirectNodeRoute(', 'bool TrustedNodeEndpointLocked('])
 
 
 
@@ -102,7 +102,7 @@ def main():
         compiler = shlex.split(os.environ.get('CXX', 'c++'))
         for fixed in (0, 1):
             subprocess.run(compiler + ['-std=c++17', '-Wall', '-Wextra', '-Werror', '-pthread',
-                           '-I' + str(ROOT / 'common'), '-DRELAY_PROFILE_FIXED=' + str(fixed), str(generated), '-o', str(binary)], check=True, timeout=40)
+                           '-I' + str(ROOT / 'common'), '-I' + str(Path(__file__).parent), '-DRELAY_PROFILE_FIXED=' + str(fixed), str(generated), '-o', str(binary)], check=True, timeout=40)
             subprocess.run([str(binary)], check=True, timeout=30)
     print('Native source snapshot SHA-256:', hashlib.sha256(source.encode()).hexdigest())
     print('Actual function slices and isolated loopback sockets; not a Switch/game acceptance test.')

@@ -34,6 +34,8 @@ def main():
     assert enter.index('Install(s)') < enter.index('joined->room_token = g_token')
     route, game_route = actual_struct(header, 'DiscoveryRoute'), actual_struct(header, 'GameRoute')
     harness = r'''
+#include "node_lobby.h"
+#include "node_catalog.h"
 #include <atomic>
 #include <algorithm>
 #include <cassert>
@@ -74,7 +76,7 @@ Tick GetSystemTick() { return {1000}; }
 }
 static void put64(u8 *p,u64 v){for(int i=0;i<8;i++)p[i]=u8(v>>(8*i));}
 static void Nickname(char *out,size_t size){std::snprintf(out,size,"test");if(change_at_nickname)configured_port=htons(11461);}
-''' + route + '\n' + game_route + '\n' + extract.selection_state(source) + r'''
+''' + route + '\n' + game_route + '\n#include \"legacy_node_stubs.hpp\"\n' + extract.selection_state(source) + r'''
 static void CancelMatch(){ClearSelectionLocked();}
 static bool MatchArmed(){return false;}
 ''' + '\n'.join(bodies[:5]) + r'''
@@ -155,7 +157,7 @@ int main(){unsigned checks=0;reset();GameRoute route{};
     with tempfile.TemporaryDirectory(prefix='switch-lcid-route-') as temp:
         path=Path(temp);cpp=path/'route.cpp';binary=path/'route';cpp.write_text(harness)
         compiler=shlex.split(os.environ.get('CXX','c++'))
-        subprocess.run(compiler+['-std=c++17','-Wall','-Wextra','-Werror','-pthread','-I',str(ROOT/'common'),str(cpp),'-o',str(binary)],check=True)
+        subprocess.run(compiler+['-std=c++17','-Wall','-Wextra','-Werror','-pthread','-I',str(ROOT/'common'),'-I',str(ROOT/'console/ldn_mitm/tests'),str(cpp),'-o',str(binary)],check=True)
         subprocess.run([str(binary)],check=True)
     print('Relay source SHA-256:',hashlib.sha256(source.encode()).hexdigest())
     print('Host fixture only: no Switch runtime, SD or production network.')

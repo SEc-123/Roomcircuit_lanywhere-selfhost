@@ -27,8 +27,10 @@
 #include "appointments_view.h"
 #include "room_password.h"
 #include "update_ui.h"
+#include "nodes_ui.h"
 
 #define TOUCH_UPDATE (1ULL << 59)
+#define TOUCH_NODE_FILTER (1ULL << 55)
 
 #define MIN_REFRESH_MS   1250
 #define STATUS_POLL_MS    250
@@ -185,6 +187,11 @@ static Result lanywhere_select_unified(LobbyRoomId id)
     return serviceDispatchIn(&g_lanywhere, UNIFIED_LOBBY_IPC_SELECT, request);
 }
 
+static Result lanywhere_select_node(LobbyNodeSelection request)
+{
+    return serviceDispatchIn(&g_lanywhere,38,request);
+}
+
 static Result lanywhere_start_quick(void)
 {
     return serviceDispatch(&g_lanywhere, 7);
@@ -320,6 +327,45 @@ static LobbyPage lanywhere_list_unified(UnifiedRoomsRequest request, LobbyGroup 
     return (LobbyPage){.count = page.count, .next = page.next, .reserved = page.status,
         .capabilities = UNIFIED_LOBBY_CAPABILITY | LOBBY_CAP_RESERVED_MATCH | ROOM_PASSCODE_CAPABILITY |
             ROOM_ACCESS_CAPABILITY | (*directory == LobbyDirectoryRegional && page.count >= 0 ? REGIONAL_LOBBY_CAPABILITY : 0)};
+}
+
+static LobbyPage lanywhere_list_nodes(NodeRoomsRequest request, LobbyGroup *groups, LobbySource *sources,
+                                      LobbyNodeRoom *rows, UnifiedPage *page, bool *supported)
+{
+    *page = (UnifiedPage){.count=-1,.next=NODE_LOBBY_END,.status=ListStatusNetwork};
+    memset(rows,0,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE);
+    const Result result=serviceDispatchInOut(&g_lanywhere_list,37,request,*page,
+        .buffer_attrs={SfBufferAttr_HipcMapAlias|SfBufferAttr_Out},
+        .buffers={{rows,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE}});
+    if(unified_ipc_missing(result) || (R_SUCCEEDED(result)&&page->count==-1&&page->status==ListStatusUpdate)){
+        *supported=false;
+        return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusUpdate};
+    }
+    if(R_FAILED(result))return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusNetwork};
+    if(page->count==-1 && (lanywhere_list_status_valid(page->status)||page->status==UnifiedListStale))
+        return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=page->status};
+    if(page->count<0 || page->count>(int32_t)NODE_LOBBY_PAGE_SIZE || page->status || !page->snapshot ||
+       (request.snapshot&&request.snapshot!=page->snapshot) || page->total>NODE_CATALOG_COUNT || page->available>page->total || (page->next!=NODE_LOBBY_END &&
+       (!page->count || page->next!=request.offset+(uint32_t)page->count)))
+        return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusProtocol};
+    for(int i=0;i<page->count;i++){
+        if(rows[i].node_id>=NODE_CATALOG_COUNT || !(request.node_mask&(1u<<rows[i].node_id)) ||
+           (rows[i].flags!=NodeRoomDirect && rows[i].flags!=NodeRoomGateway) ||
+           (request.game_id && rows[i].group.game_id!=request.game_id) ||
+           !rows[i].group.game_id || rows[i].group.code[6] || rows[i].group.code[7] ||
+           !rows[i].group.max_players || rows[i].group.max_players>8 || rows[i].group.players>rows[i].group.max_players ||
+           rows[i].group.room_access>RoomAccessHidden || (rows[i].node_id && rows[i].group.room_access!=RoomAccessNone) ||
+           rows[i].locator.code[6] || rows[i].locator.code[7] || memcmp(rows[i].locator.code,rows[i].group.code,6) ||
+           rows[i].locator.reserved0 || memcmp(rows[i].locator.reserved,(uint8_t[12]){0},12))
+            return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusProtocol};
+        groups[i]=rows[i].group;lobby_sanitize_group(&groups[i]);
+        snprintf(sources[i],sizeof(sources[i]),"%s",rows[i].node_id==1 && rows[i].flags==NodeRoomDirect?
+            REGION_PROVIDER_COMMUNITY:LanywhereNodes[rows[i].node_id].provider);
+        if(!lobby_room_id_on(&groups[i],sources[i]).game_id)
+            return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusProtocol};
+    }
+    return (LobbyPage){.count=page->count,.next=page->next,.reserved=0,
+        .capabilities=UNIFIED_LOBBY_CAPABILITY|NODE_LOBBY_CAPABILITY|LOBBY_CAP_RESERVED_MATCH|ROOM_PASSCODE_CAPABILITY|ROOM_ACCESS_CAPABILITY};
 }
 
 static LobbyPage lanywhere_list_appointment_rooms(u64 game_id, u32 offset, LobbyGroup *out, size_t count)
@@ -543,6 +589,10 @@ static UnifiedPage g_list_unified;
 static u32 g_list_request_snapshot;
 enum { ListUnavailable = -3, ListConnecting = -2, ListOffline = -1 };
 static LobbyPage g_list_page;
+static LobbyNodeRoom g_node_rows[LOBBY_PAGE_SIZE];
+static bool g_nodes_directory;
+static u64 g_node_game_filter;
+static u32 g_node_mask=(1u<<NODE_CATALOG_COUNT)-1;
 static u32 g_list_offset, g_list_response_ms;
 static u64 g_list_game_id;
 static char g_list_provider[33] = "self";
@@ -573,6 +623,9 @@ static void list_thread(void *arg)
         const u32 offset = g_list_offset;
         const u32 snapshot = g_list_request_snapshot;
         const u64 game_id = g_list_game_id;
+        bool node_directory=g_nodes_directory;
+        const u64 node_game=g_node_game_filter;
+        const u32 node_mask=g_node_mask;
         enum LobbyDiscovery discovery = g_list_discovery;
         char provider[sizeof(g_list_provider)];
         memcpy(provider, g_list_provider, sizeof(provider));
@@ -598,11 +651,19 @@ static void list_thread(void *arg)
         LobbyGroup groups[LOBBY_PAGE_SIZE] = {0};
         LobbySource sources[LOBBY_PAGE_SIZE] = {{0}};
         UnifiedPage unified = {0};
+        LobbyNodeRoom node_rows[LOBBY_PAGE_SIZE]={0};
         LobbyPage page;
         if (game_id) {
             page = lanywhere_list_appointment_rooms(game_id, offset, groups, LOBBY_PAGE_SIZE);
             if (discovery != LobbyDiscoveryLegacy)
                 for (s32 i = 0; i < page.count; ++i) memcpy(sources[i], "self", sizeof("self"));
+        } else if (node_directory) {
+            page=lanywhere_list_nodes((NodeRoomsRequest){.offset=offset,.snapshot=snapshot,.game_id=node_game,.node_mask=node_mask},
+                groups,sources,node_rows,&unified,&node_directory);
+            if(!node_directory){
+                if(offset||snapshot)page=(LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=UnifiedListStale};
+                else page=lanywhere_list_unified((UnifiedRoomsRequest){0},groups,sources,&unified,&discovery,&directory);
+            } else discovery=LobbyDiscoveryUnified;
         } else if (discovery == LobbyDiscoveryLegacy) {
             page = lanywhere_list_groups(offset, groups, LOBBY_PAGE_SIZE);
         } else {
@@ -623,6 +684,8 @@ static void list_thread(void *arg)
                 memcmp(groups, g_groups, sizeof(groups)) != 0)
                 g_list_changed = true;
             memcpy(g_groups, groups, sizeof(groups));
+            memcpy(g_node_rows,node_rows,sizeof(node_rows));
+            g_nodes_directory=node_directory;
             memcpy(g_list_sources, sources, sizeof(sources));
             g_list_discovery = discovery;
             g_list_unified = unified;
@@ -648,6 +711,7 @@ static void restart_group_query(u32 offset, u32 snapshot, bool available, const 
     g_list_page = (LobbyPage){ .count = available ? ListConnecting : ListUnavailable, .next = LOBBY_PAGE_END };
     g_list_response_ms = 0;
     memset(g_groups, 0, sizeof(g_groups));
+    memset(g_node_rows,0,sizeof(g_node_rows));
     memset(g_list_sources, 0, sizeof(g_list_sources));
     g_list_changed = true;
     mutexUnlock(&g_list_lock);
@@ -697,6 +761,8 @@ static TouchZone g_zones[24];
 #define TOUCH_NETWORK_CHOICE (1ULL << 61)
 static LobbyRoomId g_rendered_rooms[LOBBY_PAGE_SIZE];
 static LobbyRoomId g_touched_room;
+static LobbyNodeRoom g_rendered_node_rows[LOBBY_PAGE_SIZE];
+static LobbyNodeRoom g_touched_node;
 static int g_zone_count;
 
 // Botón del mando según la letra que se dibuja ("−" para Minus).
@@ -758,6 +824,7 @@ static u64 touch_button(void)
             if (pressed_action & TOUCH_CARD) {
                 // Hold the identity rendered when the finger went down through any list redraw.
                 g_touched_room = g_rendered_rooms[pressed_action & 0xFF];
+                g_touched_node = g_rendered_node_rows[pressed_action & 0xFF];
             }
             if (pressed_action & (APPOINTMENT_TOUCH_ROW | APPOINTMENT_TOUCH_JOIN))
                 appointments_capture_touch(pressed_action);
@@ -774,6 +841,12 @@ typedef struct {
     bool private_panel;
     LobbyMatch match;
     LobbyGroup groups[LOBBY_PAGE_SIZE];
+    LobbyNodeRoom node_rows[LOBBY_PAGE_SIZE];
+    LobbyNodeSelection pinned_node;
+    bool node_picker_available, node_directory;
+    uint32_t host_node;
+    uint64_t game_filter;
+    uint8_t region_filter;
     LobbySource sources[LOBBY_PAGE_SIZE];
     enum LobbyDiscovery discovery;
     UnifiedPage unified;
@@ -1083,22 +1156,15 @@ static const char *room_title_note(const LobbyGroup *group)
 
 static const char *provider_label(int index)
 {
-    switch (index) {
-    case 0: return TR("Red propia", "My server");
-    case 1: return TR("Comunidad pública", "Public community");
-    case 2: return TR("Jaysea NL A *", "Jaysea NL A *");
-    case 3: return TR("LAN Play Brasil *", "LAN Play Brazil *");
-    case 4: return TR("LAN Play Indonesia *", "LAN Play Indonesia *");
-    case 5: return TR("Jaysea NL B *", "Jaysea NL B *");
-    case 6: return TR("R3ps4j NL A *", "R3ps4j NL A *");
-    case 7: return TR("R3ps4j NL B *", "R3ps4j NL B *");
-    case 8: return TR("Alemania · Servegame *", "Germany · Servegame *");
-    case 9: return TR("China · JaxLewis *", "China · JaxLewis *");
-    case 10: return TR("China · Gugu *", "China · Gugu *");
-    case 11: return TR("China · Olunira *", "China · Olunira *");
-    case 12: return TR("China · Shanghai *", "China · Shanghai *");
-    default: return TR("Red desconocida", "Unknown network");
+    const char *provider = lobby_provider_id(index);
+    if (provider) {
+        for (unsigned id = 0; id < NODE_CATALOG_COUNT; id++) {
+            if (strcmp(provider, LanywhereNodes[id].provider) == 0) {
+                return nodes_ui_name(id);
+            }
+        }
     }
+    return TR("Red desconocida", "Unknown network");
 }
 
 static const char *region_label(u32 region)
@@ -1144,7 +1210,15 @@ static void group_card(int x, int y, int w, const LobbyGroup *g, const char *sou
     if (source && source[0]) {
         const char *label = strcmp(source, REGION_PROVIDER_COMMUNITY) == 0 ? region_label(RelayRegionCommunity) :
             strcmp(source, REGION_PROVIDER_EU) == 0 ? region_label(RelayRegionEurope) : provider_label(lobby_provider_index(source));
-        snprintf(details, sizeof(details), "%s · %s", label, host);
+        const char *region = NULL;
+        for (unsigned id = 0; id < NODE_CATALOG_COUNT; id++) {
+            if (strcmp(source, LanywhereNodes[id].provider) == 0) {
+                region = nodes_ui_region(LanywhereNodes[id].region);
+                break;
+            }
+        }
+        if (region) snprintf(details, sizeof(details), "%s · %s · %s", label, region, host);
+        else snprintf(details, sizeof(details), "%s · %s", label, host);
     } else
         snprintf(details, sizeof(details), "%s", host);
     gfx_text_fit(tx, y + 36, 17, C_DIM, details, right - 190 - tx);
@@ -1356,6 +1430,7 @@ static void groups_column(const View *v)
     for (int i = 0; i < v->count; i++) {
         group_card(x, y + i * 68, LIST_W, &v->groups[i], v->sources[i], v->sel == i);
         g_rendered_rooms[i] = lobby_room_id_on(&v->groups[i], v->sources[i]);
+        g_rendered_node_rows[i]=v->node_rows[i];
         add_zone(x, y + i * 68, LIST_W, 60, TOUCH_CARD | (u64)i);
     }
 }
@@ -1375,8 +1450,8 @@ static bool can_change_provider(const View *v)
 
 static bool can_change_host_region(const View *v)
 {
-    return v->host_region_available &&
-        ((v->host_regions & ((1u << RelayRegionEurope) | (1u << RelayRegionCommunity))) ||
+    return (v->node_picker_available || v->host_region_available) &&
+        (v->node_picker_available || (v->host_regions & ((1u << RelayRegionEurope) | (1u << RelayRegionCommunity))) ||
          v->host_region != RelayRegionDefault) &&
         v->status_valid && v->match_available && v->config_state == RelayConfigReady &&
         !v->appointment_game_id && !v->provider_panel && !v->private_panel && !v->private_room &&
@@ -1386,7 +1461,7 @@ static bool can_change_host_region(const View *v)
 
 static bool current_host_line_available(const View *v)
 {
-    return v->host_region == RelayRegionDefault || (v->host_regions & (1u << v->host_region)) != 0;
+    return v->node_picker_available || v->host_region == RelayRegionDefault || (v->host_regions & (1u << v->host_region)) != 0;
 }
 
 static u32 next_host_region(const View *v)
@@ -1522,7 +1597,7 @@ static void side_column(const View *v)
         gfx_round_rect(x, y, SIDE_W, 94, 18, C_PANEL);
         gfx_text(x + 20, y + 12, 24, C_TEXT, ui_text("Hosting line"));
         if (current_host_line_available(v)) {
-            gfx_text_fit(x + 20, y + 49, 24, C_CODE, region_label(v->host_region), SIDE_W - 94);
+            gfx_text_fit(x + 20, y + 49, 24, C_CODE, v->node_picker_available?nodes_ui_name(v->host_node):region_label(v->host_region), SIDE_W - 94);
         } else {
             char label[96];
             snprintf(label, sizeof(label), ui_text("%s unavailable"), region_label(v->host_region));
@@ -1531,6 +1606,11 @@ static void side_column(const View *v)
         gfx_button(x + SIDE_W - 62, y + 44, "Y", "");
         add_zone(x, y, SIDE_W, 94, HidNpadButton_Y);
         y += 110;
+    }
+    if(v->node_directory && !v->appointment_game_id && !show_matching(v) && !v->private_panel && !v->private_room){
+        gfx_round_rect(x,y,SIDE_W,76,18,C_PANEL);
+        gfx_button(x+20,y+23,"ZL+ZR",ui_text("Filter rooms"));
+        add_zone(x,y,SIDE_W,76,TOUCH_NODE_FILTER);y+=92;
     }
     if (can_share_game_password(v)) {
         gfx_round_rect(x, y, SIDE_W, 94, 18, C_PANEL);
@@ -1593,6 +1673,7 @@ static void draw(const View *v)
     gfx_clear_gradient(C_BG_TOP, C_BG_BOTTOM);
     g_zone_count = 0;
     memset(g_rendered_rooms, 0, sizeof(g_rendered_rooms));
+    memset(g_rendered_node_rows,0,sizeof(g_rendered_node_rows));
 
     if (g_guide_open) {
         guide_draw(g_guide_page, g_zh, g_es);
@@ -1911,7 +1992,15 @@ static void select_room(View *v)
     const bool reserved = routed ? lobby_provider_is_self_relay(selection.provider) : supports_reserved(v);
     if (routed || reserved) {
         if (community) draw_busy(ui_text("Checking community connection…"));
-        Result result = routed ? lanywhere_select_unified(selection) : lanywhere_select(selection.code);
+        Result result;
+        const int node_index=v->node_directory && !v->appointment_game_id ?
+            lobby_room_index_on(selection,v->groups,v->sources,(size_t)(v->count>0?v->count:0)):-1;
+        if(node_index>=0 && v->node_rows[node_index].flags==NodeRoomDirect){
+            const LobbyNodeRoom *room=&v->node_rows[node_index];
+            const LobbyNodeSelection request={.game_id=room->group.game_id,.node_id=room->node_id,.locator=room->locator};
+            result=lanywhere_select_node(request);
+            if(R_SUCCEEDED(result))v->pinned_node=request;
+        } else result = routed ? lanywhere_select_unified(selection) : lanywhere_select(selection.code);
         if (routed && unified_ipc_missing(result)) {
             if (legacy_external) {
                 selection = v->selection;
@@ -2042,6 +2131,7 @@ int main(int argc, char **argv)
         gfx_exit();
         return 0;
     }
+    nodes_ui_initialize();
     g_ns_ready = init_ns_with_diagnostic();
     Thread inventory;
     bool inventory_created = false, inventory_started = false;
@@ -2056,6 +2146,10 @@ int main(int argc, char **argv)
 
     View v = {0};
     v.sel = -1;
+    v.region_filter=255;
+    v.node_picker_available=nodes_ui_supported(&g_lanywhere,&v.host_node);
+    g_nodes_directory=v.node_picker_available;
+    if(!v.node_picker_available)snprintf(v.message,sizeof(v.message),"%s",ui_text("Restart with the matching background module to choose nodes."));
     v.next_page = LOBBY_PAGE_END;
     v.config_state = relay_config_load(RELAY_CONFIG_PATH, &v.config);
     v.host_region_available = lanywhere_host_region(&v.host_region);
@@ -2121,6 +2215,7 @@ int main(int argc, char **argv)
             ueventSignal(&g_refresh);
             next_status = 0;
             clear_game_cache();
+            nodes_ui_network_changed();
             v.password.refresh_at = 0;
         }
         last_loop = now;
@@ -2151,6 +2246,8 @@ int main(int argc, char **argv)
         v.unified = g_list_unified;
         memcpy(v.groups, g_groups, sizeof(v.groups));
         memcpy(v.sources, g_list_sources, sizeof(v.sources));
+        memcpy(v.node_rows,g_node_rows,sizeof(v.node_rows));
+        v.node_directory=g_nodes_directory;
         if (g_list_changed)
             dirty = true;
         g_list_changed = false;
@@ -2225,6 +2322,14 @@ int main(int argc, char **argv)
             }
             svcSleepThread(33000000ULL);
             continue;
+        }
+        if(v.node_directory && !v.appointment_game_id && !show_matching(&v) && !v.private_room &&
+           ((down&TOUCH_NODE_FILTER) || ((padGetButtons(&pad)&HidNpadButton_ZL)&&(down&HidNpadButton_ZR)))){
+            if(nodes_ui_filters(&pad,&g_catalog,&v.game_filter,&v.region_filter)){
+                mutexLock(&g_list_lock);g_node_game_filter=v.game_filter;g_node_mask=nodes_ui_region_mask(v.region_filter);mutexUnlock(&g_list_lock);
+                v.page_index=0;v.sel=-1;v.selection=(LobbyRoomId){0};restart_group_list(0,0,thread_ok);
+            }
+            g_zh=ui_chinese();dirty=true;down=0;
         }
         if ((down & HidNpadButton_Left) && appointment_entry_available(&v)) {
             appointments_open(thread_ok, false);
@@ -2329,7 +2434,10 @@ int main(int argc, char **argv)
         }
         if (card >= 0 && card < LOBBY_PAGE_SIZE) {
             dirty = true;
-            const int touched = can_pick ? lobby_room_index_on(g_touched_room, v.groups, v.sources, (size_t)shown) : -1;
+            int touched = can_pick ? lobby_room_index_on(g_touched_room, v.groups, v.sources, (size_t)shown) : -1;
+            if(touched>=0 && v.node_directory &&
+               (g_touched_node.node_id!=v.node_rows[touched].node_id || g_touched_node.flags!=v.node_rows[touched].flags ||
+                memcmp(&g_touched_node.locator,&v.node_rows[touched].locator,sizeof(NodeRoomLocator))))touched=-1;
             if (touched < 0) {
                 snprintf(v.message, sizeof(v.message), "%s", TR("No se puede elegir esa sala ahora.", "That room cannot be selected now."));
             } else if (lobby_room_full(&v.groups[touched])) {
@@ -2379,6 +2487,15 @@ int main(int argc, char **argv)
                 snprintf(v.message, sizeof(v.message), "%s", external_join_hint(v.pinned.provider, false));
             }
         } else if ((down & HidNpadButton_Y) && can_change_host_region(&v)) {
+            if(v.node_picker_available){
+                uint32_t selected=v.host_node;
+                if(nodes_ui_pick(&pad,&g_lanywhere,v.host_node,&selected)){
+                    v.host_node=selected;v.host_region=selected?RelayRegionCommunity:RelayRegionDefault;v.message[0]=0;
+                    mutexLock(&g_list_lock);g_nodes_directory=true;mutexUnlock(&g_list_lock);
+                    v.page_index=0;v.sel=-1;v.selection=(LobbyRoomId){0};restart_group_list(0,0,thread_ok);
+                }
+                g_zh=ui_chinese();dirty=true;next_status=0;
+            } else {
             const u32 region = next_host_region(&v);
             if (region == RelayRegionCommunity) draw_busy(ui_text("Checking community connection…"));
             const Result result = lanywhere_set_host_region(region);
@@ -2389,6 +2506,7 @@ int main(int argc, char **argv)
                 snprintf(v.message, sizeof(v.message), "%s",
                     result == MAKERESULT(450, RELAY_COMMUNITY_UNREACHABLE_DESCRIPTION) ?
                     ui_text("Could not connect to the community line.") : ui_text("Could not change hosting line."));
+            }
             }
         } else if ((down & HidNpadButton_Y) && can_share_game_password(&v)) {
             const char *message = room_password_edit(&g_lanywhere, v.st.code,
@@ -2435,7 +2553,12 @@ int main(int argc, char **argv)
             v.selection = (LobbyRoomId){0};
             v.sel = -1;
         } else if (v.sel >= 0 && (down & HidNpadButton_A)) {
-            if (v.selection.code[0]) select_room(&v);
+            if(v.selection.code[0]){
+                const int index=v.node_directory?lobby_room_index_on(v.selection,v.groups,v.sources,(size_t)v.count):-1;
+                const bool gateway=index>=0&&v.node_rows[index].flags==NodeRoomGateway;
+                if(index<0 || nodes_ui_check_room(&pad,gateway?0:v.node_rows[index].node_id,gateway))select_room(&v);
+                g_zh=ui_chinese();dirty=true;next_status=0;
+            }
         } else if (v.private_room && (down & HidNpadButton_B)) {
             lanywhere_leave();
             snprintf(v.message, sizeof(v.message), "%s", TR("Saliste de la sala privada.", "You left the private room."));
@@ -2525,6 +2648,7 @@ int main(int argc, char **argv)
     if (inventory_created) threadClose(&inventory);
     if (g_ns_ready) nsExit();
     serviceClose(&g_lanywhere);
+    nodes_ui_shutdown();
     update_ui_shutdown();
     gfx_exit();
     return 0;

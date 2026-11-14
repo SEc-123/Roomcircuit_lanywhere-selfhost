@@ -16,6 +16,7 @@
 #include "../../../common/room_passcode.h"
 #include "../../../common/unified_lobby.h"
 #include "../../../common/regional_relay.h"
+#include "../../../common/node_lobby.h"
 
 namespace ams::mitm::ldn {
     struct NetworkInfo;
@@ -105,6 +106,10 @@ namespace ams::mitm::lanywhere {
     u32 GetRelayRegion();
     u32 GetRelayRegions();
     Result SetRelayRegion(u32 region);
+    u32 GetHostNode();
+    Result SetHostNode(u32 node);
+    void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity);
+    Result SelectNodeRoom(const NodeRoomSelection &request);
 
     struct GroupPageV2 { s32 count; u32 next, capabilities, reserved; };
     static_assert(sizeof(GroupPageV2) == 16);
@@ -151,6 +156,8 @@ namespace ams::mitm::lanywhere {
         u64 gameplay_generation;
         u64 selected_game_id;
         char selected_code[8];
+        u32 node_id;
+        NodeRoomLocator node_locator;
     };
     bool CaptureDiscoveryRoute(DiscoveryRoute *out);
     // Dedicated self-backend connection; caller owns/serializes its descriptor.

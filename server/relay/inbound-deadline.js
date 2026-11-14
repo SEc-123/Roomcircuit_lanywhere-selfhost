@@ -7,6 +7,10 @@ const { MANIFEST_REQUEST, CHUNK_REQUEST } = require('./update-format');
 // Framing is checked by the caller before this function; command-specific
 // validation remains in the normal protocol handlers.
 function knownCommand(type, body) {
+    if (type === 0x32) return body.length === 0;
+    if (type === 0x33) return body.length === 20;
+    if (type === 0x34) return body.length === 240;
+    if (type === 0x35) return body.length === 12;
     if (type === MANIFEST_REQUEST) return body.length === 0;
     if (type === CHUNK_REQUEST) return body.length === 36;
     return ((type >= 1 && type <= 0x0d) || type === 0x20 || type === 0x21 ||

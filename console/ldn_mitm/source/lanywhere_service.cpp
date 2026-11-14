@@ -36,6 +36,27 @@ namespace ams::mitm::lanywhere {
 
     }
 
+    Result LanywhereService::GetHostNode(sf::Out<u32> node) {
+        node.SetValue(lanywhere::GetHostNode());
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::SetHostNode(u32 node) {
+        R_RETURN(lanywhere::SetHostNode(node));
+    }
+
+    Result LanywhereService::ListNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out) {
+        UnifiedPage result{-1, UNIFIED_LOBBY_END, 0, 0, 0, ListStatusProtocol};
+        if (out.GetSize() >= NODE_LOBBY_PAGE_SIZE * sizeof(NodeRoomWire))
+            lanywhere::FindNodeRooms(request, &result, reinterpret_cast<NodeRoomWire *>(out.GetPointer()), out.GetSize() / sizeof(NodeRoomWire));
+        page.SetValue(result);
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::SelectNodeRoom(NodeRoomSelection request) {
+        R_RETURN(lanywhere::SelectNodeRoom(request));
+    }
+
     Result LanywhereService::GetBuildVersion(const sf::OutBuffer &out) {
         if (out.GetSize() != 16) return ResultRelayFailed();
         char version[16]{};

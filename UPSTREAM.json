@@ -3,7 +3,7 @@
   "repository": "https://github.com/augustocco/lanywhere",
   "commit": "7f2bb47bacc972f9ae11ae9a48e35991d09a9837",
   "license": "GPL-2.0-only",
-  "derived_version": "0.7.0",
+  "derived_version": "0.8.0",
   "submodules": {
     "console/Atmosphere-libs": {
       "repository": "https://github.com/Atmosphere-NX/Atmosphere-libs.git",
@@ -32,6 +32,14 @@
       "license": "GPL-2.0-only",
       "scope": "Reference implementation for LAN Play fork interoperability; supplied archive binary origin not reproducibly established",
       "license_notes": "Upstream README documents exemptions for specific named projects; see its LICENSE and README."
+    }
+  },
+  "transport_dependencies": {
+    "lwip": {
+      "repository": "https://github.com/lwip-tcpip/lwip",
+      "commit": "009c2256469004009488b3385ba269461e8eb616",
+      "version": "2.2.1",
+      "license": "BSD-3-Clause"
     }
   }
 }

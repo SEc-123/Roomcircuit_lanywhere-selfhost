@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <switch.h>
 
-enum { GuideAppointmentsPage = 3 };
+enum { GuideAppointmentsPage = 4 };
 int guide_page_count(void);
 // Shared top-right language control. The caller handles StickR and persistence.
 void guide_draw_language(bool chinese);

@@ -1,5 +1,6 @@
 /* Modified by LANywhere Self-host, 2026-11-07 to 2026-11-08. */
 #include "lan_discovery.hpp"
+#include "lanplay_direct.hpp"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <net/if.h>
@@ -70,7 +71,7 @@ namespace ams::mitm::ldn {
         return this->recvPacket([&](LANPacketType type, const void *data, size_t size, ReplyFunc reply) -> int {
             switch (type) {
                 case LANPacketType::Scan: {
-                    if (this->discovery->getState() == CommState::AccessPointCreated &&
+                    if (!lanplay::State().active && this->discovery->getState() == CommState::AccessPointCreated &&
                         this->discovery->networkInfo.ldn.stationAcceptPolicy != LdnAcceptPolicy_AlwaysReject) {
                         reply(LANPacketType::ScanResp, &this->discovery->networkInfo, sizeof(NetworkInfo));
                     }
@@ -320,7 +321,7 @@ namespace ams::mitm::ldn {
 
         if (listening) {
             addr.sin_family = AF_INET;
-            addr.sin_addr.s_addr = htons(INADDR_ANY);
+            addr.sin_addr.s_addr = htonl(lanplay::State().active ? INADDR_LOOPBACK : INADDR_ANY);
             addr.sin_port = htons(listenPort);
             if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
                 return MAKERESULT(ModuleID, 7);

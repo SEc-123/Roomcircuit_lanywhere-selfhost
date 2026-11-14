@@ -8,6 +8,8 @@
 #include "lanywhere_relay.hpp"
 #include "appointment_notifier.hpp"
 #include "tcp_stream_proxy.hpp"
+#include "lanplay_direct.hpp"
+#include "../../../common/node_catalog.h"
 #include "udp_reassembly.hpp"
 #include "udp_fragment_writer.hpp"
 #include "udp_heartbeat.hpp"
@@ -30,6 +32,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netdb.h>
+#include <switch/runtime/resolver.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 
@@ -112,6 +116,11 @@ namespace ams::mitm::lanywhere {
         u32 g_send_retries, g_send_failures;  // envíos al servidor con el búfer de salida lleno
         int g_tcp = -1, g_udp = -1;
         sockaddr_in g_server;
+        u32 g_host_node = 0;
+        sockaddr_in g_node_endpoints[NODE_CATALOG_COUNT]{};
+        std::atomic<bool> g_direct_session{false};
+        GameRoute g_direct_room{};
+        constinit os::SdkMutex g_node_resolve_lock;
         os::Tick g_last_keepalive;
         bool g_public = true;  // The saved visibility preference applies to external networks.
         char g_nick[NickLength];  // apodo (config.ini "apodo="); nunca el nombre de usuario de la consola
@@ -222,8 +231,72 @@ namespace ams::mitm::lanywhere {
             return CommunityEndpoint(&expected) && expected.sin_addr.s_addr == ipv4 && expected.sin_port == port;
         }
 
+        bool DirectNodeRoute(const DiscoveryRoute &route) {
+            return route.node_id >= 2 && route.node_id < NODE_CATALOG_COUNT;
+        }
+
+        bool TrustedNodeEndpointLocked(const DiscoveryRoute &route) {
+            if (!DirectNodeRoute(route)) return false;
+            const auto &expected = g_node_endpoints[route.node_id];
+            return expected.sin_addr.s_addr && expected.sin_addr.s_addr == route.ipv4 && expected.sin_port == route.port &&
+                !std::strcmp(route.provider, LanywhereNodes[route.node_id].provider);
+        }
+
+        struct NodeDnsWatch {
+            u32 handle;
+            std::atomic<bool> done{false};
+        };
+        alignas(0x1000) u8 g_node_dns_stack[0x4000];
+        os::ThreadType g_node_dns_thread;
+        void CancelNodeDns(void *argument) {
+            auto *watch = static_cast<NodeDnsWatch *>(argument);
+            const auto began = os::GetSystemTick();
+            while (!watch->done.load()) {
+                if ((os::GetSystemTick() - began).ToTimeSpan() >= TimeSpan::FromSeconds(3)) {
+                    static_cast<void>(::resolverCancel(watch->handle));
+                    return;
+                }
+                os::SleepThread(TimeSpan::FromMilliSeconds(20));
+            }
+        }
+
+        bool ResolveNodeEndpoint(u32 node, sockaddr_in *out) {
+            if (node >= NODE_CATALOG_COUNT || !out) return false;
+            if (node == 0) { std::scoped_lock lock(g_lock); return LoadServer(out); }
+            if (node == 1) return CommunityEndpoint(out);
+            std::scoped_lock resolver(g_node_resolve_lock);
+            const auto &definition = LanywhereNodes[node];
+            sockaddr_in address{};
+            address.sin_family = AF_INET;
+            address.sin_port = htons(definition.port);
+            if (::inet_pton(AF_INET, definition.host, &address.sin_addr) != 1) {
+                addrinfo hint{}; hint.ai_family = AF_INET; hint.ai_socktype = SOCK_DGRAM;
+                addrinfo *result = nullptr;
+                NodeDnsWatch watch{::resolverGetCancelHandle()};
+                if (!watch.handle || R_FAILED(os::CreateThread(&g_node_dns_thread, CancelNodeDns, &watch,
+                        g_node_dns_stack, sizeof(g_node_dns_stack), 10))) return false;
+                os::SetThreadNamePointer(&g_node_dns_thread, "lanywhere::NodeDns");
+                os::StartThread(&g_node_dns_thread);
+                const int resolved = ::getaddrinfo(definition.host, nullptr, &hint, &result);
+                watch.done = true;
+                os::WaitThread(&g_node_dns_thread);
+                os::DestroyThread(&g_node_dns_thread);
+                if (resolved != 0 || !result) return false;
+                if (result->ai_addrlen < sizeof(sockaddr_in)) { ::freeaddrinfo(result); return false; }
+                address.sin_addr = reinterpret_cast<const sockaddr_in *>(result->ai_addr)->sin_addr;
+                ::freeaddrinfo(result);
+            }
+            const u32 ip = ntohl(address.sin_addr.s_addr);
+            if (!(ip >> 24) || (ip >> 24) >= 224 || (ip >> 24) == 127 || (ip >> 24) == 10 ||
+                (ip >> 20) == 0xac1 || (ip >> 16) == 0xc0a8 || (ip >> 16) == 0xa9fe ||
+                (ip >> 17) == 0x6309) return false;
+            *out = address;
+            return true;
+        }
+
         bool ResolveDiscoveryRoute(const DiscoveryRoute &route, sockaddr_in *server, char provider[33]) {
             const char *end = static_cast<const char *>(std::memchr(route.provider, '\0', sizeof(route.provider)));
+            if (DirectNodeRoute(route) && !TrustedNodeEndpointLocked(route)) return false;
             if (!end || !route.ipv4 || route.ipv4 == INADDR_BROADCAST || !route.port ||
                 (std::strcmp(route.provider, "self") && std::strcmp(route.provider, "lanywhere-public") &&
                  std::strcmp(route.provider, REGION_PROVIDER_COMMUNITY) &&
@@ -278,6 +351,7 @@ namespace ams::mitm::lanywhere {
         }
 
         const char *GameplayProviderLocked() {
+            if (g_host_node >= 2 && g_host_node < NODE_CATALOG_COUNT) return LanywhereNodes[g_host_node].provider;
             return g_relay_region == RelayRegionCommunity ? REGION_PROVIDER_COMMUNITY : "self";
         }
 
@@ -311,6 +385,10 @@ namespace ams::mitm::lanywhere {
         }
 
         bool GameplayEndpointLocked(sockaddr_in *out) {
+            if (g_host_node >= 2 && g_host_node < NODE_CATALOG_COUNT) {
+                *out = g_node_endpoints[g_host_node];
+                return out->sin_addr.s_addr && out->sin_port;
+            }
             return RegionEndpointLocked(g_relay_region, out);
         }
 
@@ -340,7 +418,8 @@ namespace ams::mitm::lanywhere {
             if (!route.selection_epoch) return false;
             sockaddr_in server{};
             if (route.selection_epoch == HostRouteEpoch || route.selection_epoch == DefaultGameRouteEpoch) {
-                if (route.gameplay_generation != g_gameplay_generation || !GameplayEndpointLocked(&server) ||
+                if (route.gameplay_generation != g_gameplay_generation || route.node_id != g_host_node ||
+                    !GameplayEndpointLocked(&server) ||
                     server.sin_addr.s_addr != route.ipv4 || server.sin_port != route.port ||
                     std::strcmp(route.provider, GameplayProviderLocked())) return false;
                 if (route.selection_epoch == HostRouteEpoch) return true;
@@ -348,11 +427,13 @@ namespace ams::mitm::lanywhere {
                     route.public_enabled &&
                     !route.selected_game_id && !route.selected_code[0];
             }
-            const bool endpoint_valid = !std::strcmp(route.provider, "self") ? TrustedSelfEndpointLocked(route) :
+            const bool endpoint_valid = DirectNodeRoute(route) ? TrustedNodeEndpointLocked(route) :
+                !std::strcmp(route.provider, "self") ? TrustedSelfEndpointLocked(route) :
                 !std::strcmp(route.provider, REGION_PROVIDER_COMMUNITY) ? TrustedCommunityEndpoint(route.ipv4, route.port) :
                 (LoadServer(&server) && server.sin_addr.s_addr == route.ipv4 && server.sin_port == route.port);
             return endpoint_valid && route.ipv4 == g_selection.ipv4 && route.port == g_selection.port &&
-                route.selection_epoch == g_selection.selection_epoch &&
+                route.selection_epoch == g_selection.selection_epoch && route.node_id == g_selection.node_id &&
+                std::memcmp(&route.node_locator, &g_selection.node_locator, sizeof(route.node_locator)) == 0 &&
                 route.selected_game_id == g_selection.selected_game_id &&
                 std::memcmp(route.selected_code, g_selection.selected_code, sizeof(route.selected_code)) == 0 &&
                 std::strcmp(route.provider, g_selection.provider) == 0 &&
@@ -1131,6 +1212,13 @@ namespace ams::mitm::lanywhere {
         }
 
         void LeaveCurrentRoom() {
+            if (g_direct_session.exchange(false)) {
+                const auto previous = lanplay::State();
+                lanplay::Leave();
+                tcpstream::ResetTransport(previous.epoch);
+                std::scoped_lock lock(g_lock);
+                g_direct_room = {};
+            }
             {
                 std::scoped_lock lk(g_lock);
                 if (g_state == RelayState::InRoom) SendFrame(T_Leave, nullptr, 0);
@@ -1286,6 +1374,15 @@ namespace ams::mitm::lanywhere {
 
     bool CaptureGameRoute(GameRoute *out) {
         if (!out) return false;
+        if (g_direct_session.load()) {
+            const auto state = lanplay::State();
+            if (!state.active) return false;
+            std::scoped_lock lock(g_lock);
+            if (!g_direct_session.load() || g_direct_room.room_epoch != state.epoch) return false;
+            *out = g_direct_room;
+            out->room_epoch = state.epoch;
+            return true;
+        }
         *out = {};
         std::scoped_lock lock(g_lock);
         if (g_state == RelayState::InRoom) {
@@ -1319,6 +1416,7 @@ namespace ams::mitm::lanywhere {
             util::Strlcpy(out->discovery.provider, GameplayProviderLocked(), sizeof(out->discovery.provider));
             out->discovery.selection_epoch = DefaultGameRouteEpoch;
             out->discovery.gameplay_generation = g_gameplay_generation;
+            out->discovery.node_id = g_host_node;
         }
         return true;
     }
@@ -1337,6 +1435,7 @@ namespace ams::mitm::lanywhere {
         util::Strlcpy(out->discovery.provider, GameplayProviderLocked(), sizeof(out->discovery.provider));
         out->discovery.selection_epoch = HostRouteEpoch;
         out->discovery.gameplay_generation = g_gameplay_generation;
+        out->discovery.node_id = g_host_node;
         return true;
     }
 
@@ -1349,6 +1448,7 @@ namespace ams::mitm::lanywhere {
             current.discovery.gameplay_generation == route.discovery.gameplay_generation &&
             std::memcmp(current.room_code, route.room_code, CodeLength) == 0 &&
             current.discovery.ipv4 == route.discovery.ipv4 && current.discovery.port == route.discovery.port &&
+            current.discovery.node_id == route.discovery.node_id &&
             std::strcmp(current.discovery.provider, route.discovery.provider) == 0 &&
             (route.room_epoch || current.discovery.public_enabled == route.discovery.public_enabled);
     }
@@ -1387,6 +1487,50 @@ namespace ams::mitm::lanywhere {
         util::Strlcpy(out, g_nick, size);
     }
 
+    namespace {
+        Result EnterDirectNode(bool hosting, const char *code, u64 game_id, const DiscoveryRoute &route, GameRoute *joined) {
+            if (!DirectNodeRoute(route) || !game_id || g_direct_session.load()) return ResultRelayFailed();
+            std::scoped_lock lifecycle(g_room_lifecycle_lock);
+            if (!DiscoveryRouteStillSelected(route)) return ResultRelayFailed();
+            const lanplay::Endpoint endpoint{route.ipv4, route.port};
+            if (hosting && !lanplay::Probe(endpoint)) return ResultCommunityUnreachable();
+            LeaveCurrentRoom();
+            const bool configured = lanplay::Configure(route.node_id, endpoint);
+            // Configure creates the lazy transport instance. Register before Host/Join can emit streams.
+            if (configured) lanplay::SetStreamReply(tcpstream::ReceiveFrame);
+            if (!configured || !(hosting ? lanplay::Host(game_id) : lanplay::Join(code, game_id))) {
+                const auto state = lanplay::State();
+                lanplay::Leave();
+                std::scoped_lock lock(g_lock);
+                SetError(state.error[0] ? state.error : "LAN Play connection failed. Try again.");
+                return ResultRelayFailed();
+            }
+            const auto state = lanplay::State();
+            std::unique_lock lock(g_lock);
+            if (!PinnedRouteCurrentLocked(route)) {
+                lock.unlock();
+                lanplay::Leave();
+                return ResultRelayFailed();
+            }
+            g_direct_room = {};
+            g_direct_room.discovery = route;
+            g_direct_room.room_epoch = state.epoch;
+            g_direct_room.room_token = static_cast<u32>(state.epoch) | 1u;
+            if (code) util::Strlcpy(g_direct_room.room_code, code, sizeof(g_direct_room.room_code));
+            else {
+                constexpr const char letters[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+                u64 value = state.epoch;
+                for (size_t j = 0; j < CodeLength; j++) { g_direct_room.room_code[j] = letters[value & 31]; value >>= 5; }
+            }
+            g_net_ip = state.address;
+            g_direct_session = true;
+            g_error[0] = 0;
+            ClearSelectionLocked();
+            if (joined) *joined = g_direct_room;
+            R_SUCCEED();
+        }
+    }
+
     Result CreateRoom(u64 game_id, const DiscoveryRoute *route, GameRoute *joined) {
         if (joined) *joined = {};
         GameRoute host{};
@@ -1398,6 +1542,10 @@ namespace ams::mitm::lanywhere {
             std::scoped_lock lk(g_lock);
             util::Strlcpy(g_error, "Network changed; search again.", sizeof(g_error));
             return ResultRelayFailed();
+        }
+        if (DirectNodeRoute(*route)) {
+            CancelMatch();
+            return EnterDirectNode(true, nullptr, game_id, *route, joined);
         }
         CancelMatch();
         u8 body[8 + NickLength + 1] = {};
@@ -1417,6 +1565,7 @@ namespace ams::mitm::lanywhere {
             if (g_state != RelayState::InRoom) g_state = RelayState::Error;
             return ResultRelayFailed();
         }
+        if (route && DirectNodeRoute(*route)) return EnterDirectNode(false, code, game_id, *route, joined);
         if (MatchArmed()) CancelMatch();
         u8 body[CodeLength + NickLength + 8 + 1] = {};
         std::memcpy(body, code, std::min(std::strlen(code), CodeLength));
@@ -1433,6 +1582,14 @@ namespace ams::mitm::lanywhere {
 
     void LeaveGameRoom(const GameRoute &owned) {
         std::scoped_lock lifecycle_lock(g_room_lifecycle_lock);
+        if (g_direct_session.load()) {
+            bool owns;
+            { std::scoped_lock lock(g_lock); owns = owned.room_token && owned.room_token == g_direct_room.room_token &&
+                owned.room_epoch == g_direct_room.room_epoch && owned.discovery.node_id == g_direct_room.discovery.node_id &&
+                !std::memcmp(owned.room_code, g_direct_room.room_code, sizeof(owned.room_code)); }
+            if (owns) LeaveCurrentRoom();
+            return;
+        }
         {
             std::scoped_lock lock(g_lock);
             // A reconnect may change the transport epoch, but not room identity.
@@ -1446,6 +1603,17 @@ namespace ams::mitm::lanywhere {
     }
 
     void GetStatus(Status *out) {
+        if (g_direct_session.load()) {
+            const auto state = lanplay::State();
+            std::memset(out, 0, sizeof(*out));
+            out->state = state.active ? RelayState::InRoom : RelayState::Error;
+            out->my_index = state.member; out->member_count = state.members; out->my_ip = state.address;
+            out->game_id = state.game; out->packets_sent = state.sent; out->packets_received = state.received;
+            util::Strlcpy(out->error, state.error, sizeof(out->error));
+            std::scoped_lock lock(g_lock);
+            std::memcpy(out->code, g_direct_room.room_code, sizeof(out->code));
+            return;
+        }
         std::scoped_lock lk(g_lock);
         std::memset(out, 0, sizeof(*out));
         out->state = g_state == RelayState::InRoom && g_recovering ? RelayState::Connecting : g_state;
@@ -1472,11 +1640,13 @@ namespace ams::mitm::lanywhere {
     }
 
     bool InRoom() {
+        if (g_direct_session.load()) return lanplay::State().active;
         std::scoped_lock lk(g_lock);
         return g_state == RelayState::InRoom;
     }
 
     u32 RoomTag() {
+        if (g_direct_session.load()) return static_cast<u32>(lanplay::State().epoch);
         std::scoped_lock lk(g_lock);
         u32 h = 2166136261u;  // FNV-1a
         for (size_t i = 0; i < CodeLength; i++) {
@@ -1486,18 +1656,27 @@ namespace ams::mitm::lanywhere {
     }
 
     u32 MyIp() {
+        if (g_direct_session.load()) return lanplay::State().address;
         std::scoped_lock lk(g_lock);
         return g_my_ip;
     }
 
     bool CaptureTcpTransport(u64 *epoch,u32 *capabilities,u32 *self_ip) {
         if(!epoch||!capabilities||!self_ip)return false;
+        if (g_direct_session.load()) {
+            const auto state = lanplay::State();
+            if (!state.active) return false;
+            *epoch = state.epoch; *capabilities = tcpstream::Capability | tcpstream::LegacyCapability;
+            *self_ip = state.address;
+            return true;
+        }
         std::scoped_lock lk(g_lock);
         if(g_state!=RelayState::InRoom||!g_stream_ready.load())return false;
         *epoch=g_stream_epoch.load();*capabilities=g_capabilities;*self_ip=g_my_ip;return true;
     }
 
     bool SendTcpFrame(u64 epoch,const void *body,size_t size) {
+        if (g_direct_session.load()) return lanplay::SendStream(epoch, body, size);
         tcpstream::Frame frame;
         if(!tcpstream::Parse(body,size,&frame))return false;
         std::scoped_lock lk(g_send_lock);
@@ -1512,6 +1691,7 @@ namespace ams::mitm::lanywhere {
     }
 
     void ReportTcpUnavailable() {
+        if (g_direct_session.load()) return;
         std::scoped_lock lock(g_lock);
         if(g_state==RelayState::InRoom&&!(g_capabilities&tcpstream::Capability))
             util::Strlcpy(g_error,"Game TCP is unavailable on this network.",sizeof(g_error));
@@ -1527,6 +1707,7 @@ namespace ams::mitm::lanywhere {
     }
 
     int MemberOfIp(u32 ip) {
+        if (g_direct_session.load()) return lanplay::MemberOfIp(ip);
         std::scoped_lock lk(g_lock);
         for (const Member &m : g_members) {
             if (m.present && m.ip == ip) return m.index;
@@ -1535,6 +1716,7 @@ namespace ams::mitm::lanywhere {
     }
 
     bool SendData(u32 dst_ip, u16 src_port, u16 dst_port, const void *data, size_t size) {
+        if (g_direct_session.load()) return lanplay::SendData(dst_ip, src_port, dst_port, data, size);
         if (size > MaxUdpPayload) { errno = EMSGSIZE; return false; }
         u8 body[8 + MaxPayload];
         const u32 mask = Netmask();
@@ -1598,6 +1780,7 @@ namespace ams::mitm::lanywhere {
     }
 
     bool PublicEnabled() {
+        if (g_direct_session.load()) return true;
         std::scoped_lock lk(g_lock);
         // Force subsequent Enter/discovery validation to fail instead of
         // silently falling back to a local-only room on damaged settings.
@@ -1606,6 +1789,7 @@ namespace ams::mitm::lanywhere {
     }
 
     void Publish(const void *network_info, size_t size, u64 host_program_id) {
+        if (g_direct_session.load()) { lanplay::Publish(network_info, size); return; }
         if (size && (size != NetworkInfoSize || !network_info)) return;
         // The notifier may own its watch lock. Never call it while owning any
         // relay/lifecycle lock: notifier reads can themselves query room state.
@@ -1807,6 +1991,7 @@ namespace ams::mitm::lanywhere {
     }
 
     Result StartMatch(MatchMode mode, const char *code, const u8 *grant, const DiscoveryRoute *authorized_route) {
+        if (g_direct_session.load()) return ResultRelayFailed();
         if ((mode != MatchMode::Quick && mode != MatchMode::Exact) ||
             (mode == MatchMode::Exact && !ValidCode(code)) ||
             (grant && !authorized_route) || (authorized_route && mode != MatchMode::Exact) || InRoom())
@@ -1830,10 +2015,11 @@ namespace ams::mitm::lanywhere {
         }
         MatchTicket old{}, pending{};
         {
+            std::scoped_lock lifecycle(g_room_lifecycle_lock);
             std::scoped_lock lk(g_match_lock);
             {
                 std::scoped_lock lock(g_lock);
-                if (g_state == RelayState::InRoom || g_state == RelayState::Connecting) return ResultRelayFailed();
+                if (g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting) return ResultRelayFailed();
                 if (authorized_route) {
                     if (!TrustedSelfEndpointLocked(*authorized_route)) return ResultRelayFailed();
                     auto route = *authorized_route;
@@ -1897,12 +2083,13 @@ namespace ams::mitm::lanywhere {
         sockaddr_in central{};
         u32 mask = 1u << RelayRegionDefault;
         if (LoadServer(&central)) mask |= EnabledDirectoryRegionsLocked(central);
-        if (g_state == RelayState::InRoom && !std::strcmp(g_room_provider, REGION_PROVIDER_COMMUNITY))
+        if (g_direct_session.load() || (g_state == RelayState::InRoom && !std::strcmp(g_room_provider, REGION_PROVIDER_COMMUNITY)))
             mask |= RELAY_REGION_COMMUNITY_ACTIVE;
         return mask;
     }
 
     Result SetRelayRegion(u32 region) {
+        if (g_direct_session.load()) return ResultRelayFailed();
         sockaddr_in endpoint{};
         if (region == RelayRegionCommunity) {
             {
@@ -1922,19 +2109,21 @@ namespace ams::mitm::lanywhere {
         std::scoped_lock lifecycle(g_room_lifecycle_lock);
         std::scoped_lock match_lock(g_match_lock);
         std::scoped_lock lock(g_lock);
-        if ((region == RelayRegionCommunity && !CommunityOfferedLocked()) || !RegionEndpointLocked(region, &endpoint) ||
+        if (g_direct_session.load() || (region == RelayRegionCommunity && !CommunityOfferedLocked()) || !RegionEndpointLocked(region, &endpoint) ||
             g_state == RelayState::InRoom || g_state == RelayState::Connecting || g_recovering || ArmedLocked() || g_match.in_flight)
             return ResultRelayFailed();
         if (g_relay_region != region) {
             do { ++g_gameplay_generation; } while (!g_gameplay_generation);
             g_relay_region = region;
         }
+        g_host_node = region == RelayRegionCommunity ? 1u : 0u;
         ClearSelectionLocked();
         if (!std::strcmp(g_error, CommunityUnreachable)) g_error[0] = '\0';
         R_SUCCEED();
     }
 
     Result SelectUnifiedRoom(const UnifiedRoomRequest &request) {
+        if (g_direct_session.load()) return ResultRelayFailed();
         const auto *provider_end = static_cast<const char *>(std::memchr(request.provider, 0, sizeof(request.provider)));
         if (!request.game_id || request.code[6] || request.code[7] || !ValidCode(request.code) ||
             !provider_end || provider_end == request.provider ||
@@ -1975,10 +2164,11 @@ namespace ams::mitm::lanywhere {
 
         MatchTicket old{}, pending{};
         {
+            std::scoped_lock lifecycle(g_room_lifecycle_lock);
             std::scoped_lock match_lock(g_match_lock);
             std::scoped_lock lock(g_lock);
             sockaddr_in current{};
-            if (g_state == RelayState::InRoom || g_state == RelayState::Connecting || !LoadServer(&current))
+            if (g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting || !LoadServer(&current))
                 return ResultRelayFailed();
             if (!std::strcmp(route.provider, REGION_PROVIDER_COMMUNITY)) {
                 if (!(EnabledDirectoryRegionsLocked(current) & (1u << RelayRegionCommunity)) ||
@@ -2394,6 +2584,16 @@ namespace ams::mitm::lanywhere {
             return static_cast<int>(count);
         }
 
+        int FindDirectNodeGroups(const DiscoveryRoute &route, const ldn::ScanFilter *filter,
+                                 void (*found)(const char *, const void *, void *), void *user) {
+            std::scoped_lock lifecycle(g_room_lifecycle_lock);
+            if (!DiscoveryRouteStillSelected(route) || g_direct_session.load() ||
+                !lanplay::Configure(route.node_id, {route.ipv4, route.port})) return -1;
+            const int count = lanplay::Scan(filter, filter ? sizeof(*filter) : 0,
+                route.selected_code[0] ? &route.node_locator : nullptr, found, user);
+            return DiscoveryRouteStillSelected(route) ? count : -1;
+        }
+
         int DiscoveryConnection(const DiscoveryRoute *requested, DiscoveryRoute *captured, const char **error) {
             if (requested) *captured = *requested;
             else if (!CaptureDiscoveryRoute(captured)) return -1;
@@ -2418,6 +2618,12 @@ namespace ams::mitm::lanywhere {
     int FindGroups(u64 local_communication_id, void (*found)(const char *code, const void *network_info, void *user), void *user,
                    bool from_app, const DiscoveryRoute *route) {
         if (!found) return -1;
+        if (route && DirectNodeRoute(*route)) {
+            ldn::ScanFilter filter{};
+            filter.networkId.intentId.localCommunicationId = local_communication_id;
+            if (local_communication_id) filter.flag = ldn::ScanFilterFlag_LocalCommunicationId;
+            return FindDirectNodeGroups(*route, &filter, found, user);
+        }
         DiscoveryRoute captured{};
         const char *error = nullptr;
         const int fd = DiscoveryConnection(route, &captured, &error);
@@ -2432,6 +2638,13 @@ namespace ams::mitm::lanywhere {
                        const DiscoveryRoute *route) {
         if (!next || !found) return -1;
         *next = GroupPageEnd;
+        if (route && DirectNodeRoute(*route)) {
+            if (offset) return 0;
+            ldn::ScanFilter filter{};
+            filter.networkId.intentId.localCommunicationId = local_communication_id;
+            if (local_communication_id) filter.flag = ldn::ScanFilterFlag_LocalCommunicationId;
+            return FindDirectNodeGroups(*route, &filter, found, user);
+        }
         DiscoveryRoute captured{};
         const char *error = nullptr;
         const int fd = DiscoveryConnection(route, &captured, &error);
@@ -2448,6 +2661,10 @@ namespace ams::mitm::lanywhere {
                                const DiscoveryRoute *route) {
         if (!next || !found) return -1;
         *next = GroupPageEnd;
+        if (route && DirectNodeRoute(*route)) {
+            if (offset) return 0;
+            return FindDirectNodeGroups(*route, &filter, found, user);
+        }
         DiscoveryRoute captured{};
         const char *error = nullptr;
         const int fd = DiscoveryConnection(route, &captured, &error);
@@ -2473,6 +2690,7 @@ namespace ams::mitm::lanywhere {
     }
 
     bool SendControl(u8 dest, LdnMsg msg, const void *data, size_t size, const MatchJoinAttempt *match) {
+        if (g_direct_session.load()) return !match && lanplay::SendControl(dest, static_cast<u8>(msg), data, size);
         std::scoped_lock lk(g_lock);
         if (g_state != RelayState::InRoom ||
             (match && std::memcmp(g_room_ticket, match->ticket, sizeof(g_room_ticket)) != 0)) {
@@ -2484,6 +2702,12 @@ namespace ams::mitm::lanywhere {
     }
 
     ssize_t TakeControl(u8 *from, LdnMsg *msg, void *buffer, size_t size) {
+        if (g_direct_session.load()) {
+            u8 kind = 0;
+            const ssize_t result = lanplay::TakeControl(from, &kind, buffer, size);
+            if (result >= 0) *msg = static_cast<LdnMsg>(kind);
+            return result;
+        }
         std::scoped_lock lk(g_queue_lock);
         if (g_control_count == 0) {
             return -1;
@@ -2499,11 +2723,13 @@ namespace ams::mitm::lanywhere {
     }
 
     ssize_t ReceiveData(u16 port, void *buffer, size_t size, u32 *src_ip, u16 *src_port, bool peek) {
+        if (g_direct_session.load()) return lanplay::ReceiveData(port, buffer, size, src_ip, src_port, peek);
         std::scoped_lock lk(g_queue_lock);
         return g_queue.Take(port, buffer, size, src_ip, src_port, peek);
     }
 
     bool HasData(u16 port) {
+        if (g_direct_session.load()) return lanplay::HasData(port);
         std::scoped_lock lk(g_queue_lock);
         return g_queue.Has(port);
     }
@@ -3119,6 +3345,169 @@ namespace ams::mitm::lanywhere {
             RememberDirectoryRegions(route, enabled);
         }
         *page = {static_cast<s32>(count), next, snapshot, available, total, ListStatusOk};
+    }
+
+    u32 GetHostNode() {
+        std::scoped_lock lock(g_lock);
+        return g_relay_region == RelayRegionEurope ? NODE_ID_INVALID : g_host_node;
+    }
+
+    Result SetHostNode(u32 node) {
+        if (node >= NODE_CATALOG_COUNT || g_direct_session.load()) return ResultRelayFailed();
+        {
+            std::scoped_lock match(g_match_lock);
+            std::scoped_lock lock(g_lock);
+            if (g_state == RelayState::InRoom || g_state == RelayState::Connecting || g_recovering ||
+                ArmedLocked() || g_match.in_flight) return ResultRelayFailed();
+        }
+        sockaddr_in endpoint{};
+        if (!ResolveNodeEndpoint(node, &endpoint)) return ResultCommunityUnreachable();
+        if ((node == 1 && !CommunityReachable(endpoint)) ||
+            (node >= 2 && !lanplay::Probe({endpoint.sin_addr.s_addr, endpoint.sin_port}))) return ResultCommunityUnreachable();
+        std::scoped_lock lifecycle(g_room_lifecycle_lock);
+        std::scoped_lock match(g_match_lock);
+        std::scoped_lock lock(g_lock);
+        if (g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting ||
+            g_recovering || ArmedLocked() || g_match.in_flight) return ResultRelayFailed();
+        // Commit DNS only with the selection; a failed/racing probe cannot alter an active route.
+        g_node_endpoints[node] = endpoint;
+        g_host_node = node;
+        g_relay_region = node ? RelayRegionCommunity : RelayRegionDefault;
+        do { ++g_gameplay_generation; } while (!g_gameplay_generation);
+        ClearSelectionLocked();
+        g_error[0] = 0;
+        R_SUCCEED();
+    }
+
+    Result SelectNodeRoom(const NodeRoomSelection &request) {
+        if (request.node_id >= NODE_CATALOG_COUNT || request.reserved || !request.game_id ||
+            request.locator.code[6] || request.locator.code[7] || !ValidCode(request.locator.code) ||
+            request.locator.reserved0 ||
+            !std::all_of(std::begin(request.locator.reserved), std::end(request.locator.reserved), [](u8 value) { return value == 0; }) ||
+            g_direct_session.load()) return ResultRelayFailed();
+        if (request.node_id < 2) {
+            if (request.game_id == UINT64_MAX || request.locator.flavor) return ResultRelayFailed();
+            if (request.node_id == 1) {
+                DiscoveryRoute backend{};
+                if (!CaptureAppointmentRoute(&backend)) return ResultRelayFailed();
+                RememberDirectoryRegions(backend, 1u << RelayRegionCommunity);
+            }
+            UnifiedRoomRequest room{};
+            room.game_id = request.game_id;
+            std::memcpy(room.code, request.locator.code, sizeof(room.code));
+            util::Strlcpy(room.provider, request.node_id ? REGION_PROVIDER_COMMUNITY : "self", sizeof(room.provider));
+            return SelectUnifiedRoom(room);
+        }
+        if ((request.locator.flavor != NodeFlavorStandard && request.locator.flavor != NodeFlavorFork) ||
+            le64(request.locator.network_id) != request.game_id ||
+            (request.locator.host_ip & 0xffff0000u) != LanPlayNet || !(request.locator.host_ip & 0xffffu) ||
+            (request.locator.host_ip & 0xffffu) == 0xffffu ||
+            !std::any_of(request.locator.network_id + 16, request.locator.network_id + 32, [](u8 value) { return value != 0; }) ||
+            !std::any_of(std::begin(request.locator.bssid), std::end(request.locator.bssid), [](u8 value) { return value != 0; }))
+            return ResultRelayFailed();
+        sockaddr_in endpoint{};
+        if (!ResolveNodeEndpoint(request.node_id, &endpoint) ||
+            !lanplay::Probe({endpoint.sin_addr.s_addr, endpoint.sin_port})) return ResultCommunityUnreachable();
+        MatchTicket old{}, pending{};
+        {
+            std::scoped_lock lifecycle(g_room_lifecycle_lock);
+            std::scoped_lock match(g_match_lock);
+            std::scoped_lock lock(g_lock);
+            if (g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting ||
+                g_recovering || g_match.in_flight) return ResultRelayFailed();
+            g_node_endpoints[request.node_id] = endpoint;
+            DiscoveryRoute route{};
+            route.ipv4 = endpoint.sin_addr.s_addr; route.port = endpoint.sin_port;
+            route.public_enabled = true; route.node_id = request.node_id;
+            route.node_locator = request.locator; route.selected_game_id = request.game_id;
+            util::Strlcpy(route.provider, LanywhereNodes[request.node_id].provider, sizeof(route.provider));
+            old = g_match.ticket; pending = g_release_next; g_release_next = {}; g_match = {};
+            SelectRouteLocked(route, request.locator.code);
+        }
+        ReleaseTicket(old); ReleaseTicket(pending);
+        R_SUCCEED();
+    }
+
+    void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity) {
+        *page = {-1, NODE_LOBBY_END, 0, 0, 0, ListStatusProtocol};
+        if (!groups || capacity < NODE_LOBBY_PAGE_SIZE || request.reserved ||
+            (request.node_mask >> NODE_CATALOG_COUNT) || (request.offset && !request.snapshot)) return;
+        std::memset(groups, 0, sizeof(NodeRoomWire) * NODE_LOBBY_PAGE_SIZE);
+        DiscoveryRoute route{};
+        sockaddr_in endpoint{};
+        char provider[33]{};
+        if (!CaptureAppointmentRoute(&route) || !ResolveDiscoveryRoute(route, &endpoint, provider)) {
+            page->status = ListStatusConfig;
+            return;
+        }
+        const char *error = nullptr;
+        const int fd = ConnectServer(endpoint, &error, 3000, "self", &page->status);
+        if (fd < 0) return;
+        u32 caps = 0;
+        if (!QueryCapabilities(fd, &caps, 3000, &page->status)) { ::close(fd); return; }
+        if (!(caps & NODE_LOBBY_CAPABILITY)) { ::close(fd); page->status = ListStatusUpdate; return; }
+        u8 catalog[128]{}, type = 0;
+        ssize_t count = -1;
+        if (SendFrameTo(fd, NODE_CATALOG_REQUEST, nullptr, 0, nullptr, 0))
+            count = ReadListFrame(fd, &type, catalog, sizeof(catalog), 3000, &page->status);
+        if (count < 0) { ::close(fd); return; }
+        if (type == T_Error && count >= 1) {
+            ::close(fd); page->status = lanywhere_list_error_status(catalog[0]); return;
+        }
+        if (count != 40 || type != NODE_CATALOG_RESPONSE ||
+            (le32(catalog + 32) >> NODE_CATALOG_COUNT) || (le32(catalog + 36) >> NODE_CATALOG_COUNT)) {
+            ::close(fd); page->status = ListStatusProtocol; return;
+        }
+        if (std::memcmp(catalog, LanywhereNodeCatalogHash, sizeof(LanywhereNodeCatalogHash))) {
+            ::close(fd); page->status = ListStatusUpdate; return;
+        }
+        u8 body[20]{};
+        put32(body, request.offset); put32(body + 4, request.snapshot);
+        put64(body + 8, request.game_id); put32(body + 16, request.node_mask);
+        u8 reply[16 + NODE_LOBBY_PAGE_SIZE * NODE_LOBBY_ROW_SIZE]{};
+        count = -1;
+        if (SendFrameTo(fd, NODE_LOBBY_REQUEST, body, sizeof(body), nullptr, 0))
+            count = ReadListFrame(fd, &type, reply, sizeof(reply), 3000, &page->status);
+        ::close(fd);
+        if (!AppointmentBackendCurrent(route)) { page->status = ListStatusUnavailable; return; }
+        if (count < 0) return;
+        if (type == T_Error && count >= 1) { page->status = lanywhere_list_error_status(reply[0]); return; }
+        page->status = ListStatusProtocol;
+        if (type != NODE_LOBBY_RESPONSE || count < 16 || reply[8] > NODE_LOBBY_PAGE_SIZE ||
+            count != 16 + static_cast<ssize_t>(reply[8] * sizeof(NodeRoomWire)) || reply[9] > reply[10] ||
+            reply[10] > NODE_CATALOG_COUNT || le32(reply + 12)) return;
+        if (reply[11] == 1 && !reply[8] && le32(reply + 4) == NODE_LOBBY_END) {
+            page->status = UnifiedListStale; return;
+        }
+        const u32 snapshot = le32(reply), next = le32(reply + 4);
+        if (reply[11] || !snapshot || (request.snapshot && request.snapshot != snapshot) ||
+            (next != NODE_LOBBY_END && (!reply[8] || next != request.offset + reply[8]))) return;
+        for (size_t i = 0; i < reply[8]; i++) {
+            NodeRoomWire row{}; GroupSummaryV2 summary{};
+            std::memcpy(&row, reply + 16 + i * sizeof(row), sizeof(row));
+            std::memcpy(&summary, row.group, sizeof(summary));
+            if (row.node_id >= NODE_CATALOG_COUNT || !(request.node_mask & (1u << row.node_id)) ||
+                (row.flags != NodeRoomDirect && row.flags != NodeRoomGateway) || !summary.game_id ||
+                summary.code[6] || summary.code[7] || !ValidCode(summary.code) || !summary.players ||
+                summary.players > summary.max_players || summary.max_players > MaxMembers ||
+                (summary.metadata_flags & ~1u) || summary.room_access > RoomAccessHidden ||
+                !CleanDisplayField(summary.title_en, sizeof(summary.title_en), true) ||
+                !CleanDisplayField(summary.title_zh, sizeof(summary.title_zh), true) ||
+                std::memcmp(summary.code, row.locator.code, sizeof(summary.code)) || row.locator.reserved0 ||
+                !std::all_of(std::begin(row.locator.reserved), std::end(row.locator.reserved), [](u8 value) { return value == 0; }) ||
+                (request.game_id && request.game_id != summary.game_id)) return;
+            if (row.flags == NodeRoomDirect && row.node_id >= 2 &&
+                ((row.locator.flavor != NodeFlavorStandard && row.locator.flavor != NodeFlavorFork) ||
+                 le64(row.locator.network_id) != summary.game_id ||
+                 (row.locator.host_ip & 0xffff0000u) != LanPlayNet)) return;
+            if (row.node_id && summary.room_access) return;
+            if (!CleanDisplayField(summary.host, sizeof(summary.host), true))
+                util::Strlcpy(summary.host, "Player", sizeof(summary.host));
+            AddCachedIdentity(summary);
+            std::memcpy(row.group, &summary, sizeof(summary));
+            groups[i] = row;
+        }
+        *page = {static_cast<s32>(reply[8]), next, snapshot, reply[9], reply[10], ListStatusOk};
     }
 
 }
