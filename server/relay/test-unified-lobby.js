@@ -325,7 +325,10 @@ test('regional directory keeps legacy pages and room admission isolated across t
     const directLegacy = await page(remoteView);
     assert.equal(directLegacy.total, 1);
     assert.equal(directLegacy.available, 1);
-    assert(directLegacy.rows.some(row => row.code === lockedHost.code && row.access === 2 && row.provider === 'self'));
+    const directTail = await page(remoteView, directLegacy.next, directLegacy.snapshot);
+    assert.equal(directTail.next, END);
+    assert([...directLegacy.rows, ...directTail.rows].some(row =>
+        row.code === lockedHost.code && row.access === 2 && row.provider === 'self'));
     central.jump();
     const warm = await until(async () => {
         const listing = await page(browser, 0, 0, true);
@@ -498,4 +501,48 @@ test('an unresolved upstream LCID stays on the legacy route instead of failing t
     assert.deepEqual(listing.rows.map(item => [item.code, item.provider]), [
         [SHARED_CODE, regional.COMMUNITY_PROVIDER], ['BBB234', 'lanywhere-public'],
     ]);
+});
+
+
+test('full legacy player capacity still publishes the direct community line to new and old lobbies', { timeout: 15000 }, async t => {
+    const source = await upstream(t, false, [row(SHARED_CODE, 'Community host')]);
+    const provider = { ...require('./upstream-gateway').PUBLIC_PROVIDERS[0], host: '127.0.0.1', port: source.port };
+    const central = await launch(t, [provider], { community: true });
+    const held = [];
+    for (let i = 0; i < provider.maxConnections; ++i) {
+        const client = await central.peer('Legacy player ' + i);
+        client.send(0x20, Buffer.from(provider.id));
+        await client.frame(0xa0);
+        held.push(client);
+    }
+    const extra = await central.peer('Extra player');
+    extra.send(0x20, Buffer.from(provider.id));
+    assert.equal((await extra.frame(0x85))[0], 7);
+    const browser = await central.peer('New directory browser');
+    const expected = { community: `127.0.0.1:${source.port}` };
+    assert.equal((await page(browser, 0, 0, true, expected)).flags, 0);
+    await until(() => source.state.finds === 1, 'catalog query admitted at player capacity');
+    assert.equal(source.state.connections, 9, 'eight player sessions plus one internal catalog session');
+    source.release();
+    const direct = await until(async () => {
+        const response = await page(browser, 0, 0, true, expected);
+        return response.flags === regional.COMMUNITY_MATCH ? response : null;
+    }, 'community direct appears with player slots full');
+    assert.equal(direct.rows[0].provider, regional.COMMUNITY_PROVIDER);
+    assert.equal(direct.rows[0].code, SHARED_CODE);
+    const legacy = await page(browser);
+    assert.equal(legacy.rows[0].provider, 'lanywhere-public');
+    assert.equal(legacy.rows[0].code, SHARED_CODE);
+    for (const client of held) {
+        client.send(5);
+        await client.frame(0x86);
+    }
+    source.state.bad = true;
+    central.jump();
+    await until(async () => (await page(browser, 0, 0, true, expected)).flags === 0,
+        'real malformed upstream reply still removes readiness');
+    source.state.bad = false;
+    central.jump();
+    await until(async () => (await page(browser, 0, 0, true, expected)).flags === regional.COMMUNITY_MATCH,
+        'catalog capacity released for subsequent good refresh');
 });

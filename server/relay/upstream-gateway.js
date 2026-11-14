@@ -12,7 +12,7 @@ const MAGIC = 0x594e414c;
 const SELECT = 0x20, SELECTED = 0xa0, CAPS = 0x0b;
 const ROOM_PASSCODE_CAPABILITY = 512, ROOM_ACCESS_CAPABILITY = 1024, UNIFIED_LOBBY_CAPABILITY = 2048;
 const PUBLIC_PROVIDER_ID = 'lanywhere-public';
-const PUBLIC_PROVIDERS = Object.freeze([{ id: PUBLIC_PROVIDER_ID, host: '129.38.114.182', port: 11460, maxConnections: 8, connectTimeoutMs: 8000, adapterMetadata: true }]);
+const PUBLIC_PROVIDERS = Object.freeze([{ id: PUBLIC_PROVIDER_ID, host: '129.38.114.182', port: 11460, maxConnections: 8, catalogConnections: 1, connectTimeoutMs: 8000, adapterMetadata: true }]);
 const codeValid = b => b.length === 6 && /^[A-HJ-NP-Z2-9]{6}$/.test(b.toString('latin1'));
 const publicIp = socket => (socket.remoteAddress || '').replace(/^::ffff:/, '');
 const virtualIp = ip => ((ip >>> 16) === 0x0a0d && (ip & 0xffff) !== 0 && (ip & 0xffff) !== 0xffff) ||
@@ -52,7 +52,9 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
         if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(p.id) || p.id === 'self' || registry.has(p.id) ||
             (typeof p.acquire !== 'function' && (!net.isIPv4(p.host) || !Number.isInteger(p.port) || p.port < 1 || p.port > 65535)) ||
             !Number.isInteger(p.maxConnections) || p.maxConnections < 1 || p.maxConnections > 8) throw Error('Invalid allowlisted upstream');
-        registry.set(p.id, { ...p, active: 0, rates: new Map() });
+        if (p.catalogConnections !== undefined && p.catalogConnections !== 0 && p.catalogConnections !== 1)
+            throw Error('Invalid catalog connection limit');
+        registry.set(p.id, { ...p, active: 0, catalogActive: 0, rates: new Map() });
     }
     const selfOnlyCapabilities = ROOM_PASSCODE_CAPABILITY | ROOM_ACCESS_CAPABILITY | UNIFIED_LOBBY_CAPABILITY |
         APPOINTMENT_PUSH_CAPABILITY | REGIONAL_LOBBY_CAPABILITY | COMMUNITY_LOBBY_CAPABILITY;
@@ -106,7 +108,8 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
     function close(route, preserve = true) {
         if (route.closed) return;
         route.closed = true; clearTimeout(route.timer); clearInterval(route.liveness); clearTimeout(route.query?.timer); route.query = null;
-        route.provider.active--;
+        if (route.dedicatedCatalog) route.provider.catalogActive--;
+        else route.provider.active--;
         route.tcp?.destroy();
         try { route.udp?.close(); } catch {}
         if (route.pendingRoom?.resume?.claim === route) route.pendingRoom.resume.claim = null;
@@ -284,9 +287,14 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
         route.query = {metadata,gameId,timer:setTimeout(()=>fail(route,13,'upstream discovery timed out'),queryTimeoutMs).unref()};
     }
     async function begin(front, provider) {
-        if (provider.active >= provider.maxConnections || closing) { error(front, 7, 'upstream shared connection limit reached', 'capacity', provider.id); return; }
-        provider.active++;
-        const route = { front, provider, ready: false, closed: false, record: null, pendingRoom: null };
+        // One internal directory query can coexist with the eight public player
+        // routes. Remote SELECT requests cannot consume this catalog-only slot.
+        const dedicatedCatalog = lobbyQueries.has(front) && provider.catalogConnections === 1;
+        const atCapacity = dedicatedCatalog ? provider.catalogActive >= 1 : provider.active >= provider.maxConnections;
+        if (atCapacity || closing) { error(front, 7, 'upstream shared connection limit reached', 'capacity', provider.id); return; }
+        if (dedicatedCatalog) provider.catalogActive++;
+        else provider.active++;
+        const route = { front, provider, dedicatedCatalog, ready: false, closed: false, record: null, pendingRoom: null };
         routes.set(front, route);
         route.timer = setTimeout(() => fail(route, 13, 'upstream handshake timed out'), provider.connectTimeoutMs || connectTimeoutMs).unref();
         let endpoint;

@@ -33,7 +33,7 @@ static os::TimeSpan KeepAliveInterval={5000};static os::Tick g_last_keepalive={0
 enum class RelayState{Idle=0,Connecting=1,InRoom=2,Error=3}; static RelayState g_state=RelayState::InRoom;
 static std::mutex g_lock,g_send_lock;static std::atomic<u64> g_stream_epoch{1};static std::atomic<bool>g_stream_ready{true};
 static int g_tcp=10,g_udp=11,g_server=0,g_received=0;static u32 g_udp_features=8,g_heartbeat_sequence=0;static bool g_recovering=false;static char g_error[64]={};
-constexpr u32 CapabilityFragment=4,CapabilityHeartbeat=8,UdpMagic=0x594e414c; enum {U_DataIn=0x82,U_DataFragmentIn=0x85,U_HeartbeatAck=0x86,U_RegisterV2=4,U_RegisteredV2=0x84,U_Heartbeat=6,U_KeepAlive=3,T_Ping=5,T_Pong=0x86};
+constexpr u32 CapabilityFragment=4,CapabilityHeartbeat=8,UdpMagic=0x594e414c; enum {U_Register=1,U_Registered=0x81,U_DataIn=0x82,U_DataFragmentIn=0x85,U_HeartbeatAck=0x86,U_RegisterV2=4,U_RegisteredV2=0x84,U_Heartbeat=6,U_KeepAlive=3,T_Ping=5,T_Pong=0x86};
 static u32 le32(const u8*b){return u32(b[0])|(u32(b[1])<<8)|(u32(b[2])<<16)|(u32(b[3])<<24);}static u16 le16(const u8*b){return b[0]|u16(b[1])<<8;}static void put32(u8*b,u32 v){for(int i=0;i<4;i++)b[i]=v>>(8*i);}
 static void Log(const char*,...){}static void Enqueue(const u8*,size_t){}static void EnqueueDatagram(u32,u16,u16,const u8*,size_t){}
 struct Fragments {template<class F>void Push(u32,u16,u16,u32,u16,u16,const u8*,size_t,u64,F){}void Reset(){}};static Fragments g_fragments;

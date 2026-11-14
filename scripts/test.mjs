@@ -135,6 +135,7 @@ try {
     await suite('Native TCP relay epochs, failure shutdown and negotiation', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/tcp_relay_glue_test.py']);
     await suite('Native relay reconnect identity, deadlines and cancellation', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/transport_recovery_test.py']);
     await suite('Native relay worker after Wi-Fi and path failures', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/relay_recovery_worker_test.py']);
+    await suite('Legacy UDP worker through real loopback sockets', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/legacy_udp_worker_test.py']);
     const streamBinary = path.join(temp, 'tcp-stream-proxy-test');
     const streamBuilt = await suite('Native TCP proxy actual socket build', process.env.CXX || 'c++',
         ['-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread',

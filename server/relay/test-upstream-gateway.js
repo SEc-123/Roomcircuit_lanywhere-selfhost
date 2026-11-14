@@ -68,7 +68,7 @@ async function legacy(t,{silent=false,firstPort=0}={}){
  udp.on('message',(b,from)=>{if(b.length<9||b.readUInt32LE()!==MAGIC)return;const m=tokens.get(b.readUInt32LE(5));if(!m?.socket)return;if(b[4]===1){m.udp=from;const a=Buffer.alloc(5);a.writeUInt32LE(MAGIC);a[4]=0x81;udp.send(a,from.port,from.address);return;}
   if(b[4]!==2||!m.udp)return;const dst=b.readUInt32LE(9);for(const p of m.room.members.values())if(p!==m&&p.udp&&(p.ip===dst||dst===0xffffffff)){const out=Buffer.alloc(b.length-4);out.writeUInt32LE(MAGIC);out[4]=0x82;out.writeUInt32LE(m.ip,5);b.copy(out,9,13);udp.send(out,p.udp.port,p.udp.address);}
  });
- return {host:'127.0.0.1',port,tokens,rooms,control};
+ return {host:'127.0.0.1',port,tokens,rooms,control,connections:()=>sockets.size};
 }
 async function gateway(t,providers,opts={}){
  const sockets=new Set(),udp=dgram.createSocket('udp4');let paused=false,closing=false;let gw;
@@ -252,4 +252,67 @@ test('provider diagnostics keep fixed reasons and known IDs with bounded redacte
  assert.equal(diagnostics.snapshot().find(r=>r.provider==='one').events,2);
  const serialized=JSON.stringify({logs,snapshot:diagnostics.snapshot()});assert(!serialized.includes('SECRET')&&!serialized.includes('192.0.2.1')&&!serialized.includes('injected-'));
  assert.equal(counts.length,2002);
+});
+
+
+test('public catalog uses one bounded internal slot while all eight player routes stay connected', async t => {
+ const up = await legacy(t);
+ const provider = { ...require('./upstream-gateway').PUBLIC_PROVIDERS[0], host: up.host, port: up.port };
+ assert.equal(provider.maxConnections, 8);
+ assert.equal(provider.catalogConnections, 1);
+ const service = await gateway(t, [provider], { queryTimeoutMs: 1000 });
+ const players = [];
+ for (let i = 0; i < 8; i++) {
+  const player = await peer(t, service.port);
+  await player.select(provider.id, 64);
+  players.push(player);
+ }
+ const game = 0x0100000000abc000n;
+ await players[0].enter(null, game);
+ players[0].send(7, infoFor(players[0], game));
+ await barrier(players[0]);
+ await players[1].enter(players[0].code, game);
+ await players[0].register();
+ await players[1].register();
+ assert.equal(up.connections(), 8);
+ const extra = await peer(t, service.port);
+ extra.send(0x20, Buffer.from(provider.id));
+ assert.equal((await extra.next(0x85))[0], 7, 'ninth player cannot borrow the catalog slot');
+
+ up.control.findMode = 'hold';
+ const firstQuery = service.gw.queryLobby(provider.id);
+ await until(() => up.control.pendingFinds.length === 1);
+ assert.equal(up.connections(), 9);
+ assert.equal(service.gw.snapshot().connections, 8, 'catalog traffic is excluded from player counts');
+ assert.equal(await service.gw.queryLobby(provider.id), null, 'a second simultaneous catalog query is bounded');
+ assert.equal(up.connections(), 9);
+ up.control.pendingFinds.shift()();
+ const listed = await firstQuery;
+ assert.equal(listed.length, 1);
+ assert.equal(listed[0].subarray(0, 6).toString(), players[0].code);
+ await until(() => up.connections() === 8, 'successful catalog socket released');
+ players[0].data(players[1].ip, Buffer.from('full-capacity-game'));
+ await until(() => players[1].packets.some(packet => packet.subarray(13).toString() === 'full-capacity-game'));
+
+ const timedOut = service.gw.queryLobby(provider.id);
+ await until(() => up.control.pendingFinds.length === 1);
+ assert.equal(await timedOut, null);
+ await until(() => up.connections() === 8, 'timeout releases catalog slot');
+ up.control.pendingFinds.shift()();
+ up.control.findMode = 'error';
+ assert.equal(await service.gw.queryLobby(provider.id), null, 'upstream failure never becomes a healthy empty catalog');
+ await until(() => up.connections() === 8, 'error releases catalog slot');
+ up.control.findMode = 'normal';
+ assert.equal((await service.gw.queryLobby(provider.id)).length, 1, 'next real query succeeds after failures');
+ await until(() => up.connections() === 8);
+
+ up.control.findMode = 'hold';
+ const closingQuery = service.gw.queryLobby(provider.id);
+ await until(() => up.control.pendingFinds.length === 1);
+ service.gw.shutdown();
+ assert.equal(await closingQuery, null);
+ await until(() => up.connections() === 0, 'shutdown releases players and catalog');
+ assert.equal(await service.gw.queryLobby(provider.id), null);
+ assert.throws(() => create({ providers: [{ ...provider, catalogConnections: 2 }], send: frame }),
+  /Invalid catalog connection limit/);
 });

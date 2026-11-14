@@ -1058,8 +1058,14 @@ namespace ams::mitm::lanywhere {
                                     EnqueueDatagram(source, src, dst, data, size);
                                     std::scoped_lock lk(g_lock); g_received++;
                                 });
-                        } else if (n == 9 && le32(buf) == UdpMagic && buf[4] == U_HeartbeatAck)
+                        } else if ((g_udp_features & CapabilityHeartbeat) && n == 9 &&
+                                   le32(buf) == UdpMagic && buf[4] == U_HeartbeatAck) {
                             heartbeat.Acknowledge(le32(buf + 5));
+                        } else if (g_udp_features == 0 && n == 5 && le32(buf) == UdpMagic && buf[4] == U_Registered) {
+                            // Legacy registration has no nonce. Only an outstanding probe
+                            // can be acknowledged; recovery installs a fresh UDP socket.
+                            heartbeat.Acknowledge(0);
+                        }
                     }
                     if (!lost && (p[0].revents & POLLIN)) {
                         u8 type;
@@ -1099,7 +1105,24 @@ namespace ams::mitm::lanywhere {
                         u8 nonce[4]; put32(nonce, heartbeat_nonce);
                         heartbeat.Sent(heartbeat_nonce);
                         UdpSend(U_Heartbeat, nonce, sizeof(nonce));
-                    } else UdpSend(U_KeepAlive, nullptr, 0);
+                    } else if (g_udp_features == 0) {
+                        // REGISTER refreshes the NAT mapping and receives an acknowledgement
+                        // even on the original public relay. Keep processing game/control
+                        // traffic while awaiting it, then recover if replies stop arriving.
+                        if (heartbeat.NeedsRegistration()) {
+                            Log("legacy UDP registration reply timed out");
+                            if (RecoverTransport(heartbeat, control)) continue;
+                            break;
+                        }
+                        heartbeat.Sent(0);
+                        if (!UdpSend(U_Register, nullptr, 0)) {
+                            if (RecoverTransport(heartbeat, control)) continue;
+                            break;
+                        }
+                    } else if (!UdpSend(U_KeepAlive, nullptr, 0)) {
+                        if (RecoverTransport(heartbeat, control)) continue;
+                        break;
+                    }
                     RefreshHostMetadata();
                 }
             }

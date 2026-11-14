@@ -1,4 +1,4 @@
-LANywhere Self-host 0.6.0 Beta
+LANywhere Self-host 0.6.1 Beta
 
 中文
 
