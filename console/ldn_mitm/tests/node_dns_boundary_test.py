@@ -13,6 +13,8 @@ resolver = SOURCE[SOURCE.index('        struct NodeDnsWatch'):SOURCE.index('    
 
 fixture = r'''
 #include "node_catalog.h"
+#include "selection_trace.hpp"
+namespace selection_trace = ams::mitm::selection_trace;
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <atomic>
@@ -27,6 +29,12 @@ using u8 = std::uint8_t;
 extern "C" void *__libnx_alloc(std::size_t);
 extern "C" void __libnx_free(void *);
 
+struct Result {
+    int value;
+    Result(int v):value(v){}
+    unsigned GetValue()const{return value;}
+    operator int()const{return value;}
+};
 struct TimeSpan {
     unsigned milliseconds;
     static TimeSpan FromSeconds(unsigned s) { return {s * 1000}; }
@@ -47,7 +55,7 @@ namespace os {
     unsigned now = 1, starts = 0, destroys = 0;
     bool can_start = true;
     Tick GetSystemTick() { return {now}; }
-    int CreateThread(ThreadType *t, void (*run)(void *), void *arg, void *, std::size_t, int) {
+    Result CreateThread(ThreadType *t, void (*run)(void *), void *arg, void *, std::size_t, int) {
         if (!can_start) return 1;
         *t = {run, arg};
         return 0;
@@ -155,7 +163,7 @@ with tempfile.TemporaryDirectory(prefix='native-node-dns-') as temporary:
     binary = directory / 'test'
     source.write_text(fixture)
     subprocess.run(shlex.split(os.environ.get('CXX', 'c++')) + [
-        '-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread', '-I' + str(ROOT / 'common'),
+        '-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread', '-I' + str(ROOT / 'common'), '-I' + str(NATIVE),
         str(source), str(NATIVE / 'libnx_allocator.cpp'), '-o', str(binary),
     ], check=True)
     subprocess.run([str(binary)], check=True, timeout=10)

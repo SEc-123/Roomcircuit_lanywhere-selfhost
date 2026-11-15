@@ -23,6 +23,8 @@ def actual(signature):
 code = r'''
 #include "node_lobby.h"
 #include "node_catalog.h"
+#include "selection_trace.hpp"
+namespace selection_trace = ams::mitm::selection_trace;
 #include "regional_relay.h"
 #include "unified_lobby.h"
 #include <algorithm>
@@ -73,7 +75,7 @@ static Snapshot state;static Endpoint target{};static bool reachable=true,config
 static NodeRoomLocator seen_locator{};static bool saw_locator=false;static u64 next_epoch=1;
 Snapshot State(){return state;}
 static void(*probe_hook)()=nullptr;
-bool Probe(Endpoint endpoint){assert(endpoint.ipv4&&endpoint.port);probes++;if(probe_hook)probe_hook();return reachable;}
+bool Probe(Endpoint endpoint,unsigned=1500,selection_trace::Handle=0){assert(endpoint.ipv4&&endpoint.port);probes++;if(probe_hook)probe_hook();return reachable;}
 bool Configure(u32 node,Endpoint endpoint){if(state.active)return false;state.node=node;target=endpoint;configured=true;return true;}
 void SetStreamReply(void(*)(u64,const void*,size_t)){if(configured)callback_ready=true;}
 bool Host(u64 game){assert(configured&&callback_ready);hosts++;state.active=state.hosting=true;state.game=game;state.address=LanPlayNet|0x1234;state.epoch=(u64(1)<<63)|next_epoch++;return true;}
@@ -91,7 +93,7 @@ static bool MatchArmed(){return false;}
 static void ReleaseTicket(MatchTicket){}
 ''' + extract.selection_state(source) + r'''
 static u32 resolved_extra=0;
-static bool ResolveNodeEndpoint(u32 node,sockaddr_in *out){
+static bool ResolveNodeEndpoint(u32 node,sockaddr_in *out,selection_trace::Handle=0){
  if(node>=NODE_CATALOG_COUNT)return false;
  *out={};out->sin_addr.s_addr=htonl(0x08080808+node+resolved_extra);out->sin_port=htons(LanywhereNodes[node].port);
  return true;
@@ -164,6 +166,6 @@ int main(){
 '''
 with tempfile.TemporaryDirectory(prefix='node-entry-') as temporary:
     temporary=Path(temporary);file=temporary/'test.cpp';file.write_text(code);binary=temporary/'test'
-    subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-function','-pthread','-I'+str(ROOT/'common'),str(file),'-o',str(binary)],check=True)
+    subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-function','-pthread','-I'+str(ROOT/'common'),'-I'+str(ROOT/'console/ldn_mitm/source'),str(file),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True,timeout=15)
 print('Actual production entry-point slices; transport is instrumented here, actual wire covered separately.')

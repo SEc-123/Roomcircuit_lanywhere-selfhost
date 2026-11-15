@@ -315,8 +315,8 @@ int gfx_button(int x, int y, const char *button, const char *label)
     const int d = 30;
     int bw = gfx_text_width(18, button);
     int pill = bw + 14 > d ? bw + 14 : d;  // "+" y letras caben en un círculo; textos largos, en una píldora
-    gfx_round_rect(x, y, pill, d, d / 2, RGBA(0x19, 0x5A, 0x46, 0xFF));
-    gfx_text(x + (pill - bw) / 2, y + 5, 18, RGBA(0xFC, 0xFC, 0xF7, 0xFF), button);
-    int w = gfx_text(x + pill + 10, y + 3, 22, RGBA(0x17, 0x2D, 0x26, 0xFF), label);
+    gfx_round_rect(x, y, pill, d, d / 2, RGBA(0xD8, 0xD8, 0xD8, 0xFF));
+    gfx_text(x + (pill - bw) / 2, y + 5, 18, RGBA(0x11, 0x11, 0x11, 0xFF), button);
+    int w = gfx_text(x + pill + 10, y + 3, 22, RGBA(0xE8, 0xE8, 0xE8, 0xFF), label);
     return pill + 10 + w;
 }

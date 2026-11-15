@@ -53,9 +53,17 @@ class NativeLanPlayTransport(unittest.TestCase):
         checked = 0
         for filename in ["lanplay_direct.cpp", "lanywhere_relay.cpp"]:
             code = (ROOT / "console/ldn_mitm/source" / filename).read_text()
-            for match in re.finditer(r"(?:ams::)?os::CreateThread\((.*?)\)\)", code, re.S):
-                literal = re.search(r",\s*(0x[0-9a-fA-F]+|[0-9]+)\s*$", match[1])
-                self.assertIsNotNone(literal, f"priority must be reviewed in {filename}: {match[0]}")
+            for match in re.finditer(r"(?:ams::)?os::CreateThread\(", code):
+                # Accept both assigned results and calls nested inside R_FAILED.
+                # The actual argument list can itself contain sizeof/addressof.
+                end, depth = match.end(), 1
+                while end < len(code) and depth:
+                    depth += (code[end] == "(") - (code[end] == ")")
+                    end += 1
+                self.assertEqual(depth, 0, f"unclosed CreateThread in {filename}")
+                arguments = code[match.end():end - 1]
+                literal = re.search(r",\s*(0x[0-9a-fA-F]+|[0-9]+)\s*$", arguments)
+                self.assertIsNotNone(literal, f"priority must be reviewed in {filename}: {arguments}")
                 kernel = int(literal[1], 0) + offset
                 self.assertTrue(bounds[0] <= kernel <= bounds[1], f"{filename}: kernel priority {kernel} outside NPDM {bounds}")
                 checked += 1

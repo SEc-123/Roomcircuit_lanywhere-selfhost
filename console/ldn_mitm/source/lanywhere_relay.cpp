@@ -5,6 +5,7 @@
  * This program is free software; you can redistribute it and/or modify it under the terms and conditions of
  * the GNU General Public License, version 2, as published by the Free Software Foundation.
  */
+#include "selection_trace.hpp"
 #include "lanywhere_relay.hpp"
 #include "appointment_notifier.hpp"
 #include "tcp_stream_proxy.hpp"
@@ -263,6 +264,7 @@ namespace ams::mitm::lanywhere {
 
         struct NodeDnsWatch {
             u32 handle;
+            selection_trace::Handle trace;
             os::Tick began;
             std::atomic<bool> done{false};
             std::atomic<bool> expired{false};
@@ -274,18 +276,22 @@ namespace ams::mitm::lanywhere {
             while (!watch->done.load()) {
                 if ((os::GetSystemTick() - watch->began).ToTimeSpan() >= TimeSpan::FromSeconds(3)) {
                     watch->expired = true;
-                    static_cast<void>(::resolverCancel(watch->handle));
+                    selection_trace::Record(watch->trace, "dns.cancel.begin");
+                    const u32 cancelled = ::resolverCancel(watch->handle);
+                    selection_trace::Record(watch->trace, "dns.cancel.end", cancelled);
                     return;
                 }
                 os::SleepThread(TimeSpan::FromMilliSeconds(20));
             }
         }
 
-        bool ResolveNodeEndpoint(u32 node, sockaddr_in *out) {
+        bool ResolveNodeEndpoint(u32 node, sockaddr_in *out, selection_trace::Handle trace = 0) {
             if (node >= NODE_CATALOG_COUNT || !out) return false;
             if (node == 0) { std::scoped_lock lock(g_lock); return LoadServer(out); }
             if (node == 1) return CommunityEndpoint(out);
+            selection_trace::Record(trace, "dns.lock.begin");
             std::scoped_lock resolver(g_node_resolve_lock);
+            selection_trace::Record(trace, "dns.lock.end");
             const auto &definition = LanywhereNodes[node];
             sockaddr_in address{};
             address.sin_family = AF_INET;
@@ -293,22 +299,39 @@ namespace ams::mitm::lanywhere {
             if (::inet_pton(AF_INET, definition.host, &address.sin_addr) != 1) {
                 addrinfo hint{}; hint.ai_family = AF_INET; hint.ai_socktype = SOCK_DGRAM;
                 addrinfo *result = nullptr;
-                NodeDnsWatch watch{::resolverGetCancelHandle(), os::GetSystemTick()};
-                if (!watch.handle || R_FAILED(os::CreateThread(&g_node_dns_thread, CancelNodeDns, &watch,
-                        g_node_dns_stack, sizeof(g_node_dns_stack), 10))) return false;
+                selection_trace::Record(trace, "dns.handle.begin");
+                const u32 handle = ::resolverGetCancelHandle();
+                selection_trace::Record(trace, "dns.handle.end", handle ? 0 : 1);
+                NodeDnsWatch watch{handle, trace, os::GetSystemTick()};
+                if (!watch.handle) return false;
+                selection_trace::Record(trace, "dns.thread.create.begin");
+                const Result created = os::CreateThread(&g_node_dns_thread, CancelNodeDns, &watch,
+                    g_node_dns_stack, sizeof(g_node_dns_stack), 10);
+                selection_trace::Record(trace, "dns.thread.create.end", created.GetValue());
+                if (R_FAILED(created)) return false;
                 os::SetThreadNamePointer(&g_node_dns_thread, "lanywhere::NodeDns");
+                selection_trace::Record(trace, "dns.thread.start.begin");
                 os::StartThread(&g_node_dns_thread);
+                selection_trace::Record(trace, "dns.thread.start.end");
+                selection_trace::Record(trace, "dns.lookup.begin");
                 const int resolved = ::getaddrinfo(definition.host, nullptr, &hint, &result);
+                selection_trace::Record(trace, "dns.lookup.end", static_cast<u32>(resolved));
                 const bool late = (os::GetSystemTick() - watch.began).ToTimeSpan() >= TimeSpan::FromSeconds(3);
                 watch.done = true;
+                selection_trace::Record(trace, "dns.thread.wait.begin");
                 os::WaitThread(&g_node_dns_thread);
+                selection_trace::Record(trace, "dns.thread.wait.end");
                 os::DestroyThread(&g_node_dns_thread);
+                selection_trace::Record(trace, "dns.thread.destroy.end");
                 const bool valid = resolved == 0 && !late && !watch.expired.load() && result &&
                     result->ai_family == AF_INET && result->ai_addr && result->ai_addrlen >= sizeof(sockaddr_in);
                 if (valid)
                     address.sin_addr = reinterpret_cast<const sockaddr_in *>(result->ai_addr)->sin_addr;
-                if (result)
+                if (result) {
+                    selection_trace::Record(trace, "dns.free.begin");
                     ::freeaddrinfo(result);
+                    selection_trace::Record(trace, "dns.free.end");
+                }
                 if (!valid) return false;
             }
             const u32 ip = ntohl(address.sin_addr.s_addr);
@@ -3518,6 +3541,7 @@ namespace ams::mitm::lanywhere {
     }
 
     Result SetHostNode(u32 node) {
+        const auto trace = selection_trace::Begin(node, "host.begin");
         if (node >= NODE_CATALOG_COUNT || g_direct_session.load()) return ResultRelayFailed();
         {
             std::scoped_lock match(g_match_lock);
@@ -3526,9 +3550,17 @@ namespace ams::mitm::lanywhere {
                 ArmedLocked() || g_match.in_flight) return ResultRelayFailed();
         }
         sockaddr_in endpoint{};
-        if (!ResolveNodeEndpoint(node, &endpoint)) return ResultCommunityUnreachable();
+        if (!ResolveNodeEndpoint(node, &endpoint, trace)) {
+            selection_trace::Record(trace, "host.resolve.failed");
+            return ResultCommunityUnreachable();
+        }
+        selection_trace::Record(trace, "host.resolve.end");
         if ((node == 1 && !CommunityReachable(endpoint)) ||
-            (node >= 2 && !lanplay::Probe({endpoint.sin_addr.s_addr, endpoint.sin_port}))) return ResultCommunityUnreachable();
+            (node >= 2 && !lanplay::Probe({endpoint.sin_addr.s_addr, endpoint.sin_port}, 1500, trace))) {
+            selection_trace::Record(trace, "host.probe.failed");
+            return ResultCommunityUnreachable();
+        }
+        selection_trace::Record(trace, "host.probe.end");
         std::scoped_lock lifecycle(g_room_lifecycle_lock);
         std::scoped_lock match(g_match_lock);
         std::scoped_lock lock(g_lock);
@@ -3541,10 +3573,12 @@ namespace ams::mitm::lanywhere {
         do { ++g_gameplay_generation; } while (!g_gameplay_generation);
         ClearSelectionLocked();
         g_error[0] = 0;
+        selection_trace::Record(trace, "host.committed");
         R_SUCCEED();
     }
 
     Result SelectNodeRoom(const NodeRoomSelection &request) {
+        const auto trace = selection_trace::Begin(request.node_id, "room.begin");
         if (request.node_id >= NODE_CATALOG_COUNT || request.reserved || !request.game_id ||
             request.locator.code[6] || request.locator.code[7] || !ValidCode(request.locator.code) ||
             request.locator.reserved0 ||
@@ -3571,8 +3605,12 @@ namespace ams::mitm::lanywhere {
             !std::any_of(std::begin(request.locator.bssid), std::end(request.locator.bssid), [](u8 value) { return value != 0; }))
             return ResultRelayFailed();
         sockaddr_in endpoint{};
-        if (!ResolveNodeEndpoint(request.node_id, &endpoint) ||
-            !lanplay::Probe({endpoint.sin_addr.s_addr, endpoint.sin_port})) return ResultCommunityUnreachable();
+        if (!ResolveNodeEndpoint(request.node_id, &endpoint, trace) ||
+            !lanplay::Probe({endpoint.sin_addr.s_addr, endpoint.sin_port}, 1500, trace)) {
+            selection_trace::Record(trace, "room.resolve_or_probe.failed");
+            return ResultCommunityUnreachable();
+        }
+        selection_trace::Record(trace, "room.probe.end");
         MatchTicket old{}, pending{};
         {
             std::scoped_lock lifecycle(g_room_lifecycle_lock);
@@ -3590,6 +3628,7 @@ namespace ams::mitm::lanywhere {
             SelectRouteLocked(route, request.locator.code);
         }
         ReleaseTicket(old); ReleaseTicket(pending);
+        selection_trace::Record(trace, "room.committed");
         R_SUCCEED();
     }
 

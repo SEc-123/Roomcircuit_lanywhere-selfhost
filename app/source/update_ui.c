@@ -21,12 +21,12 @@
 #define UpdateDownload "sdmc:/lanywhere/update-download.bin"
 #define UpdateBuildVersionIpc 34
 
-static const u32 BackgroundTop = RGBA(0xEE, 0xEE, 0xE8, 255);
-static const u32 BackgroundBottom = RGBA(0xEE, 0xEE, 0xE8, 255);
-static const u32 Text = RGBA(0x17, 0x2D, 0x26, 255);
-static const u32 Dim = RGBA(0x50, 0x62, 0x59, 0xFF);
-static const u32 Accent = RGBA(0x19, 0x5A, 0x46, 255);
-static const u32 Error = RGBA(0x85, 0x2E, 0x2A, 255);
+static const u32 BackgroundTop = RGBA(0x00, 0x00, 0x00, 0xFF);
+static const u32 BackgroundBottom = RGBA(0x00, 0x00, 0x00, 0xFF);
+static const u32 Text = RGBA(0xE8, 0xE8, 0xE8, 0xFF);
+static const u32 Dim = RGBA(0xAE, 0xAE, 0xAE, 0xFF);
+static const u32 Accent = RGBA(0xD8, 0xD8, 0xD8, 0xFF);
+static const u32 Error = RGBA(0xEE, 0x8E, 0x88, 0xFF);
 
 typedef enum {
     UpdateChecking, UpdateCurrent, UpdateOffered, UpdateDownloading,
@@ -382,13 +382,13 @@ static void draw_update(const UpdateView *view)
         const unsigned percentage = view->total ? (unsigned)((uint64_t)view->completed * 100 / view->total) : 0;
         snprintf(version, sizeof(version), "%u%%", percentage);
         gfx_text(56, 326, 28, Text, version);
-        gfx_round_rect(56, 380, 1168, 16, 8, RGBA(0xD9, 0xDE, 0xD4, 255));
+        gfx_round_rect(56, 380, 1168, 16, 8, RGBA(0x36, 0x36, 0x36, 0xFF));
         if (percentage) gfx_round_rect(56, 380, (int)(1168 * percentage / 100), 16, 8, Accent);
         if (view->screen == UpdateInstalling) gfx_text(56, 440, 23, Dim, ui_text("Keep the console on until installation finishes."));
     }
     if (view->screen == UpdateRestart) gfx_text(56, 330, 26, Text, ui_text("Exit and restart into your virtual system."));
     if (view->error) gfx_text_fit(56, 500, 23, Error, ui_text(view->error), 1168);
-    gfx_rect(0, 648, 1280, 1, RGBA(0xD9, 0xDE, 0xD4, 255));
+    gfx_rect(0, 648, 1280, 1, RGBA(0x36, 0x36, 0x36, 0xFF));
     if (view->screen == UpdateOffered) gfx_button(56, 670, "A", ui_text("Download and install"));
     else if (view->screen == UpdateCurrent) gfx_button(56, 670, "A", ui_text(view->manifest.version[0] ? "Repair installation" : "Check updates"));
     else if (view->screen == UpdateRestart && rollback_pending) gfx_button(56, 670, "A", ui_text("Repair installation"));

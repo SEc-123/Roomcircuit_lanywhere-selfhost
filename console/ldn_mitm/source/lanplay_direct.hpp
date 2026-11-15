@@ -1,5 +1,6 @@
 /* Direct LAN Play IPv4 transport. GPL-2.0-only. */
 #pragma once
+#include "selection_trace.hpp"
 #include "../../../common/node_lobby.h"
 #include <cstddef>
 #include <cstdint>
@@ -26,7 +27,7 @@ struct HostedRoom {
 using Found = void (*)(const char *, const void *, void *);
 using StreamReply = void (*)(uint64_t, const void *, size_t);
 
-bool Probe(const Endpoint &endpoint, unsigned timeout_ms = 1500);
+bool Probe(const Endpoint &endpoint, unsigned timeout_ms = 1500, selection_trace::Handle trace = 0);
 bool Configure(uint32_t node, const Endpoint &endpoint);
 int Scan(const void *filter, size_t filter_size, const NodeRoomLocator *selected, Found found, void *user);
 bool Host(uint64_t game);

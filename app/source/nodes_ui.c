@@ -1,6 +1,7 @@
 #include "nodes_ui.h"
 #include "../../common/node_lobby.h"
 #include "app_socket.h"
+#include "node_selection_trace.h"
 #include "gfx.h"
 #include "relay_config.h"
 #include "ui_locale.h"
@@ -12,16 +13,16 @@
 
 #define NODE_ROWS 6
 #define NODE_ALL_REGIONS 255u
-#define NODE_COLOR_BG RGBA(238, 238, 232, 255)
-#define NODE_COLOR_PANEL RGBA(252, 252, 247, 255)
-#define NODE_COLOR_RAIL RGBA(246, 247, 240, 255)
-#define NODE_COLOR_TEXT RGBA(23, 45, 38, 255)
-#define NODE_COLOR_DIM RGBA(80, 98, 89, 255)
-#define NODE_COLOR_LINE RGBA(217, 222, 212, 255)
-#define NODE_COLOR_ACCENT RGBA(25, 90, 70, 255)
-#define NODE_COLOR_SELECT RGBA(229, 237, 228, 255)
-#define NODE_COLOR_WARN RGBA(120, 83, 21, 255)
-#define NODE_COLOR_FOOT RGBA(232, 236, 227, 255)
+#define NODE_COLOR_BG RGBA(0x00, 0x00, 0x00, 0xFF)
+#define NODE_COLOR_PANEL RGBA(0x11, 0x11, 0x11, 0xFF)
+#define NODE_COLOR_RAIL RGBA(0x08, 0x08, 0x08, 0xFF)
+#define NODE_COLOR_TEXT RGBA(0xE8, 0xE8, 0xE8, 0xFF)
+#define NODE_COLOR_DIM RGBA(0xAE, 0xAE, 0xAE, 0xFF)
+#define NODE_COLOR_LINE RGBA(0x36, 0x36, 0x36, 0xFF)
+#define NODE_COLOR_ACCENT RGBA(0xD8, 0xD8, 0xD8, 0xFF)
+#define NODE_COLOR_SELECT RGBA(0x26, 0x26, 0x26, 0xFF)
+#define NODE_COLOR_WARN RGBA(0xE5, 0xBA, 0x6E, 0xFF)
+#define NODE_COLOR_FOOT RGBA(0x00, 0x00, 0x00, 0xFF)
 #define NODE_PANEL_X 40
 #define NODE_PANEL_Y 195
 #define NODE_PANEL_W 1200
@@ -1051,11 +1052,18 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
                     const NodeMeasurement *m = &copy.measurements[id];
                     if (!copy.catalog_ok || !(copy.enabled & (1u << id)) || m->state != NodeMeasureReady) {
                         notice = "This node is not ready. Refresh or choose another.";
-                    } else if (R_SUCCEEDED(serviceDispatchIn(service, 36, id))) {
-                        *selected_node = id;
-                        cancel_probes();
-                        return true;
                     } else {
+                        node_selection_trace_begin(id);
+                        node_selection_trace_phase(NodeSelectionBeforeIpc, 0);
+                        const uint32_t result = serviceDispatchIn(service, 36, id);
+                        node_selection_trace_phase(NodeSelectionAfterIpc, result);
+                        if (R_SUCCEEDED(result)) {
+                            *selected_node = id;
+                            node_selection_trace_phase(NodeSelectionBeforeCancelProbes, 0);
+                            cancel_probes();
+                            node_selection_trace_phase(NodeSelectionAfterCancelProbes, 0);
+                            return true;
+                        }
                         notice = "Could not select this node. Try another.";
                     }
                 }

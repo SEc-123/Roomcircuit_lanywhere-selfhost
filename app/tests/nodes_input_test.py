@@ -15,6 +15,7 @@ source = (root / 'app/source/nodes_ui.c').read_text()
 code = r'''
 #include "game_catalog.h"
 #include "node_probe.h"
+#include "node_selection_trace.h"
 #include "../../common/node_catalog.h"
 #include "../../common/node_lobby.h"
 #include <assert.h>
@@ -48,6 +49,11 @@ static NodeView view;
 static int view_lock;
 static bool initialized=true, friend_created, reverse_after_draw;
 static uint32_t picked, visits;
+static uint32_t ipc_result, trace_result;
+static NodeSelectionTracePhase trace_phases[4];
+static unsigned trace_count;
+void node_selection_trace_begin(uint32_t node_id){assert(node_id<NODE_CATALOG_COUNT);trace_count=0;}
+void node_selection_trace_phase(NodeSelectionTracePhase phase,uint32_t result){assert(trace_count<4);trace_phases[trace_count++]=phase;trace_result=result;}
 static uint64_t next_friend_poll;
 static char group_code[8];
 static const char *notice;
@@ -63,7 +69,7 @@ static void friend_panel(PadState *pad){(void)pad;}
 static NodeView snapshot(void){return view;}
 static void mutexLock(int *lock){(void)lock;}
 static void mutexUnlock(int *lock){(void)lock;}
-static int serviceDispatchIn(Service *svc,int command,uint32_t id){(void)svc;assert(command==36);picked=id;return 0;}
+static int serviceDispatchIn(Service *svc,int command,uint32_t id){(void)svc;assert(command==36);assert(trace_count==1&&trace_phases[0]==NodeSelectionBeforeIpc);picked=id;return (int)ipc_result;}
 #define R_SUCCEEDED(result) ((result)==0)
 static void rank_nodes(const NodeView *copy,uint8_t region,uint32_t *order,unsigned *count,bool *recommended)
 {
@@ -124,6 +130,7 @@ int main(void){
  screen.count=0;frame=0;frames=4;picked=NODE_ID_INVALID;visits=0;
  inputs[0]=0;inputs[1]=HidNpadButton_ZR;inputs[2]=HidNpadButton_ZR;inputs[3]=HidNpadButton_A;
  assert(nodes_ui_pick(&pad,&service,0,&chosen)&&chosen==12&&picked==12);
+ assert(trace_count==4&&trace_phases[1]==NodeSelectionAfterIpc&&trace_phases[2]==NodeSelectionBeforeCancelProbes&&trace_phases[3]==NodeSelectionAfterCancelProbes&&trace_result==0);
  assert(visits==((1u<<NODE_CATALOG_COUNT)-1));
 
  frame=0;frames=6;picked=NODE_ID_INVALID;visits=0;
@@ -134,6 +141,11 @@ int main(void){
  frame=0;frames=2;picked=NODE_ID_INVALID;reverse_after_draw=true;
  inputs[0]=0;inputs[1]=HidNpadButton_A;
  assert(nodes_ui_pick(&pad,&service,0,&chosen)&&chosen==0&&picked==0);
+
+ frame=0;frames=3;picked=NODE_ID_INVALID;reverse_after_draw=false;ipc_result=0x1159;
+ inputs[0]=0;inputs[1]=HidNpadButton_A;inputs[2]=HidNpadButton_B;
+ assert(!nodes_ui_pick(&pad,&service,0,&chosen)&&picked==0);
+ assert(trace_count==2&&trace_phases[0]==NodeSelectionBeforeIpc&&trace_phases[1]==NodeSelectionAfterIpc&&trace_result==ipc_result);
 
  puts("PASS node input: exact filters, region focus, held touch, all 13 nodes and disabled/reranked selection");
 }

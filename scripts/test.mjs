@@ -81,6 +81,8 @@ try {
     await suite('App node directory and exact selection', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_list_test.py']);
     await suite('Node recommendations and friend measurement views', process.env.PYTHON || 'python3', ['-B', 'app/tests/nodes_model_test.py']);
     await suite('Node filtering and input behavior', process.env.PYTHON || 'python3', ['-B', 'app/tests/nodes_input_test.py']);
+    await suite('Node selection app diagnostic I/O', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_selection_trace_test.py']);
+    await suite('Node selection sysmodule diagnostic I/O', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/selection_trace_test.py']);
     await suite('Online update delivery and game isolation', process.execPath, ['--test', 'server/relay/test-update-distribution.js']);
     await suite('Signed updater transaction and interrupted recovery', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_core_test.py']);
     await suite('Updater network transfer and cancellation', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_network_test.py']);

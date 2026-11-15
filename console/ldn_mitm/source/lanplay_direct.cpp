@@ -1577,8 +1577,10 @@ uint32_t VirtualAddress(bool renew) {
 }
 } // namespace
 
-bool Probe(const Endpoint &endpoint, unsigned timeout_ms) {
+bool Probe(const Endpoint &endpoint, unsigned timeout_ms, selection_trace::Handle trace) {
+    selection_trace::Record(trace, "probe.socket.begin");
     const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    selection_trace::Record(trace, "probe.socket.end", fd < 0 ? 1 : 0);
     if (fd < 0)
         return false;
     sockaddr_in destination{};
@@ -1587,22 +1589,33 @@ bool Probe(const Endpoint &endpoint, unsigned timeout_ms) {
     destination.sin_port = endpoint.port;
     uint8_t ping[5];
     ping[0] = 2;
+    selection_trace::Record(trace, "probe.random.begin");
     Put32(ping + 1, lanplay_random());
+    selection_trace::Record(trace, "probe.random.end");
     bool valid = false;
+    selection_trace::Record(trace, "probe.send.begin");
     if (::sendto(fd, ping, sizeof(ping), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&destination),
                  sizeof(destination)) == sizeof(ping)) {
+        selection_trace::Record(trace, "probe.send.end");
         pollfd request{fd, POLLIN, 0};
-        if (::poll(&request, 1, timeout_ms) > 0 && (request.revents & POLLIN)) {
+        selection_trace::Record(trace, "probe.poll.begin");
+        const int ready = ::poll(&request, 1, timeout_ms);
+        selection_trace::Record(trace, "probe.poll.end", static_cast<uint32_t>(ready));
+        if (ready > 0 && (request.revents & POLLIN)) {
             uint8_t reply[8];
             sockaddr_in from{};
             socklen_t size = sizeof(from);
+            selection_trace::Record(trace, "probe.receive.begin");
             const ssize_t bytes =
                 ::recvfrom(fd, reply, sizeof(reply), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&from), &size);
+            selection_trace::Record(trace, "probe.receive.end", static_cast<uint32_t>(bytes));
             valid = (bytes == 4 || bytes == 5) && from.sin_addr.s_addr == endpoint.ipv4 &&
                     from.sin_port == endpoint.port && !std::memcmp(reply, ping, bytes);
         }
     }
+    selection_trace::Record(trace, "probe.close.begin");
     ::close(fd);
+    selection_trace::Record(trace, "probe.close.end", valid ? 0 : 1);
     return valid;
 }
 bool Configure(uint32_t node, const Endpoint &endpoint) {

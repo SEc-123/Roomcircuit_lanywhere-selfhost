@@ -94,7 +94,7 @@ int guide_page_count(void) { return PageCount; }
 
 void guide_draw_language(bool chinese)
 {
-    gfx_round_rect(1056, 40, 168, 44, 18, RGBA(0xFC, 0xFC, 0xF7, 0xFF));
+    gfx_round_rect(1056, 40, 168, 44, 18, RGBA(0x11, 0x11, 0x11, 0xFF));
     gfx_button(1068, 47, "RS", chinese ? "English" : "中文");
 }
 
@@ -103,9 +103,9 @@ void guide_draw(int page, bool chinese, bool spanish)
     (void)spanish;
     page = page_index(page);
     const GuidePage *p = &(chinese ? pages_zh : pages_en)[page];
-    const u32 text = RGBA(0x17, 0x2D, 0x26, 0xFF), dim = RGBA(0x50, 0x62, 0x59, 0xFF);
-    const u32 accent = RGBA(0x19, 0x5A, 0x46, 0xFF), panel = RGBA(0xFC, 0xFC, 0xF7, 0xFF);
-    gfx_clear_gradient(RGBA(0xEE, 0xEE, 0xE8, 0xFF), RGBA(0xEE, 0xEE, 0xE8, 0xFF));
+    const u32 text = RGBA(0xE8, 0xE8, 0xE8, 0xFF), dim = RGBA(0xAE, 0xAE, 0xAE, 0xFF);
+    const u32 accent = RGBA(0xD8, 0xD8, 0xD8, 0xFF), panel = RGBA(0x11, 0x11, 0x11, 0xFF);
+    gfx_clear_gradient(RGBA(0x00, 0x00, 0x00, 0xFF), RGBA(0x00, 0x00, 0x00, 0xFF));
     gfx_text(Margin, 42, 24, dim, "RoomCircuit");
     guide_draw_language(chinese);
     char position[20];
@@ -121,7 +121,7 @@ void guide_draw(int page, bool chinese, bool spanish)
     }
     gfx_round_rect(Margin, 532, GFX_W - Margin * 2, 68, 18, panel);
     gfx_text(Margin + 24, 553, 23, dim, p->key);
-    gfx_rect(0, Footer, GFX_W, 1, RGBA(0xD9, 0xDE, 0xD4, 0xFF));
+    gfx_rect(0, Footer, GFX_W, 1, RGBA(0x36, 0x36, 0x36, 0xFF));
     if (page > 0) gfx_button(Margin, Footer + 20, "ZL", chinese ? "上一页" : "Previous");
     if (page + 1 < PageCount) gfx_button(856, Footer + 20, "ZR", chinese ? "下一页" : "Next");
     gfx_button(1090, Footer + 20, "B", chinese ? "返回" : "Back");
