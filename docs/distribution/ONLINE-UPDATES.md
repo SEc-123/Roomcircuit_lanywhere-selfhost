@@ -2,7 +2,9 @@
 
 Open LANywhere and select **Update** when a new version appears. Close the game before installing. Keep the app open until installation completes, then restart Atmosphère. Update files include the app, background module, overlay and bundled help. User settings and appointments are outside the managed file list.
 
-The first updater-enabled release must be installed as the normal SD package. The update screen is available even when the background module is missing or incompatible. If installation is interrupted, open **LANywhere Recovery** from the Homebrew Menu and follow its status before restarting.
+For a first or manual install, extract the SD ZIP on a computer and merge `atmosphere/` and `switch/` into the card root. The update screen is available even when the background module is missing or incompatible. If installation is interrupted, open **LANywhere Recovery** from the Homebrew Menu and follow its status before restarting.
+
+If **Update** asks you to move a leftover recovery app, move only `switch/lanywhere-recovery.nro` off the SD card, then retry. Keep your settings and appointments in `lanywhere/`.
 
 ## Publishing
 
@@ -19,4 +21,6 @@ The preset managed build uses this update feed. Configurable builds (`RELAY_PROF
 
 打开 LANywhere，出现新版时点「更新」。安装前关闭游戏，完成后重启 Atmosphère。昵称、设置和约局会保留。
 
-首次安装带在线更新的版本仍需合并 SD 包。应用、后台缺失或版本不匹配时仍可打开更新入口。安装意外中断时，从自制软件菜单打开「LANywhere Recovery」处理，再按提示重启。
+首次或手动安装时，在电脑解压 SD 包，把 `atmosphere/` 和 `switch/` 合并到卡根目录。后台缺失或版本不匹配时仍可打开更新入口。安装意外中断时，从自制软件菜单打开「LANywhere Recovery」处理，再按提示重启。
+
+如果「更新」提示恢复应用有残留，只将 `switch/lanywhere-recovery.nro` 移出 SD 卡，再试一次。保留 `lanywhere/` 中的设置和约局。

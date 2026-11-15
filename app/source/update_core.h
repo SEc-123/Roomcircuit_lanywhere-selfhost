@@ -15,6 +15,7 @@ typedef enum {
     UPDATE_RECOVERED,
     UPDATE_INSTALLED,
     UPDATE_RECOVERY_REQUIRED,
+    UPDATE_RECOVERY_CONFLICT,
 } UpdateResult;
 
 typedef struct {

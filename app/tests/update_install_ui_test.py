@@ -93,13 +93,16 @@ int main(void){
  assert(state.screen==UpdateFailed&&download_calls==1&&!install_calls);
  reset("0.7.1");install_result=UPDATE_SIGNATURE;install_worker(NULL);
  assert(state.screen==UpdateFailed&&install_calls==1&&!must_exit);
+ reset("0.7.1");install_result=UPDATE_RECOVERY_CONFLICT;install_worker(NULL);
+ assert(state.screen==UpdateFailed&&install_calls==1&&!must_exit);
+ assert(!strcmp(state.error,"Move switch/lanywhere-recovery.nro off the SD card, then retry."));
  reset("0.7.1");safe_before=false;canonical_path=false;install_worker(NULL);
  assert(state.screen==UpdateFailed&&!download_calls&&!install_calls);
  reset("0.7.0");cancel_after_download=true;install_worker(NULL);
  assert(state.screen==UpdateCurrent&&!install_calls&&unlinks==1);
  reset("0.7.1");cancel_at_commit=true;install_worker(NULL);
  assert(state.screen==UpdateOffered&&!install_calls&&unlinks==1&&lock_calls==1);
- puts("PASS: 11 actual install-worker transitions, cancellation boundaries, active-game recheck, rollback and restart");
+ puts("PASS: 12 actual install-worker transitions, including recovery-file conflict and cancellation");
 }
 '''.replace('/* TYPES */',types).replace('/* FUNCTIONS */','\n'.join(function(signature) for signature in ['static const char *network_error(', 'static const char *core_error(', 'static void install_worker(']))
 with tempfile.TemporaryDirectory(prefix='update-install-ui-') as temporary:

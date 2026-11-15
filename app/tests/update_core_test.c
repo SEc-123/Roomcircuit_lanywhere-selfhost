@@ -205,6 +205,27 @@ int main(int argc, char **argv) {
     assert(update_transaction_pending(test_root) == UPDATE_RECOVERY_REQUIRED);
     struct stat link_info; assert(lstat(path, &link_info) == 0 && S_ISLNK(link_info.st_mode));
     assert(update_transaction_pending(NULL) == UPDATE_RECOVERY_REQUIRED);
+
+    prepare_root(argv[1], 206, false);
+    assert(update_install(test_root, &manifest, download_path, NULL, NULL) == UPDATE_INSTALLED);
+    char recovery_path[PATH_MAX], saved_recovery[PATH_MAX];
+    uint32_t recovery_size;
+    uint8_t recovery_hash[32];
+    assert(path_join(recovery_path, test_root, RECOVERY_APP));
+    assert(path_join(saved_recovery, argv[1], "saved-recovery.nro"));
+    assert(file_digest(recovery_path, &recovery_size, recovery_hash));
+    assert(rename(recovery_path, saved_recovery) == 0);
+    assert(update_acknowledge(test_root) == UPDATE_OK);
+    // An installer can leave the Recovery NRO behind after removing its journal.
+    assert(rename(saved_recovery, recovery_path) == 0);
+    assert(update_install(test_root, &manifest, download_path, NULL, NULL) == UPDATE_RECOVERY_CONFLICT);
+    assert(update_transaction_pending(test_root) == UPDATE_OK);
+    assert(matches_file(recovery_path, recovery_size, recovery_hash));
+    assert_settings();
+    assert(rename(recovery_path, saved_recovery) == 0);
+    assert(update_install(test_root, &manifest, download_path, NULL, NULL) == UPDATE_INSTALLED);
+    assert(update_acknowledge(test_root) == UPDATE_OK);
+
     prepare_root(argv[1], 203, false);
     uint8_t damaged[UPDATE_MANIFEST_SIZE]; memcpy(damaged, manifest_bytes, sizeof(damaged));
     write32(damaged + 20, 2); assert(crypto_sign_detached(damaged + 448, NULL, damaged, 448, secret_key) == 0);
@@ -220,5 +241,5 @@ int main(int argc, char **argv) {
     write32(raw+12,1);assert(!bundle_entries(raw,length,"0.7.1",entries));write32(raw+12,0);
     write32(raw+16,UINT32_MAX);assert(!bundle_entries(raw,length,"0.7.1",entries));
     free(raw); free(bundle);
-    printf("PASS signed updater: %u install and 43 rollback interruption boundaries, missing originals, signatures, versions, allowlist, symlink rejection, rollback-space preflight, read-only transaction inspection and preserved settings\n", cases);
+    printf("PASS signed updater: %u install and 43 rollback interruption boundaries, missing originals, signatures, versions, allowlist, symlink rejection, rollback-space preflight, read-only transaction inspection, recovery-file conflict and preserved settings\n", cases);
 }

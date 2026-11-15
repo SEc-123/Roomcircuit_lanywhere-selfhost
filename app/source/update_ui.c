@@ -1,6 +1,7 @@
 #include "update_ui.h"
 #include "update_core.h"
 #include "update_network.h"
+#include "app_socket.h"
 #include "ui_locale.h"
 #include "ui_text.h"
 #include "gfx.h"
@@ -89,6 +90,7 @@ static const char *core_error(UpdateResult result)
 {
     if (result == UPDATE_SPACE) return "Free some SD space and try again.";
     if (result == UPDATE_IO) return "Could not write the update to SD.";
+    if (result == UPDATE_RECOVERY_CONFLICT) return "Move switch/lanywhere-recovery.nro off the SD card, then retry.";
     if (result == UPDATE_SIGNATURE || result == UPDATE_INVALID) return "Update verification failed. Try again.";
     return "Update cannot be installed. Use the complete SD package.";
 }
@@ -217,6 +219,7 @@ static bool start_worker(bool install)
     }
     collect_worker();
     if (thread_created) return false;
+    if (!socket_ready) socket_ready = app_socket_acquire();
     if (!socket_ready) {
         set_state(UpdateFailed, "Network services are unavailable. Reopen LANywhere.");
         return false;
@@ -281,7 +284,6 @@ bool update_ui_initialize(const char *running_path)
         set_state(UpdateRecoveryBlocked, "Update recovery needs the complete SD package.");
         return true;
     }
-    socket_ready = R_SUCCEEDED(socketInitializeDefault());
     start_worker(false);
     return false;
 }
@@ -295,7 +297,7 @@ void update_ui_shutdown(void)
         threadClose(&worker);
         thread_created = false;
     }
-    if (socket_ready) socketExit();
+    if (socket_ready) app_socket_release();
     initialized = socket_ready = false;
 }
 
@@ -421,7 +423,6 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
             if (view.screen == UpdateRestart && rollback_pending) {
                 if (update_acknowledge(UpdateRoot) == UPDATE_OK) {
                     rollback_pending = false;
-                    if (!socket_ready) socket_ready = R_SUCCEEDED(socketInitializeDefault());
                     start_worker(false);
                 } else set_state(UpdateRecoveryBlocked, "Update recovery needs the complete SD package.");
             } else if (view.screen == UpdateFailed) start_worker(false);

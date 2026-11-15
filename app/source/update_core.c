@@ -502,6 +502,12 @@ static UpdateResult install_locked(const char *root, const UpdateManifest *manif
     if (result != UPDATE_OK && result != UPDATE_NO_UPDATE) return result;
     result = recover_locked(root);
     if (result != UPDATE_OK) return result;
+    char recovery_path[PATH_MAX];
+    struct stat recovery_info;
+    if (!path_join(recovery_path, root, RECOVERY_APP)) return UPDATE_INVALID;
+    // With no pending transaction, a recovery file has no verified owner.
+    if (lstat(recovery_path, &recovery_info) == 0) return UPDATE_RECOVERY_CONFLICT;
+    if (errno != ENOENT) return UPDATE_IO;
     uint32_t size; uint8_t hash[32];
     if (!file_digest(compressed_file, &size, hash)) return UPDATE_IO;
     if (size != verified.compressed_size || memcmp(hash, verified.bundle_sha256, 32)) return UPDATE_INVALID;

@@ -43,8 +43,8 @@ int main(int argc,char **argv){
   for(unsigned i=0;i<NODE_CATALOG_COUNT;i++)group.nodes[i]=(NodeFriendSummary){.node_id=i,.measured_members=2,.reachable_members=2,.minimum_sent=5,.minimum_received=5,.worst_median_ms=(uint32_t)(80+i*8),.worst_jitter_ms=12};
   rank_nodes(&v,NodeRegionEurope,order,&count,recommended);draw_picker(&v,NodeRegionEurope,order,count,0,recommended);capture(argv[1],"shared",zh);
   draw_friend_panel();capture(argv[1],"code",zh);
-  v.measurements[1].median_ms=310;v.measurements[1].jitter_ms=91;draw_room_check(&v.measurements[1],1,false);capture(argv[1],"weak",zh);
-  draw_room_check(&v.measurements[0],0,true);capture(argv[1],"gateway",zh);
+  v.measurements[1].median_ms=310;v.measurements[1].jitter_ms=91;draw_room_check(&v.measurements[1],1,false,false);capture(argv[1],"weak",zh);
+  draw_room_check(&v.measurements[0],0,true,false);capture(argv[1],"gateway",zh);
   CatalogGameChoice games[2]={{17,{.en="Pokémon Violet",.zh="宝可梦 紫",.kind=CatalogCommunication}},{18,{.en="Mario Kart 8 Deluxe",.zh="马力欧卡丁车8 豪华版",.kind=CatalogCommunication}}};
   GameCatalog catalog={0};draw_filters(&catalog,games,2,0,0,NodeRegionEurope);capture(argv[1],"filters",zh);
   group_code[0]=0;memset(&group,0,sizeof(group));

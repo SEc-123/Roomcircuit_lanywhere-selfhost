@@ -1,5 +1,6 @@
 #include "nodes_ui.h"
 #include "../../common/node_lobby.h"
+#include "app_socket.h"
 #include "gfx.h"
 #include "relay_config.h"
 #include "ui_locale.h"
@@ -20,13 +21,12 @@
 typedef struct {
     NodeMeasurement measurements[NODE_CATALOG_COUNT];
     uint32_t enabled, available;
-    bool catalog_ok, changed;
+    bool catalog_ok, probe_start_failed, changed;
 } NodeView;
 static NodeView view;
 static Mutex view_lock;
 static Thread probe_threads[3], friend_thread;
 static bool probe_created[3], friend_created, initialized, socket_ready;
-static bool socket_owned;
 static atomic_bool cancel_probe, cancel_friend, probe_done[3], friend_done;
 static NodeProbeGuard resolver_guards[3];
 static unsigned next_probe;
@@ -101,8 +101,9 @@ static bool fetch_catalog(uint32_t *enabled, uint32_t *available)
 }
 static void probe_worker(void *argument)
 {
-    const unsigned worker = (unsigned)(uintptr_t)argument;
-    if (worker == 0) {
+    const uintptr_t task = (uintptr_t)argument;
+    const unsigned worker = (unsigned)(task >> 1);
+    if (task & 1) {
         uint32_t enabled = 0, available = 0;
         const bool ok = fetch_catalog(&enabled, &available);
         mutexLock(&view_lock);
@@ -190,12 +191,21 @@ static bool network_changed(void)
     memset(&profile, 0, sizeof(profile));
     return changed;
 }
+static bool ensure_socket(void)
+{
+    if (!socket_ready)
+        socket_ready = app_socket_acquire();
+    return socket_ready;
+}
 static void start_probes(uint32_t mask, bool force)
 {
     cancel_probes();
     atomic_store(&cancel_probe, false);
-    if (network_changed())
+    if (network_changed()) {
+        nodes_ui_network_changed();
         force = true;
+    }
+    const bool network_ready = ensure_socket();
     const uint64_t now = node_probe_now_ms();
     mutexLock(&view_lock);
     probe_mask = 0;
@@ -204,26 +214,39 @@ static void start_probes(uint32_t mask, bool force)
         if (!(mask & (1u << i)))
             continue;
         const NodeMeasurement *m = &view.measurements[i];
-        if (force || !m->measured_at_ms || now - m->measured_at_ms >= 60000) {
+        if (force || !m->measured_at_ms || now - m->measured_at_ms >= 60000)
             probe_mask |= 1u << i;
-            view.measurements[i].state = NodeMeasurePending;
-        }
     }
-    view.changed = true;
-    mutexUnlock(&view_lock);
-    if (!socket_ready)
-        return;
-    for (unsigned i = 0; i < 3; i++) {
+    // Keep workers from publishing results until their queued states are set.
+    bool started = false;
+    for (unsigned i = 0; network_ready && i < 3; i++) {
         atomic_store(&probe_done[i], false);
+        // The first worker that starts fetches the catalog, even if an earlier slot failed.
+        const uintptr_t task = ((uintptr_t)i << 1) | (started ? 0u : 1u);
         if (R_FAILED(
-                threadCreate(&probe_threads[i], probe_worker, (void *)(uintptr_t)i, NULL, 0x10000, 0x2c, -2)))
+                threadCreate(&probe_threads[i], probe_worker, (void *)task, NULL, 0x10000, 0x2c, -2)))
             continue;
         probe_created[i] = true;
         if (R_FAILED(threadStart(&probe_threads[i]))) {
             threadClose(&probe_threads[i]);
             probe_created[i] = false;
-        }
+        } else
+            started = true;
     }
+    for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++) {
+        if (!(probe_mask & (1u << i)))
+            continue;
+        NodeMeasurement *m = &view.measurements[i];
+        if (started)
+            m->state = NodeMeasurePending;
+        else if (!m->measured_at_ms || now - m->measured_at_ms >= 60000 ||
+                 m->state == NodeMeasurePending || m->state == NodeMeasureMeasuring)
+            *m = (NodeMeasurement){.node_id = i, .median_ms = NODE_PROBE_UNKNOWN,
+                                   .jitter_ms = NODE_PROBE_UNKNOWN, .state = NodeMeasureFailed};
+    }
+    view.probe_start_failed = !started;
+    view.changed = true;
+    mutexUnlock(&view_lock);
 }
 typedef struct {
     uint64_t last_frame_ms, next_check_ms;
@@ -278,10 +301,7 @@ void nodes_ui_initialize(void)
     for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++)
         view.measurements[i] =
             (NodeMeasurement){.node_id = i, .median_ms = NODE_PROBE_UNKNOWN, .jitter_ms = NODE_PROBE_UNKNOWN};
-    const Result socket_result = socketInitializeDefault();
-    socket_owned = R_SUCCEEDED(socket_result);
-    /* The updater may already have registered the process-wide socket device. */
-    socket_ready = socket_owned || socket_result == MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized);
+    (void)ensure_socket();
     nifm_ready = R_SUCCEEDED(nifmInitialize(NifmServiceType_User));
     do {
         randomGet(participant, sizeof(participant));
@@ -323,6 +343,10 @@ static bool queue_friend(uint32_t operation, const char *code)
 {
     if (friend_created)
         return false;
+    if (!ensure_socket()) {
+        notice = "Shared test is unavailable. Try again.";
+        return false;
+    }
     NodeFriendRequest request = {.operation = operation};
     memcpy(request.participant, participant, 16);
     if (code)
@@ -425,9 +449,9 @@ void nodes_ui_shutdown(void)
     }
     if (nifm_ready)
         nifmExit();
-    if (socket_owned)
-        socketExit();
-    initialized = socket_ready = socket_owned = nifm_ready = false;
+    if (socket_ready)
+        app_socket_release();
+    initialized = socket_ready = nifm_ready = false;
 }
 static void language_input(u64 down)
 {
@@ -521,7 +545,7 @@ static void measurement_label(const NodeMeasurement *m, char text[80])
     if (m->state == NodeMeasureMeasuring || m->state == NodeMeasurePending)
         snprintf(text, 80, "%s", ui_text("Testing…"));
     else if (m->state != NodeMeasureReady)
-        snprintf(text, 80, "%s", ui_text("Unreachable"));
+        snprintf(text, 80, "%s", m->measured_at_ms ? ui_text("Unreachable") : "—");
     else
         snprintf(text, 80, "%u ms · %s", m->median_ms, m->kind == NodeProbeUdp ? "UDP" : "TCP");
 }
@@ -578,7 +602,9 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
     }
     if (!count)
         gfx_text(56, 260, 24, NODE_COLOR_DIM, ui_text("No nodes in this region."));
-    if (notice)
+    if (copy->probe_start_failed)
+        gfx_text_fit(56, 596, 21, NODE_COLOR_WARN, ui_text("Could not start node tests. Try again."), 1168);
+    else if (notice)
         gfx_text_fit(56, 596, 21, NODE_COLOR_WARN, ui_text(notice), 1168);
     else if (group_code[0] && group.reported_participants < group.participants)
         gfx_text_fit(56, 596, 21, NODE_COLOR_DIM, ui_text("Waiting for other players' results."), 1168);
@@ -807,8 +833,9 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
             down &= ~HidNpadButton_A;
         }
         if (down & HidNpadButton_X) {
-            start_probes((1u << NODE_CATALOG_COUNT) - 1, true);
             notice = NULL;
+            start_probes((1u << NODE_CATALOG_COUNT) - 1, true);
+            continue;
         }
         if (down & HidNpadButton_L) {
             friend_panel(pad);
@@ -843,7 +870,7 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
     cancel_probes();
     return false;
 }
-static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gateway)
+static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gateway, bool probe_start_failed)
 {
     begin_screen("Check room connection");
     gfx_text(56, 205, 28, NODE_COLOR_TEXT, nodes_ui_name(node_id));
@@ -863,9 +890,13 @@ static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gat
             gfx_text_fit(56, 500, 21, NODE_COLOR_DIM,
                          ui_text("External forwarding adds latency beyond this measurement."), 1168);
     }
+    if (probe_start_failed)
+        gfx_text_fit(56, 550, 21, NODE_COLOR_WARN, ui_text("Could not start node tests. Try again."), 1168);
     gfx_rect(0, 648, 1280, 1, RGBA(255, 255, 255, 28));
     if (m->state == NodeMeasureReady)
         gfx_button(56, 670, "A", ui_text("Continue"));
+    if (probe_start_failed)
+        gfx_button(420, 670, "X", ui_text("Refresh"));
     gfx_button(980, 670, "B", ui_text("Back"));
     gfx_end();
 }
@@ -881,19 +912,27 @@ bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway)
         maintain_probes(&probe_loop, 1u << node_id);
         padUpdate(pad);
         u64 down = padGetButtonsDown(pad);
+        const NodeView copy = snapshot();
         int touch_x, touch_y;
         if (modal_touch_start(&touch_held, &touch_x, &touch_y)) {
             if (touch_x >= 1056 && touch_y >= 35 && touch_y < 95)
                 down |= HidNpadButton_StickR;
-            else if (touch_y >= 650)
-                down |= touch_x < 600 ? HidNpadButton_A : HidNpadButton_B;
+            else if (touch_y >= 650) {
+                if (copy.probe_start_failed && touch_x >= 340 && touch_x < 760)
+                    down |= HidNpadButton_X;
+                else
+                    down |= touch_x < 600 ? HidNpadButton_A : HidNpadButton_B;
+            }
         }
         language_input(down);
-        const NodeView copy = snapshot();
         const NodeMeasurement *m = &copy.measurements[node_id];
         if (down & HidNpadButton_B) {
             cancel_probes();
             return false;
+        }
+        if ((down & HidNpadButton_X) && copy.probe_start_failed) {
+            start_probes(1u << node_id, true);
+            continue;
         }
         if ((down & HidNpadButton_A) && m->state == NodeMeasureReady) {
             cancel_probes();
@@ -904,7 +943,7 @@ bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway)
         view.changed = false;
         mutexUnlock(&view_lock);
         if (dirty || down) {
-            draw_room_check(m, node_id, gateway);
+            draw_room_check(m, node_id, gateway, copy.probe_start_failed);
             dirty = false;
         }
         svcSleepThread(33000000ULL);
