@@ -4,6 +4,7 @@
 #include "gfx.h"
 #include "title_inventory.h"
 #include "ui_text.h"
+#include "update_ui.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
@@ -866,6 +867,9 @@ void appointments_draw(const GameCatalog *catalog, AppointmentTouchZone touch)
     gfx_round_rect(ListX + 14, 39, 19, 13, 4, ACCENT);
     gfx_round_rect(ListX + 17, 42, 13, 7, 2, PAPER);
     gfx_text(ListX + 46, 25, 32, TEXT, "RoomCircuit");
+    char version[32];
+    snprintf(version, sizeof(version), "v%s", update_ui_app_version());
+    gfx_text_fit(ListX + 46, 57, 17, MUTED, version, 218);
     if (g_screen == ListScreen) action(535, 26, "B", "All rooms", HidNpadButton_B, touch);
     const char *tab = ui_text("Appointments");
     gfx_text(741, 30, 22, ACCENT, tab);

@@ -126,9 +126,9 @@ static void check_worker(void *unused)
     else {
         UpdateManifest manifest;
         const UpdateResult valid = update_manifest_parse(raw, LANYWHERE_APP_VERSION, &manifest);
-        if (valid == UPDATE_OK || valid == UPDATE_NO_UPDATE) {
+        if (valid == UPDATE_OK || valid == UPDATE_NO_UPDATE || valid == UPDATE_OLDER) {
             mutexLock(&lock);
-            state.manifest = manifest;
+            state.manifest = valid == UPDATE_OLDER ? (UpdateManifest){0} : manifest;
             state.screen = valid == UPDATE_OK ? UpdateOffered : UpdateCurrent;
             state.error = NULL;
             state.changed = true;
@@ -320,9 +320,14 @@ bool update_ui_changed(void)
     return changed;
 }
 
-const char *update_ui_button_label(void)
+const char *update_ui_app_version(void)
 {
-    return ui_text(update_ui_available() ? "Update available" : "Update");
+    return LANYWHERE_APP_VERSION;
+}
+
+const char *update_ui_button_label(bool available)
+{
+    return ui_text(available ? "Update available" : "Check updates");
 }
 
 static u64 modal_touch(void)
@@ -385,7 +390,7 @@ static void draw_update(const UpdateView *view)
     if (view->error) gfx_text_fit(56, 500, 23, Error, ui_text(view->error), 1168);
     gfx_rect(0, 648, 1280, 1, RGBA(0xD9, 0xDE, 0xD4, 255));
     if (view->screen == UpdateOffered) gfx_button(56, 670, "A", ui_text("Download and install"));
-    else if (view->screen == UpdateCurrent) gfx_button(56, 670, "A", ui_text("Repair installation"));
+    else if (view->screen == UpdateCurrent) gfx_button(56, 670, "A", ui_text(view->manifest.version[0] ? "Repair installation" : "Check updates"));
     else if (view->screen == UpdateRestart && rollback_pending) gfx_button(56, 670, "A", ui_text("Repair installation"));
     else if (view->screen == UpdateFailed) gfx_button(56, 670, "A", ui_text("Try again"));
     if (view->screen != UpdateInstalling)
@@ -398,6 +403,10 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
 {
     installation_allowed = can_install;
     installation_context = context;
+    collect_worker();
+    const UpdateScreen initial = snapshot().screen;
+    if (!thread_created && (initial == UpdateCurrent || initial == UpdateFailed || initial == UpdateChecking))
+        start_worker(false);
     bool dirty = true;
     while (appletMainLoop()) {
         collect_worker();
@@ -429,8 +438,11 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
                     rollback_pending = false;
                     start_worker(false);
                 } else set_state(UpdateRecoveryBlocked, "Update recovery needs the complete SD package.");
-            } else if (view.screen == UpdateFailed) start_worker(false);
-            else if (view.screen == UpdateOffered || view.screen == UpdateCurrent) start_worker(true);
+            } else if (view.screen == UpdateFailed || (view.screen == UpdateCurrent && !view.manifest.version[0])) {
+                start_worker(false);
+            } else if (view.screen == UpdateOffered || view.screen == UpdateCurrent) {
+                start_worker(true);
+            }
             dirty = true;
         }
         if (dirty || update_ui_changed()) {

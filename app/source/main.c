@@ -1748,6 +1748,25 @@ static void draw_brand(void)
     gfx_rect(MARGIN + 4, 47, 8, 4, C_PANEL);
     gfx_rect(MARGIN + 22, 47, 8, 4, C_PANEL);
     gfx_text(MARGIN + 46, 25, 32, C_TEXT, "RoomCircuit");
+    char version[32];
+    snprintf(version, sizeof(version), "v%s", update_ui_app_version());
+    gfx_text_fit(MARGIN + 46, 57, 17, C_DIM, version, 218);
+}
+
+static void draw_update_action(int x, int y, bool shortcut)
+{
+    const bool available = update_ui_available();
+    const char *label = update_ui_button_label(available);
+    const int key_width = shortcut ? gfx_text_width(16, "LS") + 12 : 0;
+    const int key_gap = shortcut ? 8 : 0;
+    const int width = 20 + key_width + key_gap + gfx_text_width(18, label);
+    gfx_round_rect(x, y, width, 38, 12, available ? C_OK : C_CARD);
+    if (shortcut) {
+        gfx_round_rect(x + 10, y + 8, key_width, 22, 11, available ? C_PANEL : C_LINE);
+        gfx_text(x + 16, y + 11, 16, available ? C_OK : C_DIM, "LS");
+    }
+    gfx_text(x + 10 + key_width + key_gap, y + 10, 18, available ? C_PANEL : C_DIM, label);
+    add_zone(x - 8, y - 8, width + 16, 54, TOUCH_UPDATE);
 }
 
 static const char *board_game_title(const View *v, u64 game, char *buffer, size_t size)
@@ -1951,8 +1970,7 @@ static void draw_board_header(const View *v)
         const int node_width = gfx_button(866, 26, "Y", ui_text("Nodes"));
         add_zone(859, 12, node_width + 14, 61, HidNpadButton_Y);
     }
-    const int update_width = gfx_button(320, 26, can_change_provider(v) ? "" : "LS", update_ui_button_label());
-    add_zone(312, 12, update_width + 14, 61, TOUCH_UPDATE);
+    draw_update_action(310, 22, !can_change_provider(v));
     gfx_button(1068, 26, "RS", g_zh ? "English" : "中文");
     add_zone(1056, 12, 168, 61, HidNpadButton_StickR);
     if (g_language_save_failed)
@@ -1976,8 +1994,7 @@ static void draw_password_visibility(void)
 
 static void draw_update_entry(bool shortcut)
 {
-    const int width = gfx_button(350, 47, shortcut ? "LS" : "", update_ui_button_label());
-    add_zone(340, 36, width + 20, 52, TOUCH_UPDATE);
+    draw_update_action(350, 41, shortcut);
 }
 
 static void draw_appointments_link(const View *v)
@@ -2005,7 +2022,7 @@ static void draw(const View *v)
     }
     if (appointments_active()) {
         appointments_draw(&g_catalog, add_zone);
-        draw_update_entry(true);
+        draw_update_action(310, 22, true);
         draw_language_control();
         save_capture_if_requested();
         gfx_end();

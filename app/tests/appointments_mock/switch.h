@@ -4,6 +4,7 @@
 typedef struct { unsigned signals; } UEvent;
 typedef struct { int locked; } Mutex;
 typedef struct { int unused; } Service;
+typedef struct PadState PadState;
 enum { SfBufferAttr_HipcMapAlias = 1, SfBufferAttr_In = 2, SfBufferAttr_Out = 4 };
 enum {
     HidNpadButton_AnyLeft = HidNpadButton_Left, HidNpadButton_AnyRight = 1u << 13,

@@ -155,7 +155,7 @@ def package_files(version, server, port, embedded):
         f"RoomCircuit {version}（Beta，跨网真机验收待完成）\n\n"
         "安装：将 atmosphere 和 switch 合并到 SD 卡根目录，再重启进入虚拟系统。\n"
         "从相册打开 RoomCircuit。按 − 或点「约局」可预约。\n"
-        "以后可在应用内点“更新”，关闭游戏后下载安装，完成后重启虚拟系统。\n"
+        "有新版时，应用顶部高亮提示。按 LS 可检查更新。关闭游戏后安装，完成后重启虚拟系统。\n"
         "安装中断时，从自制软件菜单打开 RoomCircuit Recovery。\n"
         f"{setup}\n"
         "按 RS 切换中英文，右下角可查看教程。\n"

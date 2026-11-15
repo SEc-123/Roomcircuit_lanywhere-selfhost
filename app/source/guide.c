@@ -40,10 +40,10 @@ static const GuidePage pages_zh[] = {
         "建房者选定节点后，照常回游戏建房。"
     }, "公开房可直接单人测速建房。好友测速自愿使用。" },
     { "在线更新", {
-        "点顶部“更新”，或在首页按左摇杆 LS。",
+        "顶部高亮表示有新版。按 LS 随时检查更新。",
         "关闭游戏，确认下载并安装。设置和约局会保留。",
         "更新完成后，退出并重启进入虚拟系统。"
-    }, "下载可取消。安装时请保持开机。" },
+    }, "也可以按 LS 检查更新。安装时请保持开机。" },
 };
 static const GuidePage pages_en[] = {
     { "Host a room", {
@@ -82,10 +82,10 @@ static const GuidePage pages_en[] = {
         "The host selects a node, then creates the room in-game."
     }, "Public hosting uses your own test. Shared testing is optional." },
     { "Online update", {
-        "Tap Update at the top, or press LS on the home page.",
+        "A highlighted update button means a new version is available.",
         "Close the game, then confirm Download and install.",
         "When finished, exit and restart into your virtual system."
-    }, "Settings and appointments stay saved. Keep the console on while installing." },
+    }, "You can check manually with LS. Keep the console on while installing." },
 };
 
 enum { PageCount = sizeof(pages_zh) / sizeof(pages_zh[0]), Margin = 56, Footer = 648 };

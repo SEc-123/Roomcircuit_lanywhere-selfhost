@@ -97,6 +97,7 @@ static const UiTranslation translations[] = {
     {"Update connection is read-only.", "更新连接仅用于下载。"},
     {"Open Update to repair the installation.", "打开“更新”修复安装。"},
     {"Update", "更新"},
+    {"Check updates", "检查更新"},
     {"Update available", "发现新版本"},
     {"Checking for updates…", "正在检查更新…"},
     {"You are up to date", "已是最新版本"},

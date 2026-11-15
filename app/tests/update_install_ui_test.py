@@ -36,11 +36,11 @@ harness=r'''
 /* TYPES */
 static UpdateView state;
 static int lock;
-static bool canonical_path=true;
+static bool canonical_path=true, initialized=true;
 static atomic_bool cancel_requested,rollback_pending,must_exit;
 static unsigned safe_calls,download_calls,install_calls,finish_calls,unlinks,lock_calls;
 static bool safe_before=true,safe_after=true,cancel_after_download,cancel_at_commit;
-static UpdateResult install_result=UPDATE_INSTALLED,recovery_result=UPDATE_OK;
+static UpdateResult install_result=UPDATE_INSTALLED,recovery_result=UPDATE_OK, check_result=UPDATE_OK;
 static UpdateNetworkResult network_result=UpdateNetworkOk;
 static UpdateView snapshot(void){return state;}
 static bool installation_safe(void){return ++safe_calls==1?safe_before:safe_after;}
@@ -52,6 +52,17 @@ static void mutexUnlock(int *value){assert(value==&lock);}
 static int fake_mkdir(const char *path,unsigned mode){(void)mode;assert(!strcmp(path,"sdmc:/lanywhere"));return 0;}
 static int fake_lstat(const char *path,struct stat *st){assert(!strcmp(path,"sdmc:/lanywhere"));memset(st,0,sizeof(*st));st->st_mode=S_IFDIR|0700;return 0;}
 static int fake_unlink(const char *path){assert(!strcmp(path,UpdateDownload));unlinks++;return 0;}
+UpdateNetworkResult update_network_manifest(const char *host,uint16_t port,uint8_t raw[512],const atomic_bool *cancel){
+ assert(!strcmp(host,RELAY_PROFILE_IPV4)&&port==RELAY_PROFILE_PORT&&cancel==&cancel_requested);
+ memset(raw,0,512);
+ return network_result;
+}
+UpdateResult update_manifest_parse(const uint8_t raw[UPDATE_MANIFEST_SIZE],const char *current,UpdateManifest *manifest){
+ (void)raw;assert(!strcmp(current,LANYWHERE_APP_VERSION));
+ *manifest=(UpdateManifest){0};
+ strcpy(manifest->version,check_result==UPDATE_OK?"0.7.1":check_result==UPDATE_NO_UPDATE?"0.7.0":"0.6.9");
+ return check_result;
+}
 UpdateNetworkResult update_network_download(const char *host,uint16_t port,const uint8_t hash[32],uint32_t size,
  const char *destination,const atomic_bool *cancel,UpdateNetworkProgress progress,void *context){
  assert(!strcmp(host,RELAY_PROFILE_IPV4)&&port==RELAY_PROFILE_PORT&&hash[0]==0x42&&size==100&&!strcmp(destination,UpdateDownload));
@@ -79,6 +90,10 @@ static void reset(const char *version){
  install_result=UPDATE_INSTALLED;recovery_result=UPDATE_OK;network_result=UpdateNetworkOk;
 }
 int main(void){
+ reset("0.7.0");check_result=UPDATE_OK;check_worker(NULL);assert(update_ui_available()&&!strcmp(state.manifest.version,"0.7.1"));
+ check_result=UPDATE_OLDER;check_worker(NULL);assert(!update_ui_available()&&state.screen==UpdateCurrent&&!state.manifest.version[0]);
+ check_result=UPDATE_NO_UPDATE;check_worker(NULL);assert(!update_ui_available()&&state.screen==UpdateCurrent&&!strcmp(state.manifest.version,LANYWHERE_APP_VERSION));
+ check_result=UPDATE_SIGNATURE;check_worker(NULL);assert(!update_ui_available()&&state.screen==UpdateFailed);
  reset("0.7.0");network_result=UpdateNetworkCancelled;install_worker(NULL);
  assert(state.screen==UpdateCurrent&&!install_calls&&finish_calls==1);
  reset("0.7.1");network_result=UpdateNetworkCancelled;install_worker(NULL);
@@ -110,9 +125,9 @@ int main(void){
  assert(state.screen==UpdateCurrent&&!install_calls&&unlinks==1);
  reset("0.7.1");cancel_at_commit=true;install_worker(NULL);
  assert(state.screen==UpdateOffered&&!install_calls&&unlinks==1&&lock_calls==1);
- puts("PASS: 14 actual install-worker transitions, including separate download/install errors, fresh install progress and cancellation");
+ puts("PASS: 14 actual install-worker transitions, plus 4 check results, including older and invalid offers");
 }
-'''.replace('/* UPDATE_ROOT */',re.search(r'^#define UpdateRoot .+$',source,re.M).group()).replace('/* TYPES */',types).replace('/* FUNCTIONS */','\n'.join(function(signature) for signature in ['static const char *network_error(', 'static const char *core_error(', 'static void install_worker(']))
+'''.replace('/* UPDATE_ROOT */',re.search(r'^#define UpdateRoot .+$',source,re.M).group()).replace('/* TYPES */',types).replace('/* FUNCTIONS */','\n'.join(function(signature) for signature in ['static const char *network_error(', 'static const char *core_error(', 'static void install_worker(', 'static void check_worker(', 'bool update_ui_available(']))
 with tempfile.TemporaryDirectory(prefix='update-install-ui-') as temporary:
     directory=Path(temporary);(directory/'test.c').write_text(harness)
     subprocess.run([os.environ.get('CC','cc'),'-std=c11','-D_DEFAULT_SOURCE','-Wall','-Wextra','-Werror','-I'+str(ROOT/'source'),str(directory/'test.c'),'-o',str(directory/'test')],check=True)

@@ -1,4 +1,4 @@
-RoomCircuit 0.8.7 Beta
+RoomCircuit 0.8.8 Beta
 
 中文
 
@@ -12,7 +12,7 @@ RoomCircuit 0.8.7 Beta
 游戏需要玩家名称时，自动使用 Switch 主机名称。
 
 在线更新
-打开应用后可检查新版。点「更新」，关闭游戏后安装，完成后重启虚拟系统。
+标题旁显示当前版本。有新版时，顶部高亮提示。按 LS 可手动检查更新。关闭游戏后安装，完成后重启虚拟系统。
 安装中断时，从自制软件菜单打开 RoomCircuit Recovery。
 
 建房与加入
@@ -43,7 +43,7 @@ Choose View guide at the bottom right for help.
 Games that need a player name use your Switch name automatically.
 
 Online updates
-Open the app to check for updates. Select Update, close the game and install. Restart Atmosphère when prompted.
+The title shows the installed version. The update button lights up when a new version is available. Press LS to check manually. Close the game before installing, then restart Atmosphère.
 If installation is interrupted, open RoomCircuit Recovery from the Homebrew Menu.
 
 Host or join

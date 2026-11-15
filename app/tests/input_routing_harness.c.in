@@ -180,6 +180,7 @@ static int step(View *target, u64 down) {
 // pad input and the outer applet loop are dependencies, not duplicate routes.
 static bool test_update;
 static unsigned update_calls;
+static const char *update_ui_app_version(void) { return "0.8.8"; }
 static void draw_update_entry(bool shortcut) { (void)shortcut; }
 static bool update_ui_open(PadState *pad, bool (*allowed)(void *), void *context) { (void)pad;(void)allowed;(void)context;update_calls++;return test_update; }
 static bool update_ui_changed(void) { return false; }

@@ -4,6 +4,7 @@
 #include "gfx.h"
 #include "title_inventory.h"
 #include "ui_text.h"
+#include "update_ui.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +27,8 @@ static const char *expected[8];
 static bool animation_overflow;
 static u64 animation_elapsed;
 static int animation_x;
+
+const char *update_ui_app_version(void) { return "0.8.8"; }
 
 Result mock_appointment_dispatch_in_out(Service *service, unsigned command, const void *request, size_t size,
                                         void *output, size_t output_size)

@@ -19,7 +19,7 @@ int main(int argc, char **argv)
                              "olunira-catalog-restored", "game-password", "share-password",
                               "protected-and-full-rooms", "protected-room", "unlocked-room", "password-visibility", "unified-mixed", "regional-lobby", "regional-locked",
                               "community-lobby", "community-room","roomcircuit-lobby","roomcircuit-filtered","roomcircuit-rail-focus","roomcircuit-empty",
-                              "direct-owned-room", "direct-guest-shared-password" };
+                              "direct-owned-room", "direct-guest-shared-password", "roomcircuit-update-available" };
     for (int zh = 0; zh < 2; zh++) {
         g_zh = zh != 0; ui_set_language(g_zh, false);
         snprintf(sample_games[0].name, sizeof(sample_games[0].name), "%s", zh ? "示例游戏：多人冒险与合作挑战" : "Sample game: multiplayer adventure");
@@ -33,6 +33,7 @@ int main(int argc, char **argv)
         }
         for (unsigned scene = 0; scene < sizeof(scenes) / sizeof(scenes[0]); scene++) {
             g_guide_open = false; g_language_save_failed = false;
+            sample_update_available = scene == 47;
             View v = {0};
             v.sel = -1; v.next_page = LOBBY_PAGE_END; v.config_state = RelayConfigReady;
             v.discovery = LobbyDiscoveryLegacy;
@@ -226,6 +227,9 @@ int main(int argc, char **argv)
                 if (touch_action_at(GFX_W - 100, FOOTER_Y + 30) != HidNpadButton_Plus) {
                     fprintf(stderr, "No-service Exit touch is intercepted by the guide\n"); failures++;
                 }
+                if (touch_action_at(360, 58) != TOUCH_UPDATE) {
+                    fprintf(stderr, "No-service manual update action is not touchable in %s\n",path); failures++;
+                }
             }
             else {
                 draw(&v);
@@ -279,8 +283,9 @@ int main(int argc, char **argv)
                  touch_action_at(700,124) != HidNpadButton_Y)) {
                 fprintf(stderr,"Hosted direct room controls failed in %s\n",path); failures++;
             }
-            if (scene >= 41 && scene <= 44 &&
-                (touch_action_at(720, 42) != HidNpadButton_Minus || touch_action_at(900, 42) != HidNpadButton_Y ||
+            if (((scene >= 41 && scene <= 44) || scene == 47) &&
+                (touch_action_at(335, 42) != TOUCH_UPDATE || touch_action_at(535, 42) == TOUCH_UPDATE ||
+                 touch_action_at(720, 42) != HidNpadButton_Minus || touch_action_at(900, 42) != HidNpadButton_Y ||
                  touch_action_at(59, 228) != TOUCH_GAME_RAIL ||
                  (v.count && (touch_action_at(510, 271) != TOUCH_CARD || g_rendered_games[1]!=100)))) {
                 fprintf(stderr,"RoomCircuit board controls not touchable in %s\n",path); failures++;
