@@ -51,9 +51,20 @@ int main(int argc,char**argv){
  ams::mitm::lanplay::Endpoint endpoint{};
  if(inet_pton(AF_INET,argv[1],&endpoint.ipv4)!=1)return 3;
  endpoint.port=htons(std::strtoul(argv[2],nullptr,10));
- if(!std::strcmp(argv[4],"exhaust")){
-  rlimit limits{48,48};if(setrlimit(RLIMIT_NOFILE,&limits))return 4;
-  while(::socket(AF_INET,SOCK_DGRAM,0)>=0){}
+ const bool exhaust = !std::strcmp(argv[4], "exhaust");
+ rlimit previous_limit{};
+ int held_descriptors[64];
+ unsigned held_count = 0;
+ if (exhaust) {
+  if (getrlimit(RLIMIT_NOFILE, &previous_limit)) return 4;
+  rlimit limited = previous_limit;
+  limited.rlim_cur = std::min<rlim_t>(limited.rlim_cur, 48);
+  if (setrlimit(RLIMIT_NOFILE, &limited)) return 4;
+  while (held_count < 64) {
+   const int descriptor = ::socket(AF_INET, SOCK_DGRAM, 0);
+   if (descriptor < 0) break;
+   held_descriptors[held_count++] = descriptor;
+  }
  }
  if(!std::strcmp(argv[4],"interrupt")){
   struct sigaction action{};action.sa_handler=interrupt_poll;sigemptyset(&action.sa_mask);
@@ -63,6 +74,11 @@ int main(int argc,char**argv){
  const uint64_t start=monotonic_ms();
  const bool result=ams::mitm::lanplay::Probe(endpoint,std::strtoul(argv[3],nullptr,10));
  const auto elapsed=monotonic_ms()-start;
+ if (exhaust) {
+  // Restore the fixture's resources before sanitizer shutdown inspects /proc.
+  for (unsigned i = 0; i < held_count; i++) ::close(held_descriptors[i]);
+  if (setrlimit(RLIMIT_NOFILE, &previous_limit)) return 7;
+ }
  std::printf("%d %llu\n",result?1:0,static_cast<unsigned long long>(elapsed));
  return 0;
 }
