@@ -3,7 +3,7 @@ LANywhere Self-host 0.8.2 Beta
 中文
 
 安装
-将 atmosphere、switch、lanywhere 合并到 SD 卡根目录。覆盖同名文件，保留原目录和设置。
+在电脑解压，把 atmosphere 和 switch 合并到 SD 卡根目录。覆盖同名文件，保留原目录和设置。说明与许可可在电脑查看。
 安装会替换相同模块 ID 的 ldn_mitm。重启进入兼容的 Atmosphère，再从相册打开 LANywhere Self-host。
    @CONNECTION_ZH@
 默认英文。点右上角或按 RS 切换中英文，设置会保留。右下角可「查看教程」。
@@ -29,7 +29,7 @@ LANywhere Self-host 0.8.2 Beta
 English
 
 Install
-Merge atmosphere, switch and lanywhere into the SD card root.
+Extract on a computer and merge atmosphere and switch into the SD card root. Read the guide and license notices on the computer.
 Overwrite matching files, but do not delete or replace the whole existing atmosphere folder.
 This replaces an existing ldn_mitm with the same module ID. Restart into compatible Atmosphère and open LANywhere Self-host from Album.
    @CONNECTION_EN@

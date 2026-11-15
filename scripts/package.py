@@ -153,7 +153,7 @@ def package_files(version, server, port, embedded):
         setup = f"打开应用，确认服务器显示为 {server}:{port}。"
     entries["lanywhere/INSTALL.zh-CN.txt"] = (
         f"Switch Online {version}（Beta，跨网真机验收待完成）\n\n"
-        "安装：将包内文件合并到 SD 卡根目录，保留游戏、存档和 config.ini，重启进入虚拟系统。\n"
+        "安装：将 atmosphere 和 switch 合并到 SD 卡根目录，再重启进入虚拟系统。\n"
         "从相册打开 LANywhere Self-host。启动后显示约局，B 进入房间大厅。\n"
         "以后可在应用内点“更新”，关闭游戏后下载安装，完成后重启虚拟系统。\n"
         "安装中断时，从自制软件菜单打开 LANywhere Recovery。\n"
@@ -170,8 +170,8 @@ def package_files(version, server, port, embedded):
         connection_zh = "   服务器地址已内置，无需输入地址或端口。原有昵称和网络设置会保留。"
         connection_en = "   The server is built in; no address or port setup is needed. Existing preferences are kept."
     elif server is not None:
-        connection_zh = "   服务器配置随包提供，复制时请留意保留已有昵称和偏好。"
-        connection_en = "   Server configuration is included; preserve any existing nickname and preferences."
+        connection_zh = "   如无原有配置，将随包的 lanywhere/config.ini 复制到卡上。"
+        connection_en = "   If you have no existing configuration, also copy the included lanywhere/config.ini."
     else:
         connection_zh = "   请先在应用中设置服务器地址和端口。"
         connection_en = "   Configure a server address and port in the app first."

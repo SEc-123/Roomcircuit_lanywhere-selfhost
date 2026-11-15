@@ -4,7 +4,7 @@
 
 Play compatible Switch games' Local Wireless mode over the internet. Choose a public node using your Switch's connection test, or schedule a time and get room alerts on My server.
 
-1. Merge the SD ZIP into the SD card root, restart Atmosphère, and open **LANywhere Self-host** from Album. This replaces an existing ldn_mitm with the same module ID.
+1. Extract the SD ZIP on your computer. Merge `atmosphere/` and `switch/` into the SD card root, restart Atmosphère, and open **LANywhere Self-host** from Album. This replaces an existing ldn_mitm with the same module ID.
 2. **Host on your own.** Press **B** for the lobby, then **Y** to choose a node. **R** filters regions; **X** retests. Choose a node, return to the game and create a room in **Local Wireless**.
 3. **Join.** Find a room in the unified lobby; **ZL+ZR** filters game and region. Press **A**, check your connection to its node, then open the game and search in **Local Wireless**. A weak connection is shown before you decide to continue.
 
@@ -36,7 +36,7 @@ Development assisted by OpenAI Codex. Portions of the code were AI-generated.
 
 通过兼容 Switch 游戏的「本地无线」跨网联机。可由 Switch 实测后选择公共节点，也可提前约时间，在自有网络收开房提醒。
 
-1. 将[发布页](https://github.com/SEc-123/lanywhere-selfhost/releases/latest)的 SD 包解压合并到卡根目录，重启 Atmosphère，从相册打开 **LANywhere Self-host**。安装会替换同模块 ID 的 ldn_mitm。
+1. 在电脑解压[最新版](https://github.com/SEc-123/lanywhere-selfhost/releases/latest)的 SD 包，把 `atmosphere/` 和 `switch/` 合并到卡根目录。重启 Atmosphère 后从相册打开 **LANywhere Self-host**。安装会替换同模块 ID 的 ldn_mitm。
 2. **单人建房。** 按 **B** 进大厅，再按 **Y** 选节点。**R** 筛选地区，**X** 重新测速。选好后回游戏，在「本地无线」里建房。
 3. **加入。** 统一大厅查看各节点房间，**ZL+ZR** 筛选游戏和地区。按 **A** 选房，检查你到该节点的连接，再打开游戏，在「本地无线」里搜索。连接较差时先提示，由你决定是否继续。
 
