@@ -45,6 +45,7 @@ static Mutex lock;
 static UpdateView state;
 static Thread worker;
 static bool thread_created, socket_ready, canonical_path, initialized;
+static bool language_save_failed;
 static atomic_bool rollback_pending, must_exit;
 static atomic_bool worker_done, cancel_requested;
 static bool (*installation_allowed)(void *);
@@ -357,6 +358,7 @@ static void draw_update(const UpdateView *view)
     gfx_clear_gradient(BackgroundTop, BackgroundBottom);
     gfx_text(56, 40, 36, Text, "LANywhere");
     gfx_button(1068, 47, "RS", ui_chinese() ? "English" : "中文");
+    if (language_save_failed) gfx_text(1068, 92, 18, Error, ui_text("Not saved"));
     gfx_text(56, 142, 34, Text, ui_text(screen_title(view->screen)));
     char version[96];
     snprintf(version, sizeof(version), "%s %s", ui_text("Installed"), LANYWHERE_APP_VERSION);
@@ -404,7 +406,7 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
             const bool chinese = !ui_chinese();
             ui_set_language(chinese, false);
             (void)mkdir("sdmc:/lanywhere", 0777);
-            (void)ui_locale_save(UI_LOCALE_PATH, chinese);
+            language_save_failed = !ui_locale_save(UI_LOCALE_PATH, chinese);
             dirty = true;
         }
         if ((down & (HidNpadButton_B | HidNpadButton_Plus)) && view.screen != UpdateInstalling) {

@@ -100,7 +100,7 @@ namespace ams {
         alignas(os::MemoryPageSize) u8 g_thread_stack[ThreadStackSize];
         os::ThreadType g_thread;
 
-        alignas(0x40) constinit u8 g_heap_memory[128_KB];
+        alignas(0x40) constinit u8 g_heap_memory[512_KB];
         constinit lmem::HeapHandle g_heap_handle;
         constinit bool g_heap_initialized;
         constinit os::SdkMutex g_heap_init_mutex;
@@ -123,13 +123,13 @@ namespace ams {
 
         void *Allocate(size_t size)
         {
-            return lmem::AllocateFromExpHeap(GetHeapHandle(), size);
+            return lmem::AllocateFromExpHeap(GetHeapHandle(), std::max<size_t>(size, 1));
         }
 
         void Deallocate(void *p, size_t size)
         {
             AMS_UNUSED(size);
-            return lmem::FreeToExpHeap(GetHeapHandle(), p);
+            if (p) lmem::FreeToExpHeap(GetHeapHandle(), p);
         }
 
         namespace {
@@ -281,7 +281,9 @@ namespace ams {
 
 void *operator new(size_t size)
 {
-    return ams::mitm::Allocate(size);
+    void *allocation = ams::mitm::Allocate(size);
+    AMS_ABORT_UNLESS(allocation != nullptr);
+    return allocation;
 }
 
 void *operator new(size_t size, const std::nothrow_t &)
@@ -301,7 +303,9 @@ void operator delete(void *p, size_t size)
 
 void *operator new[](size_t size)
 {
-    return ams::mitm::Allocate(size);
+    void *allocation = ams::mitm::Allocate(size);
+    AMS_ABORT_UNLESS(allocation != nullptr);
+    return allocation;
 }
 
 void *operator new[](size_t size, const std::nothrow_t &)

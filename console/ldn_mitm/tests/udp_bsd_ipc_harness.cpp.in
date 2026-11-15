@@ -1,0 +1,87 @@
+using ams::mitm::bsd::BsdSpyService;
+using namespace ams;
+static sf::InAutoSelectBuffer Input(const void *p,size_t n){return {static_cast<const u8*>(p),n};}
+static sf::OutAutoSelectBuffer Output(void *p,size_t n){return {static_cast<u8*>(p),n};}
+int main(){
+ tcpstream::Proxy proxy(nullptr,nullptr);tcpstream::selected=&proxy;
+ GameNamespace kernel;
+ const sm::MitmProcessInfo owner{{333},{0x0100000000011111}};
+ auto make=[&](const sm::MitmProcessInfo &id){return std::make_unique<BsdSpyService>(std::make_shared<Service>(Service{&kernel}),id);};
+ auto service=make(owner),another=make(owner);
+ int ret=-1,error=-1;u32 length=0;
+ assert(service->Socket({&ret},{&error},AF_INET,SOCK_DGRAM,0)==0&&ret>=0);const int fd=ret;
+ const auto peer=tcpstream::MakeAddress({0x0a0d4321,45601});
+ assert(service->Connect({&ret},{&error},fd,Input(&peer,sizeof(peer)))==0&&ret==0);
+ u8 address[16]{};
+ assert(service->GetPeerName({&ret},{&error},{&length},fd,Output(address,sizeof(address)))==0&&ret==0&&length==16);
+ tcpstream::Endpoint result{};assert(tcpstream::ReadAddress(address,sizeof(address),&result)&&result.ip==0x0a0d4321&&result.port==45601);
+ assert(service->GetSockName({&ret},{&error},{&length},fd,Output(address,sizeof(address)))==0&&ret==0);
+ assert(tcpstream::ReadAddress(address,sizeof(address),&result)&&result.port);const u16 port=result.port;
+ const u8 payload[]={1,2,3};
+ assert(service->Write({&ret},{&error},fd,Input(payload,sizeof(payload)))==0&&ret==3&&lanywhere::sent_ip==0x0a0d4321&&lanywhere::sent_source==port);
+ assert(service->DuplicateSocket({&ret},{&error},{fd,0,0})==0&&ret>=0);const int copy=ret;
+ assert(service->Close({&ret},{&error},fd)==0&&ret==0);
+ assert(service->Write({&ret},{&error},copy,Input(payload,sizeof(payload)))==0&&ret==3);
+ assert(lanywhere::queue.Push(0x0a0d5555,45601,port,payload,sizeof(payload)));
+ assert(lanywhere::queue.Push(0x0a0d4321,45602,port,payload,sizeof(payload)));
+ tcpstream::NativePollFd input{copy,POLLIN,0},polled{};
+ assert(service->Poll({&ret},{&error},1,0,Input(&input,sizeof(input)),Output(&polled,sizeof(polled)))==0&&ret==0);
+ assert(lanywhere::queue.Push(0x0a0d4321,45601,port,payload,sizeof(payload)));
+ assert(service->Poll({&ret},{&error},1,0,Input(&input,sizeof(input)),Output(&polled,sizeof(polled)))==0&&ret==1&&(polled.revents&POLLIN));
+ u8 read[32]{};
+ assert(service->Recv({&ret},{&error},copy,2|0x80,Output(read,sizeof(read)))==0&&ret==3);
+ assert(service->Read({&ret},{&error},copy,Output(read,sizeof(read)))==0&&ret==3&&!memcmp(payload,read,3));
+ assert(lanywhere::queue.Has(port)); // Nonmatching peers were not consumed.
+ assert(service->Recv({&ret},{&error},copy,0x80,Output(read,sizeof(read)))==0&&ret==-1&&error==11);
+ assert(service->RecvMMsg({&ret},{&error},{copy,1,0,0,0,0},Output(read,sizeof(read)))==0&&ret==-1&&error==95);
+ assert(service->SendMMsg({&ret},{&error},{copy,1,0},Output(read,sizeof(read)))==0&&ret==-1&&error==95);
+ // Logical UDP bind identity is retained independently of transport availability.
+ assert(service->Socket({&ret},{&error},AF_INET,SOCK_DGRAM,0)==0&&ret>=0);const int bound=ret;
+ const auto virtual_local=tcpstream::MakeAddress({0x0a0d1111,0});
+ assert(service->Bind({&ret},{&error},bound,Input(&virtual_local,sizeof(virtual_local)))==0&&ret==0);
+ lanywhere::room=false;
+ assert(service->GetSockName({&ret},{&error},{&length},bound,Output(address,sizeof(address)))==0&&ret==0);
+ assert(tcpstream::ReadAddress(address,sizeof(address),&result)&&result.ip==0x0a0d1111&&result.port);
+ assert(service->Recv({&ret},{&error},copy,0x80,Output(read,sizeof(read)))==0&&ret==-1&&error==113);
+ lanywhere::room=true;
+ assert(service->Close({&ret},{&error},bound)==0&&ret==0);
+ assert(service->Shutdown({&ret},{&error},copy,2)==0&&ret==0);
+ assert(service->Write({&ret},{&error},copy,Input(payload,sizeof(payload)))==0&&ret==-1&&error==32);
+ assert(service->Read({&ret},{&error},copy,Output(read,sizeof(read)))==0&&ret==0);
+ assert(service->Close({&ret},{&error},copy)==0&&ret==0);
+ // Reconnecting a virtual UDP socket to a physical endpoint clears the virtual peer on all aliases.
+ assert(service->Socket({&ret},{&error},AF_INET,SOCK_DGRAM,0)==0&&ret>=0);const int changed=ret;
+ {const Result rc=service->Connect({&ret},{&error},changed,Input(&peer,sizeof(peer)));if(rc||ret)std::cerr<<"virtual reconnect rc="<<rc<<" ret="<<ret<<" error="<<error<<" commands="<<kernel.command_count[14]<<"\n";assert(rc==0&&ret==0);}
+ assert(service->Fcntl({&ret},{&error},changed,0,0)==0&&ret>=0);const int changed_copy=ret;
+ const int listener=::socket(AF_INET,SOCK_DGRAM,0);assert(listener>=0);
+ sockaddr_in physical{};physical.sin_family=AF_INET;physical.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+ assert(::bind(listener,reinterpret_cast<sockaddr*>(&physical),sizeof(physical))==0);socklen_t size=sizeof(physical);
+ assert(::getsockname(listener,reinterpret_cast<sockaddr*>(&physical),&size)==0);
+ const auto real_peer=tcpstream::MakeAddress({0x7f000001,ntohs(physical.sin_port)});
+ assert(service->Connect({&ret},{&error},changed_copy,Input(&real_peer,sizeof(real_peer)))==0&&ret==0);
+ lanywhere::sent_ip=0;
+ assert(service->Write({&ret},{&error},changed,Input(payload,sizeof(payload)))==0&&ret==3&&lanywhere::sent_ip==0);
+ assert(::recv(listener,read,sizeof(read),0)==3&&!memcmp(read,payload,3));
+ {const Result rc=service->Connect({&ret},{&error},changed,Input(&peer,sizeof(peer)));if(rc||ret)std::cerr<<"virtual reconnect rc="<<rc<<" ret="<<ret<<" error="<<error<<" commands="<<kernel.command_count[14]<<"\n";assert(rc==0&&ret==0);}
+ tcpstream::NativeAddress disconnect{};disconnect.bytes[0]=16;
+ assert(service->Connect({&ret},{&error},changed_copy,Input(&disconnect,sizeof(disconnect)))==0&&ret==0);
+ assert(service->GetPeerName({&ret},{&error},{&length},changed,Output(address,sizeof(address)))==0&&ret==-1);
+ {const Result rc=service->Connect({&ret},{&error},changed,Input(&peer,sizeof(peer)));if(rc||ret)std::cerr<<"virtual reconnect rc="<<rc<<" ret="<<ret<<" error="<<error<<" commands="<<kernel.command_count[14]<<"\n";assert(rc==0&&ret==0);}
+ service.reset(); // The second BSD session still owns the process table.
+ assert(another->GetPeerName({&ret},{&error},{&length},changed_copy,Output(address,sizeof(address)))==0&&ret==0);
+ auto replacement=make({{444},owner.program_id});
+ assert(replacement->GetPeerName({&ret},{&error},{&length},changed_copy,Output(address,sizeof(address)))==0&&ret==-1);
+ another.reset();
+ {std::scoped_lock lock(bsd::g_lock);assert(!bsd::Find(changed,{333,owner.program_id.value},false));}
+ assert(replacement->Close({&ret},{&error},changed)==0);
+ assert(replacement->Close({&ret},{&error},changed_copy)==0);
+ ::close(listener);
+ // Tracking-capacity failure closes the new kernel FD rather than returning an unusable virtual socket.
+ std::vector<int> opened;
+ for(int i=0;i<64;i++){assert(replacement->Socket({&ret},{&error},AF_INET,SOCK_DGRAM,0)==0&&ret>=0);opened.push_back(ret);}
+ const size_t kernel_count=kernel.sockets.size();
+ assert(replacement->Socket({&ret},{&error},AF_INET,SOCK_DGRAM,0)==0&&ret==-1&&error==105&&kernel.sockets.size()==kernel_count);
+ for(int n:opened)assert(replacement->Close({&ret},{&error},n)==0&&ret==0);
+ replacement.reset();lanywhere::queue.Clear();
+ std::cout<<"Actual UDP BSD hooks: peer names, read/write, filtering/peek, readiness, dup lifetime, physical reconnect, disconnect, shutdown, process cleanup and capacity passed\n";
+}

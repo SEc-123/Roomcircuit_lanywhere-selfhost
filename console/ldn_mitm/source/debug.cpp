@@ -26,126 +26,88 @@ static std::atomic_bool g_logging_enabled = false;
 
 ams::Result SetLogging(u32 enabled)
 {
-    g_logging_enabled = enabled;
-    
+    g_logging_enabled = enabled != 0;
     if (g_logging_enabled) {
-        R_TRY(ams::log::Initialize());
+        const ams::Result result = ams::log::Initialize();
+        if (R_FAILED(result)) g_logging_enabled = false;
+        return result;
     }
-    
-    R_SUCCEED();
+    return 0;
 }
 
 ams::Result GetLogging(u32 *enabled)
 {
     *enabled = g_logging_enabled;
-    
-    R_SUCCEED();
+    return 0;
 }
 
-namespace ams::log
-{
+namespace ams::log {
     namespace {
         constexpr const char LogFilePath[] = "sdmc:/ldn_mitm.log";
-        fs::FileHandle LogFile;
-        s64 LogOffset;
-
+        constexpr s64 MaxLogBytes = 256 * 1024;
         os::Mutex g_file_log_lock(true);
     }
 
-    Result Initialize()
-    {
-        if (g_logging_enabled) {
-            // Check if log file exists and create it if not
-            bool has_file;
-            R_TRY(fs::HasFile(&has_file, LogFilePath));
-            if (!has_file)
-            {
-                R_TRY(fs::CreateFile(LogFilePath, 0));
-            }
+    Result Initialize() {
+        if (!g_logging_enabled) return 0;
+        std::scoped_lock lock(g_file_log_lock);
+        bool exists = false;
+        R_TRY(fs::HasFile(&exists, LogFilePath));
+        if (!exists) R_TRY(fs::CreateFile(LogFilePath, 0));
+        fs::FileHandle file;
+        R_TRY(fs::OpenFile(&file, LogFilePath, fs::OpenMode_Write | fs::OpenMode_AllowAppend));
+        fs::CloseFile(file);
+        return 0;
+    }
 
-            // Get file write offset
-            R_TRY(fs::OpenFile(&LogFile, LogFilePath, fs::OpenMode_Write | fs::OpenMode_AllowAppend));
-            R_TRY(GetFileSize(&LogOffset, LogFile));
+    void Finalize() { g_logging_enabled = false; }
 
-            fs::CloseFile(LogFile);
+    void LogStr(const char *format, std::va_list arguments) {
+        if (!g_logging_enabled) return;
+        std::scoped_lock lock(g_file_log_lock);
+        BACKUP_TLS();
+        ON_SCOPE_EXIT { RESTORE_TLS(); };
+        fs::FileHandle file;
+        if (R_FAILED(fs::OpenFile(&file, LogFilePath, fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
+            g_logging_enabled = false;
+            return;
         }
-
-        R_SUCCEED();
+        ON_SCOPE_EXIT { fs::CloseFile(file); };
+        s64 offset = 0;
+        if (R_FAILED(fs::GetFileSize(&offset, file)) || offset < 0) { g_logging_enabled = false; return; }
+        char text[0x200];
+        const auto *thread = os::GetCurrentThread();
+        const auto time = os::GetSystemTick().ToTimeSpan();
+        const int prefix = util::TSNPrintf(text, sizeof(text), "[ts: %6lums t: %lu] ",
+            time.GetMilliSeconds(), os::GetThreadId(thread));
+        const size_t used = std::min<size_t>(prefix > 0 ? prefix : 0, sizeof(text) - 1);
+        const int body = util::TVSNPrintf(text + used, sizeof(text) - used, format, arguments);
+        const size_t count = used + std::min<size_t>(body > 0 ? body : 0, sizeof(text) - used - 1);
+        if (offset > MaxLogBytes - static_cast<s64>(count)) {
+            if (R_FAILED(fs::SetFileSize(file, 0))) { g_logging_enabled = false; return; }
+            offset = 0;
+        }
+        if (R_FAILED(fs::WriteFile(file, offset, text, count, fs::WriteOption::Flush)))
+            g_logging_enabled = false;
     }
 
-    void Finalize()
-    {
-        fs::FlushFile(LogFile);
-        fs::CloseFile(LogFile);
-    }
-
-    void LogPrefix()
-    {
-        char buf[0x100];
-        auto thread = os::GetCurrentThread();
-        auto ts = os::GetSystemTick().ToTimeSpan();
-
-        auto len = util::TSNPrintf(buf, sizeof(buf), "[ts: %6lums t: (%lu) %-22s p: %d/%d] ",
-                                   ts.GetMilliSeconds(),
-                                   os::GetThreadId(thread),
-                                   os::GetThreadNamePointer(thread),
-                                   os::GetThreadPriority(thread) + 28,
-                                   os::GetThreadCurrentPriority(thread) + 28);
-
-        R_ABORT_UNLESS(fs::WriteFile(LogFile, LogOffset, buf, len, fs::WriteOption::None));
-        LogOffset += len;
-    }
-
-    void LogStr(const char *fmt, std::va_list args)
-    {
-        if (g_logging_enabled)
-        {
-            std::scoped_lock lk(g_file_log_lock);
-            BACKUP_TLS();
-            R_ABORT_UNLESS(fs::OpenFile(&LogFile, LogFilePath, fs::OpenMode_Write | fs::OpenMode_AllowAppend));
-
-            LogPrefix();
-            char buf[0x100];
-            int len = util::TVSNPrintf(buf, sizeof(buf), fmt, args);
-            R_ABORT_UNLESS(fs::WriteFile(LogFile, LogOffset, buf, len, fs::WriteOption::Flush));
-            LogOffset += len;
-
-            fs::CloseFile(LogFile);
-            RESTORE_TLS();
+    void LogHexImpl(const void *data, int size) {
+        if (!g_logging_enabled || size <= 0 || !data) return;
+        std::scoped_lock lock(g_file_log_lock);
+        const auto *bytes = static_cast<const u8 *>(data);
+        LogFormatImpl("Bin Log: %d (%p)\n", size, data);
+        for (int offset = 0; g_logging_enabled && offset < size; offset += 16) {
+            char line[33]{};
+            const int count = std::min(size - offset, 16);
+            for (int i = 0; i < count; i++) std::snprintf(line + i * 2, 3, "%02x", bytes[offset + i]);
+            LogFormatImpl("%s\n", line);
         }
     }
 
-    void LogHexImpl(const void *data, int size)
-    {
-        if (g_logging_enabled)
-        {
-            u8 *dat = (u8 *)data;
-            char buf[0x100];
-            LogFormatImpl("Bin Log: %d (%p)\n", size, data);
-            BACKUP_TLS();
-            R_ABORT_UNLESS(fs::OpenFile(&LogFile, LogFilePath, fs::OpenMode_Write | fs::OpenMode_AllowAppend));
-            for (int i = 0; i < size; i += 16)
-            {
-                int s = MIN(size - i, 16);
-                buf[0] = 0;
-                for (int j = 0; j < s; j++)
-                {
-                    sprintf(buf + strlen(buf), "%02x", dat[i + j]);
-                }
-                sprintf(buf + strlen(buf), "\n");
-                R_ABORT_UNLESS(fs::WriteFile(LogFile, LogOffset, buf, strlen(buf), fs::WriteOption::Flush));
-                LogOffset += strlen(buf);
-            }
-            fs::CloseFile(LogFile);
-            RESTORE_TLS();
-        }
-    }
-
-    void LogFormatImpl(const char *fmt, ...)
-    {
-        std::va_list args;
-        va_start(args, fmt);
-        LogStr(fmt, args);
-        va_end(args);
+    void LogFormatImpl(const char *format, ...) {
+        std::va_list arguments;
+        va_start(arguments, format);
+        LogStr(format, arguments);
+        va_end(arguments);
     }
 }

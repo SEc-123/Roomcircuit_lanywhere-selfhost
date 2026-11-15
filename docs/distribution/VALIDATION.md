@@ -86,3 +86,12 @@ For Issue #2, a new read-only check received a PONG from the original LANywhere 
 ## 0.8.6 local acceptance package
 
 The app no longer shows or edits a player nickname in the lobby or room cards. The actual input and room-card fixtures cover both English and Chinese, including hidden-password rooms with an older host name present in the metadata. Legacy Create and Join keep their IPC layout. The native module reads the Switch name automatically for game name fields and uses a fixed fallback if needed. Tests cover valid Unicode, invalid system names, old nickname settings, and the selected name in the actual Join request.
+
+
+### 0.8.6 local audit remediation
+
+Both supplied audit reports were checked against the pinned sources. Confirmed lifecycle, UDP, overlay, storage, update-recovery and UI error paths were repaired. All 127 host suites passed. After the final scan-filter change, six affected native regressions passed again. The app, sysmodule and overlay cross-built for Switch; all 324 native source fingerprints match the verified artifacts. These are host and cross-build results, not physical-console acceptance.
+
+See the [finding dispositions and remaining boundaries](AUDIT-REVIEW-0.8.6.md). This candidate remains local: no production deployment, update-feed change or publication. Testing an existing 0.8.6 installation requires replacing the SD files because equal-version manifests do not offer an upgrade.
+
+中文：两份报告已按固定源码复核，确认的问题已整改。127 组宿主回归及最终扫描变更后的六项相关回归通过，三个 Switch 组件构建和源码指纹校验通过。本轮未部署或发布；实机、双机游戏和真实断网恢复仍待验收。已装 0.8.6 时请手动覆盖本地测试包。

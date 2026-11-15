@@ -35,6 +35,7 @@ async function checkDashboard() {
     if (!response.ok) throw new Error(`Dashboard returned HTTP ${response.status}`);
     const stats = await response.json();
     if (!stats.now || !stats.traffic) throw new Error('Unexpected dashboard response');
+    if (stats.now.services?.appointments === false) throw new Error('Appointment storage is unhealthy');
 }
 
 async function checkReadiness(allowPaused) {

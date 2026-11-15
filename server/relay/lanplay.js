@@ -172,6 +172,7 @@ function ldnRead(state, chunk) {
 // --- TCP mínimo: lo justo para la conversación de unión de ldn_mitm (pocos mensajes pequeños) ---------------------
 const TF = { FIN: 1, SYN: 2, RST: 4, PSH: 8, ACK: 16 };
 const MSS = 1360, RTO_START = 300, RTO_MAX = 4000, MAX_RETRIES = 10;
+const MAX_TCP_PENDING_BYTES = 64 * 1024, MAX_TCP_PENDING_SEGMENTS = 64;
 
 class Tcp {
     // send(pkt): entrega un paquete IPv4 al otro lado. Eventos: onData(buf), onOpen(), onClose().
@@ -182,6 +183,7 @@ class Tcp {
         this.una = this.snd;                               // el más antiguo sin confirmar
         this.rcv = 0;
         this.queue = [];                                   // segmentos enviados sin confirmar
+        this.queuedBytes = 0;
         this.pending = [];                                 // datos que aún no caben (ventana)
         this.rto = RTO_START;
         this.timer = null;
@@ -201,12 +203,19 @@ class Tcp {
     }
     // Envía con retransmisión hasta que se confirme (SYN y FIN ocupan un número de secuencia).
     reliable(flags, data = Buffer.alloc(0)) {
+        if (this.state === 'gone') return false;
         const len = data.length + (flags & (TF.SYN | TF.FIN) ? 1 : 0);
+        if (this.queuedBytes + len > MAX_TCP_PENDING_BYTES || this.queue.length >= MAX_TCP_PENDING_SEGMENTS) {
+            this.abort();
+            return false;
+        }
         const seg = { seq: this.snd, flags, data, end: (this.snd + len) >>> 0 };
         this.snd = seg.end;
         this.queue.push(seg);
+        this.queuedBytes += len;
         this.segment(flags, data, seg.seq);
         this.arm();
+        return true;
     }
     arm() {
         if (this.timer || !this.queue.length) return;
@@ -231,7 +240,15 @@ class Tcp {
         this.reliable(TF.SYN | TF.ACK);
     }
     write(buf) {
-        for (let i = 0; i < buf.length; i += MSS) this.reliable(TF.ACK | TF.PSH, buf.subarray(i, i + MSS));
+        if (this.state === 'gone') return false;
+        if (buf.length > MAX_TCP_PENDING_BYTES - this.queuedBytes ||
+            Math.ceil(buf.length / MSS) > MAX_TCP_PENDING_SEGMENTS - this.queue.length) {
+            this.abort();
+            return false;
+        }
+        for (let i = 0; i < buf.length; i += MSS)
+            if (!this.reliable(TF.ACK | TF.PSH, buf.subarray(i, i + MSS))) return false;
+        return true;
     }
     close() {
         if (this.state === 'established' || this.state === 'close-wait') {
@@ -252,6 +269,7 @@ class Tcp {
         const was = this.state;
         this.state = 'gone';
         this.queue = [];
+        this.queuedBytes = 0;
         if (was !== 'gone') this.onClose();
     }
     // Segmento recibido para esta conexión.
@@ -304,7 +322,11 @@ class Tcp {
     }
     acked(ack) {
         const before = this.queue.length;
+        // An ACK beyond sent bytes must not free the retained data budget.
+        if (((ack - this.snd) | 0) > 0 || ((ack - this.una) | 0) < 0) return;
+        this.una = ack;
         this.queue = this.queue.filter((s) => ((ack - s.end) | 0) < 0);
+        this.queuedBytes = this.queue.reduce((sum, s) => sum + s.data.length + (s.flags & (TF.SYN | TF.FIN) ? 1 : 0), 0);
         if (this.queue.length !== before) {
             this.retries = 0;
             this.rto = RTO_START;

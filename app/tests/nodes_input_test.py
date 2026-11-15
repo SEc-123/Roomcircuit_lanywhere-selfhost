@@ -26,6 +26,7 @@ HidNpadButton_L=16,HidNpadButton_R=32,HidNpadButton_ZL=64,HidNpadButton_ZR=128,
 HidNpadButton_StickR=256,HidNpadButton_AnyUp=512,HidNpadButton_AnyDown=1024};
 #define NODE_ROWS 6
 #define NODE_ALL_REGIONS 255u
+static const char *keyboard_error;
 static u64 inputs[8];static size_t frame,frames;static unsigned draws;
 static HidTouchScreenState screen;
 static int hidGetTouchScreenStates(HidTouchScreenState *out,int n){assert(n==1);*out=screen;return 1;}

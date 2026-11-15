@@ -9,7 +9,7 @@ namespace ams::mitm::lanywhere {
     void CancelAppointmentReady(u64 id);
 
     void InitializeAppointmentSubscriptions();
-    void GetAppointmentSubscriptions(AppointmentSubscriptions *out);
+    bool GetAppointmentSubscriptions(AppointmentSubscriptions *out);
     u32 SetAppointmentSubscription(const AppointmentWatchRequest &request);
     void SyncAppointmentClock(u64 server_now);
     u32 AppointmentAlertState();

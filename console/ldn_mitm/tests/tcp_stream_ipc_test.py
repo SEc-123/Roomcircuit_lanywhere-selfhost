@@ -12,6 +12,11 @@ template=Path(__file__).with_name('tcp_stream_ipc_harness.cpp.in').read_text();a
 header=(root/'console/ldn_mitm/source/bsd_spy.hpp').read_text()
 sdk=(root/'console/Atmosphere-libs/libstratosphere/include/stratosphere/ncm/ncm_content_meta_id.hpp').read_text()
 sdk_predicate='\n'.join(re.findall(r'inline constexpr const ApplicationId ApplicationId::(?:Start|End)\s*=\s*\{[^}]+\};',sdk))+'\n'+slices.function(sdk,'inline constexpr bool IsApplicationId(const ProgramId &program_id)')
+table = source[source.index('        struct Destination {'):source.index('        os::Tick g_last_summary;')]
+helpers = '\n'.join(slices.function(source, signature) for signature in [
+    'SocketStats *Find(', 'void OpenSocketOwner(', 'void CloseSocketOwner(',
+    'template<class Update> void UpdateAliases(', 'bool DuplicateUdp(', 'SocketStats UdpSocket(', 'bool UdpReadable('])
+template = template.replace('/* UDP_TABLE_SOURCE */', table + '\n' + helpers)
 template=template.replace('/* SDK_PREDICATE */',sdk_predicate).replace('/* BSD_PREDICATE */',slices.function(header,'static bool ShouldMitm('))
 with tempfile.TemporaryDirectory(prefix='tcp-actual-ipc-') as tmp:
  tmp=Path(tmp);cpp=tmp/'test.cpp';binary=tmp/'test';cpp.write_text(template.replace('/* ACTUAL_SOURCE */',functions))

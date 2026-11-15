@@ -160,3 +160,24 @@ test('real relay updater socket cannot join rooms and active game connections ca
     game.send(0x30); assert.equal((await game.frame()).body[0], 4);
     game.send(3); game.send(5); assert.equal((await game.frame()).type, 0x86);
 });
+
+test('monthly pause drains transfers and resume permits new signed metadata and downloads', async t => {
+    const directory = await temporary(t), snapshot = await install(directory);
+    const server = await moduleServer(t, directory);
+    const client = await peer(t, server.port);
+    client.send(0x31, request(snapshot.hash, 0));
+    assert.equal((await client.frame()).type, 0xb1);
+    server.manager.pause();
+    assert.equal(server.manager.snapshot().transfers, 0);
+    client.send(0x30);
+    assert.equal((await client.frame()).body[0], 11);
+    server.manager.resume();
+    client.send(0x30);
+    assert.deepEqual((await client.frame()).body, snapshot.manifest);
+    client.send(0x31, request(snapshot.hash, 0));
+    assert.equal((await client.frame()).type, 0xb1);
+    server.manager.shutdown();
+    server.manager.resume();
+    client.send(0x30);
+    assert.equal((await client.frame()).body[0], 11, 'final shutdown cannot resume');
+});

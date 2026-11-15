@@ -10,7 +10,7 @@ function create({ directory, send, error, maxTransfers = 8, maxPerIp = 2, interv
     if (directory !== undefined && (!path.isAbsolute(directory) || directory.includes('\0')))
         throw new Error('LANYWHERE_UPDATE_DIR must be an absolute directory');
     const sessions = new Map(), perIp = new Map(), updateSockets = new WeakSet();
-    let activeTransfers = 0, reads = 0, closed = false;
+    let activeTransfers = 0, reads = 0, closed = false, paused = false;
 
     async function openRegular(filename, expectedBytes) {
         const file = await fs.promises.open(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -35,7 +35,7 @@ function create({ directory, send, error, maxTransfers = 8, maxPerIp = 2, interv
     }
 
     function alive(socket, session) {
-        return !closed && !session.closed && !socket.destroyed && !socket.writableEnded;
+        return !closed && !paused && !session.closed && !socket.destroyed && !socket.writableEnded;
     }
 
     function close(socket) {
@@ -106,7 +106,7 @@ function create({ directory, send, error, maxTransfers = 8, maxPerIp = 2, interv
 
     function handle(socket, type, body) {
         if (type !== wire.MANIFEST_REQUEST && type !== wire.CHUNK_REQUEST) return false;
-        if (!directory || closed) { error(socket, 11, 'Online updates are unavailable.'); return true; }
+        if (!directory || closed || paused) { error(socket, 11, 'Online updates are unavailable.'); return true; }
         if (body.length !== (type === wire.MANIFEST_REQUEST ? 0 : 36)) {
             error(socket, 4, 'Invalid update request.'); return true;
         }
@@ -128,6 +128,8 @@ function create({ directory, send, error, maxTransfers = 8, maxPerIp = 2, interv
     }
 
     return { handle, has: socket => updateSockets.has(socket), close,
+        pause() { paused = true; for (const socket of sessions.keys()) close(socket); },
+        resume() { if (!closed) paused = false; },
         shutdown() { closed = true; for (const socket of sessions.keys()) close(socket); },
         snapshot: () => ({ sessions: sessions.size, transfers: activeTransfers, reads }) };
 }

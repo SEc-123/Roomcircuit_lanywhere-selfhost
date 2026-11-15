@@ -106,16 +106,24 @@ bool room_password_tick(RoomPasswordView *view, LobbyRoomId target, bool known_l
     return dirty;
 }
 
+static const char *keyboard_error;
+
 static bool ask_password(char password[ROOM_PASSCODE_MAX + 1], const char *header, const char *hint)
 {
+    keyboard_error = NULL;
     SwkbdConfig keyboard;
-    if (R_FAILED(swkbdCreate(&keyboard, 0))) return false;
+    if (R_FAILED(swkbdCreate(&keyboard, 0))) {
+        keyboard_error = "Could not open the keyboard. Try again.";
+        return false;
+    }
     swkbdConfigMakePresetPassword(&keyboard);
     swkbdConfigSetHeaderText(&keyboard, header);
     swkbdConfigSetSubText(&keyboard, hint);
     swkbdConfigSetStringLenMax(&keyboard, ROOM_PASSCODE_MAX);
     const Result input = swkbdShow(&keyboard, password, ROOM_PASSCODE_MAX + 1);
     swkbdClose(&keyboard);
+    if (R_FAILED(input) && input != MAKERESULT(Module_Libnx, LibnxError_LibAppletBadExit))
+        keyboard_error = "Could not open the keyboard. Try again.";
     return R_SUCCEEDED(input);
 }
 
@@ -149,7 +157,7 @@ const char *room_password_edit(Service *service, const char room[8], bool suppor
     char password[ROOM_PASSCODE_MAX + 1] = {0};
     const char *hint = supports_hidden ? ui_text("Enter the game password. Leave blank to clear.") :
                                         ui_text("Visible to everyone. Leave blank to clear.");
-    if (!ask_password(password, ui_text("Edit game password"), hint)) return NULL;
+    if (!ask_password(password, ui_text("Edit game password"), hint)) return keyboard_error ? ui_text(keyboard_error) : NULL;
     const size_t length = password_length(password);
     if (!valid_password(password, length)) return ui_text("Use up to 24 letters, numbers or symbols.");
 
@@ -173,7 +181,7 @@ const char *room_password_unlock(Service *service, RoomPasswordView *view)
     if (!view->locked || view->pending || !view->room.game_id) return NULL;
     char password[ROOM_PASSCODE_MAX + 1] = {0};
     if (!ask_password(password, ui_text("Enter game password"), ui_text("Ask the host for the password.")))
-        return NULL;
+        return keyboard_error ? ui_text(keyboard_error) : NULL;
     const size_t length = password_length(password);
     if (!length) return ui_text("Enter the room password.");
     if (!valid_password(password, length)) return ui_text("Use up to 24 letters, numbers or symbols.");

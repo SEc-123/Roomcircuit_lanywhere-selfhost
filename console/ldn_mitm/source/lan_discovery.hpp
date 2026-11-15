@@ -6,6 +6,8 @@
 #include <thread>
 #include <array>
 #include <mutex>
+#include <atomic>
+#include <cstdlib>
 #include <unordered_map>
 #include <stdint.h>
 #include <unistd.h>
@@ -16,7 +18,7 @@
 #include "tcp_stream_proxy.hpp"
 
 namespace ams::mitm::ldn {
-    const size_t StackSize = 0x4000;
+    const size_t StackSize = 0x8000;
     enum class NodeStatus : u8 {
         Disconnected,
         Connect,
@@ -135,7 +137,8 @@ namespace ams::mitm::ldn {
             friend class LDTcpSocket;
             friend class LanStation;
             // 0: udp 1: tcp 2: client
-            os::Mutex pollMutex;
+            os::Mutex lifecycleMutex{true};
+            mutable os::Mutex pollMutex;
             os::Mutex scanResultsMutex{false};
             std::unique_ptr<LDUdpSocket> udp;
             std::unique_ptr<LDTcpSocket> tcp;
@@ -143,15 +146,19 @@ namespace ams::mitm::ldn {
             std::array<NodeLatestUpdate, NodeCountMax> nodeChanges;
             std::array<u8, NodeCountMax> nodeLastStates;
             static void Worker(void* args);
-            NifmRequest request;
-            int originalMtu;
-            bool stop;
-            bool initialized;
+            NifmRequest request{};
+            bool requestCreated = false, threadCreated = false;
+            std::atomic<bool> stop{false}, initialized{false};
+            u8 controlBuffer[lanywhere::MaxControl]{};
+            static constexpr size_t MaxScanResults = 8;
+            bool roomScanActive = false;
+            ScanFilter activeScanFilter{};
             NetworkInfo networkInfo;
             u16 listenPort;
             os::ThreadType workerThread;
             CommState state;
             int hostMember;  // LANywhere: miembro de la sala que es el anfitrión (en estación), o -1
+            bool onlineGame = false;
             bool autoRoom;   // LANywhere: la sala la abrió ldn para un grupo abierto (se sale con el grupo)
             const u64 hostProgramId;  // accepted ldn:u session caller; not an LCID or verified application ID
             const u64 callerProcessId;
@@ -190,8 +197,10 @@ namespace ams::mitm::ldn {
             void resetStations();
             Result getFakeMac(MacAddress *mac);
             Result getNodeInfo(NodeInfo *node, const UserConfig *userConfig, u16 localCommunicationVersion);
-            LanEventFunc lanEvent;
-            std::unique_ptr<u8[]> stack;
+            LanEventFunc lanEvent = EmptyFunc;
+            struct FreeStack { void operator()(u8 *memory) const { std::free(memory); } };
+            std::unique_ptr<u8[], FreeStack> stack;
+            Result restoreNetworkResources();
         public:
             Result initialize(LanEventFunc lanEvent = EmptyFunc, bool listening = true);
             Result finalize();
@@ -215,7 +224,7 @@ namespace ams::mitm::ldn {
         public:
             LANDiscovery(u16 port = DefaultPort, u64 caller_program_id = 0, u64 caller_process_id = 0) :
                 disconnect_reason(DisconnectReason::None),
-                pollMutex(false),
+                pollMutex(true),
                 stations({{{1, this}, {2, this}, {3, this}, {4, this}, {5, this}, {6, this}, {7, this}}}),
                 stop(false), initialized(false),
                 networkInfo({}), listenPort(port),
@@ -223,7 +232,7 @@ namespace ams::mitm::ldn {
                 hostMember(-1), autoRoom(false), hostProgramId(caller_program_id), callerProcessId(caller_process_id), publicGroupCount(0)
             {
                 do { os::GenerateRandomBytes(&this->tcpBindingId,sizeof(this->tcpBindingId)); } while(!this->tcpBindingId);
-                this->stack = std::make_unique<u8[]>(os::ThreadStackAlignment + StackSize);
+                this->stack.reset(static_cast<u8 *>(std::malloc(os::ThreadStackAlignment + StackSize)));
                 LogFormat("LANDiscovery");
             };
             ~LANDiscovery();
@@ -231,15 +240,21 @@ namespace ams::mitm::ldn {
                 return this->listenPort;
             }
             CommState getState() const {
+                std::scoped_lock lock(this->pollMutex);
                 return this->state;
             };
+            DisconnectReason getDisconnectReason() const {
+                std::scoped_lock lock(this->pollMutex);
+                return this->disconnect_reason;
+            }
             void setState(CommState v) {
+                std::scoped_lock lock(this->pollMutex);
                 const bool leaving=(this->state==CommState::AccessPointCreated||this->state==CommState::StationConnected)&&
                     v!=CommState::AccessPointCreated&&v!=CommState::StationConnected;
                 if(leaving)tcpstream::Global().EndBinding(this->tcpBindingId);
                 this->state = v;
                 this->refreshTcpBinding();
-                this->lanEvent();
+                if (this->lanEvent) this->lanEvent();
             };
             int stationCount();
         protected:

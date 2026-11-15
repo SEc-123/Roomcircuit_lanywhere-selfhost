@@ -22,19 +22,37 @@ uint64_t node_probe_now_ms(void)
     return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
 }
 
+static void guard_lock(NodeProbeGuard *guard)
+{
+    while (atomic_exchange_explicit(&guard->locked, true, memory_order_acquire))
+        poll(NULL, 0, 1);
+}
+
+static void guard_unlock(NodeProbeGuard *guard)
+{
+    atomic_store_explicit(&guard->locked, false, memory_order_release);
+}
+
 void node_probe_guard_poll(NodeProbeGuard *guard, bool cancel)
 {
     if (!guard)
         return;
+    guard_lock(guard);
     const unsigned handle = atomic_load(&guard->handle);
     const uint64_t deadline = atomic_load(&guard->deadline);
-    if (!handle || (!cancel && node_probe_now_ms() < deadline))
+    if (!handle || (!cancel && node_probe_now_ms() < deadline)) {
+        guard_unlock(guard);
         return;
+    }
+    atomic_store(&guard->handle, 0);
 #ifdef __SWITCH__
     (void)resolverCancel(handle);
 #else
     (void)deadline;
 #endif
+    // Retiring the request waits for cancellation before its worker can reuse
+    // the resolver thread's handle for another lookup.
+    guard_unlock(guard);
 }
 
 static bool wait_socket(int fd, short events, uint64_t deadline, const atomic_bool *cancel)
@@ -102,15 +120,20 @@ static int open_node(const char *host, uint16_t port, NodeProbeKind kind, uint64
         const unsigned handle = resolverGetCancelHandle();
         if (!handle || atomic_load(cancel))
             return -1;
+        guard_lock(guard);
         atomic_store(&guard->deadline, deadline);
         atomic_store(&guard->handle, handle);
+        guard_unlock(guard);
     }
 #else
     (void)guard;
 #endif
     const int resolved = getaddrinfo(host, NULL, &hints, &addresses);
-    if (guard)
+    if (guard) {
+        guard_lock(guard);
         atomic_store(&guard->handle, 0);
+        guard_unlock(guard);
+    }
     if (resolved != 0)
         return -1;
     if (atomic_load(cancel) || node_probe_now_ms() >= deadline) {

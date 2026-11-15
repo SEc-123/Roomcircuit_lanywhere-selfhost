@@ -5,6 +5,8 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tarfile
 import tempfile
@@ -148,6 +150,40 @@ class StateBackupTest(unittest.TestCase):
                 self.assertEqual(len(staged), int(fail_rollback))
                 if fail_rollback:
                     self.assertEqual(staged[0].read_bytes(), LOCAL_ENV)
+
+
+    def test_interrupted_restore_blocks_startup_and_rerun_finishes_consistent_state(self):
+        archive = self.valid_backup()
+        self.env.write_bytes(LOCAL_ENV)
+        self.traffic.write_bytes(counter(self.month, 50))
+        script = r"""
+import importlib.util, os, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('state', sys.argv[1])
+state = importlib.util.module_from_spec(spec); spec.loader.exec_module(state)
+root = Path(sys.argv[2])
+state.PATHS = {key: (root/key, limit) for key, (_, limit) in state.PATHS.items()}
+replace = os.replace
+count = 0
+def interrupted(source, target):
+    global count
+    replace(source, target)
+    count += 1
+    if count == 1: os._exit(91)
+os.replace = interrupted
+state.restore(Path(sys.argv[3]))
+"""
+        child = subprocess.run([sys.executable, '-c', script, str(Path(STATE.__file__)), str(self.files), str(archive)])
+        self.assertEqual(child.returncode, 91)
+        self.assertTrue(STATE.restore_marker().is_file())
+        self.assertEqual(self.env.read_bytes(), INITIAL_ENV)
+        self.assertEqual(self.traffic.read_bytes(), counter(self.month, 50))
+        with self.assertRaisesRegex(ValueError, 'restore is incomplete'):
+            STATE.backup(self.root/'mixed.tar.gz')
+        STATE.restore(archive)
+        self.assertFalse(STATE.restore_marker().exists())
+        self.assertEqual(self.env.read_bytes(), INITIAL_ENV)
+        self.assertEqual(self.traffic.read_bytes(), counter(self.month, 100))
 
 
 if __name__ == '__main__':

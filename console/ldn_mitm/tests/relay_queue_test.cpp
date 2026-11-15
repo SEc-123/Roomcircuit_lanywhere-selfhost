@@ -8,6 +8,8 @@ int main() {
     const uint8_t data[] = {1,2,3,4};
     uint8_t out[4]{}; uint32_t ip{}; uint16_t port{};
     assert(q.Push(42, 7, 8, data, sizeof(data)));
+    assert(q.Has(8, 42, 7) && !q.Has(8, 43, 7) && !q.Has(8, 42, 9));
+    assert(q.Take(8, out, sizeof(out), &ip, &port, false, 43, 7) == -1 && q.Has(8));
     assert(q.Take(8, out, 2, &ip, &port, true) == 2 && ip == 42 && port == 7 && out[1] == 2);
     assert(q.Has(8));
     assert(q.Take(8, out, sizeof(out), &ip, &port, false) == 4 && out[3] == 4);

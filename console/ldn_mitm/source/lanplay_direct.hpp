@@ -34,8 +34,8 @@ int MemberOfIp(uint32_t ip);
 bool SendData(uint32_t destination, uint16_t source_port, uint16_t destination_port, const void *data,
               size_t size);
 ssize_t ReceiveData(uint16_t port, void *out, size_t capacity, uint32_t *source, uint16_t *source_port,
-                    bool peek);
-bool HasData(uint16_t port);
+                    bool peek, uint32_t peer_ip = 0, uint16_t peer_port = 0);
+bool HasData(uint16_t port, uint32_t peer_ip = 0, uint16_t peer_port = 0);
 bool SendStream(uint64_t epoch, const void *body, size_t size);
 void SetStreamReply(StreamReply reply);
 void Shutdown();

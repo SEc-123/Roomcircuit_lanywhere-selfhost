@@ -23,3 +23,8 @@ void swkbdConfigSetSubText(SwkbdConfig *, const char *);
 void swkbdConfigSetStringLenMax(SwkbdConfig *, unsigned);
 Result swkbdShow(SwkbdConfig *, char *, size_t);
 void swkbdClose(SwkbdConfig *);
+
+#ifndef MAKERESULT
+#define MAKERESULT(m,d) ((m)|((d)<<9))
+#endif
+enum { Module_Libnx = 345, LibnxError_LibAppletBadExit = 46 };

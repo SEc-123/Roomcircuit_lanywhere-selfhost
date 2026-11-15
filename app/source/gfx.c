@@ -87,8 +87,9 @@ bool gfx_save_png(const char *path)
         png_write_row(png, (png_const_bytep)(g_px + (size_t)y * g_stride));
     png_write_end(png, NULL);
     png_destroy_write_struct(&png, &info);
-    fclose(f);
-    return true;
+    const bool written = !ferror(f);
+    const bool closed = fclose(f) == 0;
+    return written && closed;
 }
 
 // El framebuffer es RGBA_8888 en memoria (R en el byte bajo); los colores de la API son 0xAARRGGBB.

@@ -15,9 +15,11 @@ static unsigned subscription_reads = 0, subscription_writes = 0;
 static AppointmentWatchRequest subscription_request{};
 static u32 subscription_status = AppointmentOk;
 
-void GetAppointmentSubscriptions(AppointmentSubscriptions *out) {
+static bool subscription_read_ok = true;
+bool GetAppointmentSubscriptions(AppointmentSubscriptions *out) {
     ++subscription_reads;
     *out = {2, 0, {7, 9}};
+    return subscription_read_ok;
 }
 
 u32 SetAppointmentSubscription(const AppointmentWatchRequest &request) {
@@ -205,6 +207,11 @@ int main(){
   assert(subscription_reads == 1 && subscriptions.count == 2 && subscriptions.reserved == 0);
   assert(subscriptions.ids[0] == 7 && subscriptions.ids[1] == 9 && subscriptions.ids[2] == 0);
   assert(guard.front() == 0xcd && guard.back() == 0xcd);
+  subscription_read_ok=false;
+  std::fill(guard.begin(),guard.end(),0xcd);
+  assert(service.ReadAppointmentSubscriptions({guard.data()+1,sizeof(AppointmentSubscriptions)}) != 0);
+  assert(std::all_of(guard.begin(),guard.end(),[](u8 value){return value==0xcd;}));
+  subscription_read_ok=true;
   checks++;
  }
  {

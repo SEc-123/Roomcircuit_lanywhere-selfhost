@@ -30,8 +30,10 @@ namespace ams::mitm::bsd {
         struct SocketStats {
             bool used;
             s32 fd;
-            u64 program_id;
-            s32 type, protocol;
+            u64 process_id, program_id, identity;
+            s32 domain, type, protocol;
+            u32 bound_ip;
+            bool virtual_bound, physical_peer, read_shutdown, write_shutdown, shutdown_exempt;
             u16 bound_port;  // el de bind(): los paquetes de la sala para ese puerto son de este socket
             u32 peer_ip;     // connect() a otro miembro de la sala (UDP): send() va por el servidor
             u16 peer_port;
@@ -43,6 +45,9 @@ namespace ams::mitm::bsd {
 
         constinit os::SdkMutex g_lock;
         SocketStats g_sockets[MaxSockets];
+        struct ClientRefs { tcpstream::Owner owner{}; unsigned count{}; };
+        ClientRefs g_clients[MaxSockets];
+        u64 g_socket_identity = 0;
         os::Tick g_last_summary;
         u32 g_overflow;
 
@@ -84,8 +89,16 @@ namespace ams::mitm::bsd {
                 }
             }
             s64 size = 0;
-            if (R_SUCCEEDED(fs::GetFileSize(std::addressof(size), file))) {
-                static_cast<void>(fs::WriteFile(file, size, line, std::min<int>(len, sizeof(line) - 2) + 1, fs::WriteOption::Flush));
+            if (R_SUCCEEDED(fs::GetFileSize(std::addressof(size), file)) && size >= 0) {
+                const size_t bytes = std::min<int>(len, sizeof(line) - 2) + 1;
+                if (size > 256 * 1024 - static_cast<s64>(bytes)) {
+                    if (R_FAILED(fs::SetFileSize(file, 0))) {
+                        fs::CloseFile(file);
+                        return;
+                    }
+                    size = 0;
+                }
+                static_cast<void>(fs::WriteFile(file, size, line, bytes, fs::WriteOption::Flush));
             }
             fs::CloseFile(file);
         }
@@ -101,10 +114,10 @@ namespace ams::mitm::bsd {
             return out;
         }
 
-        SocketStats *Find(s32 fd, u64 program_id, bool create) {
+        SocketStats *Find(s32 fd, tcpstream::Owner owner, bool create) {
             SocketStats *free_slot = nullptr;
             for (auto &s : g_sockets) {
-                if (s.used && s.fd == fd && s.program_id == program_id) {
+                if (s.used && s.fd == fd && s.program_id == owner.program && s.process_id == owner.process) {
                     return std::addressof(s);
                 }
                 if (!s.used && free_slot == nullptr) {
@@ -115,9 +128,64 @@ namespace ams::mitm::bsd {
                 std::memset(free_slot, 0, sizeof(*free_slot));
                 free_slot->used = true;
                 free_slot->fd = fd;
-                free_slot->program_id = program_id;
+                free_slot->program_id = owner.program;
+                free_slot->process_id = owner.process;
+                do { ++g_socket_identity; } while (!g_socket_identity);
+                free_slot->identity = g_socket_identity;
             }
             return create ? free_slot : nullptr;
+        }
+
+        void OpenSocketOwner(tcpstream::Owner owner) {
+            std::scoped_lock lock(g_lock);
+            for (auto &client : g_clients) {
+                if (client.count && client.owner.process == owner.process && client.owner.program == owner.program) {
+                    ++client.count;
+                    return;
+                }
+            }
+            for (auto &client : g_clients) if (!client.count) { client = {owner, 1}; return; }
+        }
+
+        void CloseSocketOwner(tcpstream::Owner owner) {
+            std::scoped_lock lock(g_lock);
+            for (auto &client : g_clients) {
+                if (client.count && client.owner.process == owner.process && client.owner.program == owner.program) {
+                    if (--client.count) return;
+                    break;
+                }
+            }
+            for (auto &socket : g_sockets)
+                if (socket.used && socket.process_id == owner.process && socket.program_id == owner.program) socket = {};
+        }
+
+        template<class Update> void UpdateAliases(const SocketStats &socket, Update update) {
+            const u64 identity = socket.identity;
+            for (auto &alias : g_sockets) if (alias.used && alias.identity == identity) update(alias);
+        }
+
+        bool DuplicateUdp(tcpstream::Owner owner, s32 original, s32 duplicate) {
+            std::scoped_lock lock(g_lock);
+            const auto *source = Find(original, owner, false);
+            if (!source || source->type != SOCK_DGRAM || original == duplicate) return true;
+            const SocketStats saved = *source;
+            auto *target = Find(duplicate, owner, true);
+            if (!target) return false;
+            *target = saved;
+            target->fd = duplicate;
+            return true;
+        }
+
+        SocketStats UdpSocket(tcpstream::Owner owner, s32 fd) {
+            std::scoped_lock lock(g_lock);
+            const auto *socket = Find(fd, owner, false);
+            return socket && socket->domain == AF_INET && socket->type == SOCK_DGRAM ? *socket : SocketStats{};
+        }
+
+        bool UdpReadable(tcpstream::Owner owner, s32 fd) {
+            const auto socket = UdpSocket(owner, fd);
+            if (!socket.used || !socket.bound_port || socket.physical_peer) return false;
+            return socket.read_shutdown || lanywhere::HasData(socket.bound_port, socket.peer_ip, socket.peer_port);
         }
 
         void Summary(const SocketStats &s, const char *why) {
@@ -193,16 +261,18 @@ namespace ams::mitm::bsd {
             if(out.GetSize())std::memcpy(out.GetPointer(),&addr,std::min(out.GetSize(),sizeof(addr)));
         }
 
-        ssize_t TakeRoomPacket(s32 fd, u64 program_id, void *buffer, size_t size, sockaddr_in *from, s32 flags);
+        ssize_t TakeRoomPacket(s32 fd, tcpstream::Owner owner, void *buffer, size_t size, sockaddr_in *from, s32 flags);
 
     }
 
     BsdSpyService::BsdSpyService(std::shared_ptr<::Service> &&service,const sm::MitmProcessInfo &client)
         :sf::MitmServiceImplBase(std::forward<std::shared_ptr<::Service>>(service),client) {
         tcpstream::Global().ClientOpen(TcpOwner(client));
+        OpenSocketOwner(TcpOwner(client));
     }
     BsdSpyService::~BsdSpyService() {
         tcpstream::Global().ClientClose(TcpOwner(m_client_info));
+        CloseSocketOwner(TcpOwner(m_client_info));
     }
 
     // Ask the forwarded bsd service about the *game's* descriptor, not this sysmodule's socket table.
@@ -237,7 +307,7 @@ namespace ams::mitm::bsd {
         *err = resolved.error;
         if (*port) {
             std::scoped_lock lk(g_lock);
-            if (auto *s = Find(fd, m_client_info.program_id.value, false)) s->bound_port = *port;
+            if (auto *s = Find(fd, TcpOwner(m_client_info), false)) UpdateAliases(*s, [&](SocketStats &alias) { alias.bound_port = *port; });
             else { *port = 0; *err = ErrnoBuffers; }
         }
         R_SUCCEED();
@@ -253,12 +323,14 @@ namespace ams::mitm::bsd {
         const auto owner=TcpOwner(m_client_info);
         u16 ports[MaxPollFds] = {};
         bool room = false;
-        for(size_t i=0;i<n;i++)room=room||tcpstream::NeedsPollSlices(tcpstream::Global(),owner,in_fds[i].fd);
+        for (size_t i = 0; i < n; i++)
+            room = room || tcpstream::NeedsPollSlices(tcpstream::Global(), owner, in_fds[i].fd) ||
+                UdpSocket(owner, in_fds[i].fd).peer_ip;
         if (lanywhere::InRoom()) {
             std::scoped_lock lk(g_lock);
             for (size_t i = 0; i < n; i++) {
                 if (!(in_fds[i].events & (PollIn | PollRdNorm))) continue;
-                if (auto *s = Find(in_fds[i].fd, m_client_info.program_id.value, false); s != nullptr && s->type==2 && s->bound_port) {
+                if (auto *s = Find(in_fds[i].fd, owner, false); s != nullptr && s->type==2 && s->bound_port) {
                     ports[i] = s->bound_port;
                     room = true;
                 }
@@ -278,6 +350,7 @@ namespace ams::mitm::bsd {
                 request[i]=in_fds[i];request[i].revents=0;
                 if(tcpstream::Global().GetStatus(owner,request[i].fd).state==tcpstream::State::Pending)
                     request[i].events&=~(0x004|0x100|0x001|0x040);
+                if (UdpSocket(owner, request[i].fd).peer_ip) request[i].events &= ~(PollIn | PollRdNorm);
             }
             const struct { u32 nfds; s32 timeout; } in = { nfds, slice };
             R_TRY(serviceDispatchInOut(m_forward_service.get(), 6, in, out,
@@ -289,7 +362,11 @@ namespace ams::mitm::bsd {
             s32 ready = 0;
             for (size_t i = 0; i < n; i++) {
                 out_fds[i].revents=tcpstream::FilterPoll(tcpstream::Global(),owner,in_fds[i].fd,in_fds[i].events,out_fds[i].revents);
-                if (ports[i] && lanywhere::HasData(ports[i])) {
+                if (UdpSocket(owner, in_fds[i].fd).peer_ip) {
+                    out_fds[i].revents &= ~(PollIn | PollRdNorm);
+                    if (!lanywhere::InRoom()) out_fds[i].revents |= 0x008; // POLLERR; Recv reports no route.
+                }
+                if (ports[i] && UdpReadable(owner, in_fds[i].fd)) {
                     out_fds[i].revents |= in_fds[i].events & (PollIn | PollRdNorm);
                 }
                 if (out_fds[i].revents) ready++;
@@ -330,7 +407,8 @@ namespace ams::mitm::bsd {
         auto bit=[](const u8 *set,int fd){return (set[fd/8]&(1u<<(fd%8)))!=0;};
         auto put=[](u8 *set,int fd,bool value){if(value)set[fd/8]|=1u<<(fd%8);else set[fd/8]&=~(1u<<(fd%8));};
         const auto owner=TcpOwner(m_client_info);bool sliced=lanywhere::InRoom();
-        for(int fd=0;fd<input.nfds;fd++)if((bit(original[0],fd)||bit(original[1],fd)||bit(original[2],fd))&&tcpstream::NeedsPollSlices(tcpstream::Global(),owner,fd))sliced=true;
+        for(int fd=0;fd<input.nfds;fd++)if((bit(original[0],fd)||bit(original[1],fd)||bit(original[2],fd))&&
+            (tcpstream::NeedsPollSlices(tcpstream::Global(),owner,fd)||UdpSocket(owner,fd).peer_ip))sliced=true;
         const s64 duration=input.null_timeout?-1:input.seconds*1000000+input.microseconds;
         const auto start=os::GetSystemTick();tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);
         for(;;){
@@ -339,6 +417,8 @@ namespace ams::mitm::bsd {
             if(sliced){const s64 slice=duration<0?5000:std::clamp<s64>(duration-elapsed,0,5000);current.null_timeout=0;current.seconds=0;current.microseconds=slice;}
             for(int fd=0;fd<input.nfds;fd++)if(tcpstream::Global().GetStatus(owner,fd).state==tcpstream::State::Pending)
                 for(auto &set:request)put(set,fd,false);
+            for (int fd = 0; fd < input.nfds; fd++)
+                if (sizes[0] && bit(original[0], fd) && UdpSocket(owner, fd).peer_ip) put(request[0], fd, false);
             tcpstream::IpcBuffer buffers[6]{};
             for(size_t set=0;set<3;set++){buffers[set]={request[set],sizes[set],false};buffers[set+3]={outs[set]->GetPointer(),sizes[set],true};}
             auto result=forward.Call(5,&current,sizeof(current),buffers,6);R_TRY(result.ipc);
@@ -348,9 +428,9 @@ namespace ams::mitm::bsd {
                 const auto status=tcpstream::Global().GetStatus(owner,fd);
                 bool udp_ready=false;
                 if(sizes[0]&&bit(original[0],fd)&&lanywhere::InRoom()){
-                    u16 port=0;{std::scoped_lock lock(g_lock);auto *s=Find(fd,m_client_info.program_id.value,false);if(s&&s->type==2)port=s->bound_port;}
-                    udp_ready=port&&lanywhere::HasData(port);
+                    udp_ready = UdpReadable(owner, fd);
                 }
+                if (UdpSocket(owner, fd).peer_ip && !lanywhere::InRoom()) udp_ready = true;
                 for(size_t set=0;set<3;set++)if(sizes[set]){
                     auto *data=static_cast<u8*>(outs[set]->GetPointer());
                     if(status.state==tcpstream::State::Pending)put(data,fd,false);
@@ -402,23 +482,16 @@ namespace ams::mitm::bsd {
     namespace {
 
         // Paquete de la sala para el puerto del socket, si lo hay: tamaño entregado o -1.
-        ssize_t TakeRoomPacket(s32 fd, u64 program_id, void *buffer, size_t size, sockaddr_in *from, s32 flags) {
+        ssize_t TakeRoomPacket(s32 fd, tcpstream::Owner owner, void *buffer, size_t size, sockaddr_in *from, s32 flags) {
             if (!lanywhere::InRoom()) {
                 return -1;
             }
-            u16 port = 0;
-            {
-                std::scoped_lock lk(g_lock);
-                if (auto *s = Find(fd, program_id, false)) {
-                    port = s->bound_port;
-                }
-            }
-            if (port == 0) {
-                return -1;
-            }
+            const auto socket = UdpSocket(owner, fd);
+            if (!socket.used || !socket.bound_port || socket.physical_peer || socket.read_shutdown) return -1;
             u32 src_ip;
             u16 src_port;
-            const ssize_t n = lanywhere::ReceiveData(port, buffer, size, std::addressof(src_ip), std::addressof(src_port), (flags & BsdPeek) != 0);
+            const ssize_t n = lanywhere::ReceiveData(socket.bound_port, buffer, size, &src_ip, &src_port,
+                (flags & BsdPeek) != 0, socket.peer_ip, socket.peer_port);
             if (n >= 0 && from != nullptr) {
                 std::memset(from, 0, sizeof(*from));
                 from->sin_len = sizeof(*from);
@@ -476,13 +549,14 @@ namespace ams::mitm::bsd {
                                         const sf::OutAutoSelectBuffer *addr, bool *handled, s32 *ret, s32 *err, u32 *addrlen) {
         *handled = false;
         if(tcpstream::Global().IsStreamSocket(TcpOwner(m_client_info),fd))R_SUCCEED();
-        if (!lanywhere::InRoom()) R_SUCCEED();
-        {
-            std::scoped_lock lk(g_lock);
-            auto *s = Find(fd, m_client_info.program_id.value, false);
-            if (!s || s->type != 2 || !s->bound_port) R_SUCCEED();
+        const auto socket = UdpSocket(TcpOwner(m_client_info), fd);
+        if (!socket.used || !socket.bound_port || socket.physical_peer) R_SUCCEED();
+        if (!lanywhere::InRoom()) {
+            if (socket.peer_ip) { *handled = true; *ret = -1; *err = ErrnoHost; *addrlen = 0; }
+            R_SUCCEED();
         }
         *handled = true;
+        if (socket.read_shutdown) { *ret = 0; *err = 0; *addrlen = 0; R_SUCCEED(); }
         const struct { s32 fd, cmd, arg; } fcntl_in = {fd, BsdGetFl, 0};
         Out fcntl_out{};
         R_TRY(serviceDispatchInOut(m_forward_service.get(), 20, fcntl_in, fcntl_out));
@@ -503,7 +577,7 @@ namespace ams::mitm::bsd {
             [] { return lanywhere::InRoom(); },
             [&](ReceiveResult *out) {
                 sockaddr_in from{};
-                const ssize_t room = TakeRoomPacket(fd, m_client_info.program_id.value, data.GetPointer(), data.GetSize(), addr ? &from : nullptr, flags);
+                const ssize_t room = TakeRoomPacket(fd, TcpOwner(m_client_info), data.GetPointer(), data.GetSize(), addr ? &from : nullptr, flags);
                 if (room < 0) return false;
                 u32 length = 0;
                 if (addr) {
@@ -514,6 +588,10 @@ namespace ams::mitm::bsd {
                 *out = {static_cast<s32>(room), 0, length}; return true;
             },
             [&]() -> ReceiveResult {
+                const auto current = UdpSocket(TcpOwner(m_client_info), fd);
+                if (!current.used) return {-1, 9, 0};
+                if (current.read_shutdown) return {0, 0, 0};
+                if (current.peer_ip) return {-1, ErrnoAgain, 0};
                 const struct { s32 fd, flags; } in = {fd, flags | BsdDontWait};
                 struct { s32 ret, err; u32 addrlen; } recv{};
                 if (addr) {
@@ -530,6 +608,12 @@ namespace ams::mitm::bsd {
                 return R_FAILED(ipc_result) ? ReceiveResult{-1, ErrnoIo, 0} : ReceiveResult{recv.ret, recv.err, recv.addrlen};
             },
             [&](int slice) {
+                const auto current = UdpSocket(TcpOwner(m_client_info), fd);
+                if (!current.used) return 9;
+                if (current.peer_ip || current.read_shutdown) {
+                    os::SleepThread(TimeSpan::FromMilliSeconds(slice));
+                    return 0;
+                }
                 PollFd poll_in{fd, PollIn, 0}, poll_out{};
                 const struct { u32 nfds; s32 timeout; } args = {1, slice};
                 Out polled{};
@@ -539,6 +623,10 @@ namespace ams::mitm::bsd {
                 return R_FAILED(ipc_result) ? ErrnoIo : (polled.ret < 0 ? polled.err : 0);
             }, &result);
         R_TRY(ipc_result);
+        if (!*handled && socket.peer_ip) {
+            *handled = true;
+            result = {-1, ErrnoHost, 0};
+        }
         *ret = result.ret; *err = result.error; *addrlen = result.addrlen;
         R_SUCCEED();
     }
@@ -548,7 +636,7 @@ namespace ams::mitm::bsd {
         Out out = {};
         R_TRY(serviceDispatchInOut(m_forward_service.get(), 20, in, out));
         const auto owner=TcpOwner(m_client_info);
-        if(cmd==0&&out.ret>=0&&tcpstream::Global().IsStreamSocket(owner,fd)&&!tcpstream::Global().Duplicated(owner,fd,out.ret)){
+        if(cmd==0&&out.ret>=0&&((tcpstream::Global().IsStreamSocket(owner,fd)&&!tcpstream::Global().Duplicated(owner,fd,out.ret)) || !DuplicateUdp(owner,fd,out.ret))){
             tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);forward.Close(out.ret);out.ret=-1;out.err=105;
         }
         out_ret.SetValue(out.ret);
@@ -574,6 +662,8 @@ namespace ams::mitm::bsd {
         out_errno.SetValue(out.err);
         if(out.ret==0&&level==0xffff&&optname==0x10000&&optval.GetSize()>=sizeof(s32)){
             s32 exempt=0;std::memcpy(&exempt,optval.GetPointer(),sizeof(exempt));tcpstream::Global().ShutdownExempt(owner,fd,exempt!=0);
+            std::scoped_lock lock(g_lock);
+            if (auto *socket = Find(fd, owner, false)) UpdateAliases(*socket, [&](SocketStats &alias) { alias.shutdown_exempt = exempt != 0; });
         }
 
         s32 value = 0;
@@ -596,15 +686,25 @@ namespace ams::mitm::bsd {
         if(out.ret>=0&&domain==AF_INET&&(type&0xff)==SOCK_STREAM)
             tcpstream::Global().SocketCreated(TcpOwner(m_client_info),out.ret,type);
 
-        std::scoped_lock lk(g_lock);
-        WriteLine("[%016lx] socket(dom %d, tipo %d, proto %d) = %d (errno %d)", m_client_info.program_id.value, domain, type, protocol, out.ret, out.err);
-        if (out.ret >= 0) {
-            if (auto *s = Find(out.ret, m_client_info.program_id.value, true)) {
-                s->type = type & 0xFF;
-                s->protocol = protocol;
-            } else {
-                g_overflow++;
+        bool tracked = false;
+        {
+            std::scoped_lock lk(g_lock);
+            WriteLine("[%016lx] socket(dom %d, tipo %d, proto %d) = %d (errno %d)", m_client_info.program_id.value, domain, type, protocol, out.ret, out.err);
+            if (out.ret >= 0) {
+                if (auto *old = Find(out.ret, TcpOwner(m_client_info), false)) *old = {};
+                if (auto *socket = Find(out.ret, TcpOwner(m_client_info), true)) {
+                    socket->domain = domain;
+                    socket->type = type & 0xff;
+                    socket->protocol = protocol;
+                    tracked = true;
+                } else ++g_overflow;
             }
+        }
+        if (out.ret >= 0 && domain == AF_INET && (type & 0xff) == SOCK_DGRAM && !tracked) {
+            tcpstream::Forward forward(m_forward_service.get(), TcpDispatch);
+            forward.Close(out.ret);
+            out_ret.SetValue(-1);
+            out_errno.SetValue(ErrnoBuffers);
         }
         R_SUCCEED();
     }
@@ -613,26 +713,14 @@ namespace ams::mitm::bsd {
         tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);
         const auto gate=tcpstream::GateGameIo(tcpstream::Global(),TcpOwner(m_client_info),forward,fd,flags,true);
         if(gate.handled){R_TRY(gate.result.ipc);out_ret.SetValue(gate.result.ret);out_errno.SetValue(gate.result.error);R_SUCCEED();}
-        if (lanywhere::InRoom()&&!tcpstream::Global().IsStreamSocket(TcpOwner(m_client_info),fd)) {
-            u32 peer_ip = 0;
-            u16 peer_port = 0, src_port = 0;
-            {
-                std::scoped_lock lk(g_lock);
-                if (auto *s = Find(fd, m_client_info.program_id.value, false); s != nullptr && s->peer_ip) {
-                    peer_ip = s->peer_ip;
-                    peer_port = s->peer_port;
-                    src_port = s->bound_port;
-                    s->sent_packets++;
-                    s->sent_bytes += data.GetSize();
-                }
-            }
-            if (peer_ip) {
-                const bool sent = lanywhere::SendData(peer_ip, src_port, peer_port, data.GetPointer(), data.GetSize());
-                const int send_error = sent ? 0 : NativeSendError(errno == EMSGSIZE);
-                out_ret.SetValue(sent ? static_cast<s32>(data.GetSize()) : -1);
-                out_errno.SetValue(send_error);
-                R_SUCCEED();
-            }
+        const auto socket = UdpSocket(TcpOwner(m_client_info), fd);
+        if (socket.used && socket.peer_ip) {
+            if (socket.write_shutdown) { out_ret.SetValue(-1); out_errno.SetValue(32); R_SUCCEED(); }
+            if (!lanywhere::InRoom()) { out_ret.SetValue(-1); out_errno.SetValue(ErrnoHost); R_SUCCEED(); }
+            const bool sent = lanywhere::SendData(socket.peer_ip, socket.bound_port, socket.peer_port, data.GetPointer(), data.GetSize());
+            out_ret.SetValue(sent ? static_cast<s32>(data.GetSize()) : -1);
+            out_errno.SetValue(sent ? 0 : NativeSendError(errno == EMSGSIZE));
+            R_SUCCEED();
         }
         const struct { s32 fd, flags; } in = { fd, flags };
         Out out = {};
@@ -664,17 +752,23 @@ namespace ams::mitm::bsd {
         if(tcpstream::Global().IsStreamSocket(owner,fd)&&tcpstream::ReadAddress(addr.GetPointer(),addr.GetSize(),&destination)&&lanywhere::InRoom()&&lanywhere::IsVirtual(destination.ip)){
             out_ret.SetValue(-1);out_errno.SetValue(107);R_SUCCEED();
         }
+        const auto udp_socket = UdpSocket(owner, fd);
+        if (udp_socket.used && !addr.GetSize() && udp_socket.peer_ip)
+            return Send(out_ret, out_errno, fd, flags, data);
+        if (udp_socket.used && udp_socket.write_shutdown && lanywhere::InRoom()) {
+            out_ret.SetValue(-1); out_errno.SetValue(32); R_SUCCEED();
+        }
         // En una sala, lo que va a la red virtual (otro miembro o broadcast) sale por el servidor.
         if (lanywhere::InRoom() && addr.GetSize() >= sizeof(sockaddr_in)) {
             const sockaddr_in *a = reinterpret_cast<const sockaddr_in *>(addr.GetPointer());
-            const u32 dst = ntohl(a->sin_addr.s_addr);
+            const u32 dst = a->sin_family == AF_INET ? ntohl(a->sin_addr.s_addr) : 0;
             if (lanywhere::IsVirtual(dst)) {
                 u16 src_port = 0;
                 s32 port_err = 0;
                 bool udp = false;
                 {
                     std::scoped_lock lk(g_lock);
-                    if (auto *s = Find(fd, m_client_info.program_id.value, false); s != nullptr && s->type == 2) {
+                    if (auto *s = Find(fd, TcpOwner(m_client_info), false); s != nullptr && s->type == 2) {
                         udp = true;
                         src_port = s->bound_port;
                         s->sent_packets++;
@@ -703,7 +797,7 @@ namespace ams::mitm::bsd {
         out_errno.SetValue(out.err);
 
         std::scoped_lock lk(g_lock);
-        if (auto *s = Find(fd, m_client_info.program_id.value, true)) {
+        if (auto *s = Find(fd, TcpOwner(m_client_info), true)) {
             s->sent_packets++;
             s->sent_bytes += data.GetSize();
             if (addr.GetSize() >= sizeof(sockaddr_in)) {
@@ -730,11 +824,13 @@ namespace ams::mitm::bsd {
     Result BsdSpyService::Bind(sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 fd, const sf::InAutoSelectBuffer &addr) {
         // En una sala la IP del juego es virtual: no existe en la consola, así que se escucha en todas.
         sockaddr_in local = {};
+        bool virtual_bind = false;
         const void *bind_addr = addr.GetPointer();
         size_t bind_size = addr.GetSize();
         if (lanywhere::InRoom() && bind_size >= sizeof(sockaddr_in)) {
             std::memcpy(std::addressof(local), bind_addr, sizeof(local));
-            if (lanywhere::IsVirtual(ntohl(local.sin_addr.s_addr))) {
+            if (local.sin_family == AF_INET && lanywhere::IsVirtual(ntohl(local.sin_addr.s_addr))) {
+                virtual_bind = true;
                 local.sin_addr.s_addr = 0;
                 bind_addr = std::addressof(local);
                 bind_size = sizeof(local);
@@ -766,9 +862,13 @@ namespace ams::mitm::bsd {
         std::scoped_lock lk(g_lock);
         WriteLine("[%016lx] bind(fd %d, %s) = %d (errno %d)", m_client_info.program_id.value, fd, FormatAddr(a, sizeof(a), addr.GetPointer(), addr.GetSize()), out.ret, out.err);
         if (out.ret == 0 && addr.GetSize() >= sizeof(sockaddr_in)) {
-            if (auto *s = Find(fd, m_client_info.program_id.value, true)) {
+            if (auto *s = Find(fd, TcpOwner(m_client_info), true)) {
                 const u16 requested = ntohs(reinterpret_cast<const sockaddr_in *>(addr.GetPointer())->sin_port);
-                if (requested) s->bound_port = requested;
+                UpdateAliases(*s, [&](SocketStats &alias) {
+                    if (requested) alias.bound_port = requested;
+                    alias.bound_ip = ntohl(reinterpret_cast<const sockaddr_in *>(addr.GetPointer())->sin_addr.s_addr);
+                    alias.virtual_bound = virtual_bind;
+                });
             }
         }
         R_SUCCEED();
@@ -797,14 +897,31 @@ namespace ams::mitm::bsd {
         // UDP "conectado" a otro miembro de la sala: no hay ruta real; send() lo manda por el servidor.
         if (lanywhere::InRoom() && addr.GetSize() >= sizeof(sockaddr_in)) {
             const sockaddr_in *a = reinterpret_cast<const sockaddr_in *>(addr.GetPointer());
-            const u32 dst = ntohl(a->sin_addr.s_addr);
+            const u32 dst = a->sin_family == AF_INET ? ntohl(a->sin_addr.s_addr) : 0;
             bool udp = false;
             u16 port = 0;
             {
                 std::scoped_lock lk(g_lock);
-                if (auto *s = Find(fd, m_client_info.program_id.value, false); s != nullptr && s->type == 2) {
+                if (auto *s = Find(fd, TcpOwner(m_client_info), false); s != nullptr && s->type == 2) {
                     udp = true;
                     port = s->bound_port;
+                }
+            }
+            if (udp && lanywhere::IsVirtual(dst)) {
+                tcpstream::Forward forward(m_forward_service.get(), TcpDispatch);
+                tcpstream::Endpoint previous{};
+                const auto named = forward.Name(fd, &previous, true);
+                R_TRY(named.ipc);
+                if (named.ret == 0) {
+                    tcpstream::NativeAddress disconnect{};
+                    disconnect.bytes[0] = sizeof(disconnect);
+                    disconnect.bytes[1] = AF_UNSPEC;
+                    Out disconnected{};
+                    R_TRY(serviceDispatchInOut(m_forward_service.get(), 14, fd, disconnected,
+                        .buffer_attrs = { SfBufferAttr_HipcAutoSelect | SfBufferAttr_In },
+                        .buffers = { { &disconnect, sizeof(disconnect) } }));
+                    if (disconnected.ret < 0) { out_ret.SetValue(-1); out_errno.SetValue(disconnected.err); R_SUCCEED(); }
+                    port = 0;
                 }
             }
             if (udp && lanywhere::IsVirtual(dst) && !port) {
@@ -813,10 +930,13 @@ namespace ams::mitm::bsd {
                 if (!port) { out_ret.SetValue(-1); out_errno.SetValue(err ? err : ErrnoAddr); R_SUCCEED(); }
             }
             std::scoped_lock lk(g_lock);
-            auto *s = Find(fd, m_client_info.program_id.value, false);
+            auto *s = Find(fd, TcpOwner(m_client_info), false);
             if (s != nullptr && s->type == 2 && lanywhere::IsVirtual(dst)) {
-                s->peer_ip = dst;
-                s->peer_port = ntohs(a->sin_port);
+                UpdateAliases(*s, [&](SocketStats &alias) {
+                    alias.peer_ip = dst;
+                    alias.peer_port = ntohs(a->sin_port);
+                    alias.physical_peer = false;
+                });
                 char text[48];
                 WriteLine("[%016lx] connect(fd %d, %s) a la sala (puerto local %u)", m_client_info.program_id.value, fd,
                           FormatAddr(text, sizeof(text), addr.GetPointer(), addr.GetSize()), s->bound_port);
@@ -836,6 +956,13 @@ namespace ams::mitm::bsd {
         char a[48];
         std::scoped_lock lk(g_lock);
         WriteLine("[%016lx] connect(fd %d, %s) = %d (errno %d)", m_client_info.program_id.value, fd, FormatAddr(a, sizeof(a), addr.GetPointer(), addr.GetSize()), out.ret, out.err);
+        if (out.ret == 0) {
+            if (auto *socket = Find(fd, TcpOwner(m_client_info), false)) UpdateAliases(*socket, [&](SocketStats &alias) {
+                alias.peer_ip = 0;
+                alias.peer_port = 0;
+                alias.physical_peer = addr.GetSize() >= 2 && static_cast<const u8 *>(addr.GetPointer())[1] != AF_UNSPEC;
+            });
+        }
         R_SUCCEED();
     }
 
@@ -872,7 +999,7 @@ namespace ams::mitm::bsd {
         if(out.ret==0||out.err==9)tcpstream::Global().Closed(TcpOwner(m_client_info),fd);
 
         std::scoped_lock lk(g_lock);
-        if (auto *s = Find(fd, m_client_info.program_id.value, false)) {
+        if (auto *s = Find(fd, TcpOwner(m_client_info), false); s && (out.ret == 0 || out.err == 9)) {
             if (s->sent_packets) {
                 Summary(*s, "cerrado");
             }
@@ -896,11 +1023,21 @@ namespace ams::mitm::bsd {
             if(status.state!=tcpstream::State::Connected){ret.SetValue(-1);error.SetValue(107);length.SetValue(0);R_SUCCEED();}
             if(tcpstream::Global().Addresses(owner,fd,nullptr,&peer)){TcpAddress(addr,peer);ret.SetValue(0);error.SetValue(0);length.SetValue(16);R_SUCCEED();}
         }
+        const auto udp = UdpSocket(owner, fd);
+        if (udp.used && udp.peer_ip) {
+            TcpAddress(addr, {udp.peer_ip, udp.peer_port});
+            ret.SetValue(0); error.SetValue(0); length.SetValue(16); R_SUCCEED();
+        }
         tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);const tcpstream::IpcBuffer b{addr.GetPointer(),addr.GetSize(),true};const auto r=forward.Call(15,&fd,sizeof(fd),&b,1,true);R_TRY(r.ipc);ret.SetValue(r.ret);error.SetValue(r.error);length.SetValue(r.length);R_SUCCEED();
     }
     Result BsdSpyService::GetSockName(sf::Out<s32> ret,sf::Out<s32> error,sf::Out<u32> length,s32 fd,const sf::OutAutoSelectBuffer &addr) {
         tcpstream::Endpoint local{};
         if(tcpstream::Global().Addresses(TcpOwner(m_client_info),fd,&local,nullptr)){TcpAddress(addr,local);ret.SetValue(0);error.SetValue(0);length.SetValue(16);R_SUCCEED();}
+        const auto udp = UdpSocket(TcpOwner(m_client_info), fd);
+        if (udp.used && udp.virtual_bound) {
+            TcpAddress(addr, {udp.bound_ip, udp.bound_port});
+            ret.SetValue(0); error.SetValue(0); length.SetValue(16); R_SUCCEED();
+        }
         tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);const tcpstream::IpcBuffer b{addr.GetPointer(),addr.GetSize(),true};const auto r=forward.Call(16,&fd,sizeof(fd),&b,1,true);R_TRY(r.ipc);ret.SetValue(r.ret);error.SetValue(r.error);length.SetValue(r.length);R_SUCCEED();
     }
     Result BsdSpyService::GetSockOpt(sf::Out<s32> ret,sf::Out<s32> error,sf::Out<u32> length,s32 fd,s32 level,s32 option,const sf::OutAutoSelectBuffer &value) {
@@ -912,37 +1049,60 @@ namespace ams::mitm::bsd {
         const s32 input[3]={fd,level,option};tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);const tcpstream::IpcBuffer b{value.GetPointer(),value.GetSize(),true};const auto r=forward.Call(17,input,sizeof(input),&b,1,true);R_TRY(r.ipc);ret.SetValue(r.ret);error.SetValue(r.error);length.SetValue(r.length);R_SUCCEED();
     }
     Result BsdSpyService::Shutdown(sf::Out<s32> ret,sf::Out<s32> error,s32 fd,s32 how) {
+        const auto udp = UdpSocket(TcpOwner(m_client_info), fd);
+        if (udp.used && udp.peer_ip) {
+            if (how < 0 || how > 2) { ret.SetValue(-1); error.SetValue(22); R_SUCCEED(); }
+            std::scoped_lock lock(g_lock);
+            if (auto *socket = Find(fd, TcpOwner(m_client_info), false)) UpdateAliases(*socket, [&](SocketStats &alias) {
+                if (how != 1) alias.read_shutdown = true;
+                if (how != 0) alias.write_shutdown = true;
+            });
+            ret.SetValue(0); error.SetValue(0); R_SUCCEED();
+        }
         const s32 input[2]={fd,how};tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);const auto r=forward.Call(22,input,sizeof(input));R_TRY(r.ipc);
         if(r.ret==0){int ignored=0;tcpstream::Global().Shutdown(TcpOwner(m_client_info),fd,how,&ignored);}
         ret.SetValue(r.ret);error.SetValue(r.error);R_SUCCEED();
     }
     Result BsdSpyService::ShutdownAllSockets(sf::Out<s32> ret,sf::Out<s32> error,s32 how) {
         tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);const auto r=forward.Call(23,&how,sizeof(how));R_TRY(r.ipc);
-        if(r.ret==0)tcpstream::Global().ShutdownAll(TcpOwner(m_client_info),how);
+        if(r.ret==0) {
+            const auto owner = TcpOwner(m_client_info);
+            tcpstream::Global().ShutdownAll(owner,how);
+            std::scoped_lock lock(g_lock);
+            for (auto &socket : g_sockets) {
+                if (!socket.used || socket.process_id != owner.process || socket.program_id != owner.program || socket.shutdown_exempt) continue;
+                if (how != 1) socket.read_shutdown = true;
+                if (how != 0) socket.write_shutdown = true;
+            }
+        }
         ret.SetValue(r.ret);error.SetValue(r.error);R_SUCCEED();
     }
     Result BsdSpyService::DuplicateSocket(sf::Out<s32> ret,sf::Out<s32> error,tcpstream::NativeDuplicateData input) {
         if(input.padding||input.reserved){ret.SetValue(-1);error.SetValue(22);R_SUCCEED();}
         const auto owner=TcpOwner(m_client_info);tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);auto r=forward.Call(27,&input,sizeof(input));R_TRY(r.ipc);
-        if(r.ret>=0&&tcpstream::Global().IsStreamSocket(owner,input.fd)&&!tcpstream::Global().Duplicated(owner,input.fd,r.ret)){forward.Close(r.ret);r.ret=-1;r.error=105;}
+        if(r.ret>=0&&((tcpstream::Global().IsStreamSocket(owner,input.fd)&&!tcpstream::Global().Duplicated(owner,input.fd,r.ret)) || !DuplicateUdp(owner,input.fd,r.ret))){forward.Close(r.ret);r.ret=-1;r.error=105;}
         ret.SetValue(r.ret);error.SetValue(r.error);R_SUCCEED();
     }
     Result BsdSpyService::Read(sf::Out<s32> ret,sf::Out<s32> error,s32 fd,const sf::OutAutoSelectBuffer &data) {
+        if (UdpSocket(TcpOwner(m_client_info), fd).used) return Recv(ret, error, fd, 0, data);
         tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);const auto gate=tcpstream::GateGameIo(tcpstream::Global(),TcpOwner(m_client_info),forward,fd,0,false);
         if(gate.handled){R_TRY(gate.result.ipc);ret.SetValue(gate.result.ret);error.SetValue(gate.result.error);R_SUCCEED();}
         const tcpstream::IpcBuffer b{data.GetPointer(),data.GetSize(),true};const auto r=forward.Call(25,&fd,sizeof(fd),&b,1);R_TRY(r.ipc);ret.SetValue(r.ret);error.SetValue(r.error);R_SUCCEED();
     }
     Result BsdSpyService::Write(sf::Out<s32> ret,sf::Out<s32> error,s32 fd,const sf::InAutoSelectBuffer &data) {
+        if (UdpSocket(TcpOwner(m_client_info), fd).used) return Send(ret, error, fd, 0, data);
         tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);const auto gate=tcpstream::GateGameIo(tcpstream::Global(),TcpOwner(m_client_info),forward,fd,0,true);
         if(gate.handled){R_TRY(gate.result.ipc);ret.SetValue(gate.result.ret);error.SetValue(gate.result.error);R_SUCCEED();}
         const tcpstream::IpcBuffer b{const_cast<u8*>(data.GetPointer()),data.GetSize(),false};const auto r=forward.Call(24,&fd,sizeof(fd),&b,1);R_TRY(r.ipc);ret.SetValue(r.ret);error.SetValue(r.error);R_SUCCEED();
     }
     Result BsdSpyService::RecvMMsg(sf::Out<s32> ret,sf::Out<s32> error,tcpstream::NativeRecvMmsgData input,const sf::OutMapAliasBuffer &buffer) {
-        if(tcpstream::Global().GetStatus(TcpOwner(m_client_info),input.fd).state!=tcpstream::State::Unmanaged){ret.SetValue(-1);error.SetValue(95);R_SUCCEED();}
+        if(tcpstream::Global().GetStatus(TcpOwner(m_client_info),input.fd).state!=tcpstream::State::Unmanaged ||
+           (UdpSocket(TcpOwner(m_client_info), input.fd).used && lanywhere::InRoom())){ret.SetValue(-1);error.SetValue(95);R_SUCCEED();}
         Out out{};R_TRY(serviceDispatchInOut(m_forward_service.get(),29,input,out,.buffer_attrs={SfBufferAttr_HipcMapAlias|SfBufferAttr_Out},.buffers={{buffer.GetPointer(),buffer.GetSize()}}));ret.SetValue(out.ret);error.SetValue(out.err);R_SUCCEED();
     }
     Result BsdSpyService::SendMMsg(sf::Out<s32> ret,sf::Out<s32> error,tcpstream::NativeSendMmsgData input,const sf::OutMapAliasBuffer &buffer) {
-        if(tcpstream::Global().GetStatus(TcpOwner(m_client_info),input.fd).state!=tcpstream::State::Unmanaged){ret.SetValue(-1);error.SetValue(95);R_SUCCEED();}
+        if(tcpstream::Global().GetStatus(TcpOwner(m_client_info),input.fd).state!=tcpstream::State::Unmanaged ||
+           (UdpSocket(TcpOwner(m_client_info), input.fd).used && lanywhere::InRoom())){ret.SetValue(-1);error.SetValue(95);R_SUCCEED();}
         Out out{};R_TRY(serviceDispatchInOut(m_forward_service.get(),30,input,out,.buffer_attrs={SfBufferAttr_HipcMapAlias|SfBufferAttr_Out},.buffers={{buffer.GetPointer(),buffer.GetSize()}}));ret.SetValue(out.ret);error.SetValue(out.err);R_SUCCEED();
     }
 

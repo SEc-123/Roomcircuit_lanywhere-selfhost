@@ -114,7 +114,8 @@ static void restart_group_query(u32 offset, u32 snapshot, bool available, const 
 /* SOURCE_FIND_APPOINTMENT_ROOMS */
 static void restart_group_list(u32 offset, u32 snapshot, bool available) { (void)offset; (void)available; requested_snapshot=snapshot; calls.page++; }
 static void restart_group_list_on_network(u32 offset, bool available, const char *provider) { (void)offset; (void)available; (void)provider; calls.page++; }
-static void lanywhere_leave(void) { calls.leave++; }
+static Result leave_result;
+static Result lanywhere_leave(void) { calls.leave++; return leave_result; }
 enum { SfBufferAttr_HipcMapAlias = 1, SfBufferAttr_In = 2 };
 typedef struct { const void *data; size_t length; } WireBuffer;
 typedef struct { int buffer_attrs[2]; WireBuffer buffers[2]; } WireDispatch;
@@ -137,6 +138,7 @@ static Result check_room_wire(int *service, unsigned command, u64 game, WireDisp
 #define serviceDispatchIn(service, command, game, ...) check_room_wire(service, command, game, (WireDispatch){__VA_ARGS__})
 /* SOURCE_ROOM_WIRE */
 #undef serviceDispatchIn
+static const char *g_keyboard_error;
 static bool ask_code(char *out, size_t size) { calls.ask_code++; snprintf(out,size,"ABC234"); return accept_code; }
 static bool ensure_config_dir(void) { return true; }
 bool relay_config_save_public(const char *path, bool enabled) { (void)path; (void)enabled; calls.public_write++; return save_ok; }
@@ -198,7 +200,7 @@ static u64 touch_button(void) {return test_update?0:touch_action_at(1130,680);}
 
 static View lobby(void) {
     memset(&calls,0,sizeof(calls)); g_guide_open=false;g_guide_page=0;appointment_screen=appointment_list=false;g_zh=false;g_language_save_failed=false;atomic_store(&g_inventory_running,false);accept_code=true;save_ok=true;launch_ok=true;node_reachable=true;
-    View v={0};v.sel=-1;v.discovery=LobbyDiscoveryLegacy;route_result=0;v.config_state=RelayConfigReady;v.config.public_groups=true;v.match_available=true;v.status_valid=true;v.capabilities=LOBBY_CAP_RESERVED_MATCH;v.next_page=LOBBY_PAGE_END;
+    View v={0};v.sel=-1;v.discovery=LobbyDiscoveryLegacy;route_result=0;leave_result=0;v.config_state=RelayConfigReady;v.config.public_groups=true;v.match_available=true;v.status_valid=true;v.capabilities=LOBBY_CAP_RESERVED_MATCH;v.next_page=LOBBY_PAGE_END;
     strcpy(v.config.provider,"self");
     return v;
 }
@@ -266,7 +268,11 @@ int main(void) {
     v=lobby();strcpy(v.config.provider,"lanywhere-public");v.private_panel=true;accept_code=false;
     step(&v,HidNpadButton_X);assert(calls.ask_code==1&&effects()==0);checked();
     v=lobby();v.private_panel=true;v.private_room=true;v.st.state=StateInRoom;step(&v,HidNpadButton_B);assert(calls.leave==1&&calls.cancel==0);checked();
+    v=lobby();v.private_panel=true;v.private_room=true;v.st.state=StateInRoom;leave_result=1;
+    step(&v,HidNpadButton_B);assert(calls.leave==1&&!strcmp(v.message,"Could not leave the room. Try again."));checked();
     v=lobby();v.private_panel=true;step(&v,HidNpadButton_B);assert(!v.private_panel&&effects()==0);checked();
+    v=lobby();strcpy(v.config.provider,"lanywhere-public");v.node_picker_available=true;
+    assert(!can_change_visibility(&v));step(&v,HidNpadButton_X);assert(!calls.public_write);checked();
     v=lobby();v.match.mode=LobbyExact;v.match.state=MatchAssigned;assert(step(&v,HidNpadButton_R)==2);assert(g_guide_open&&v.match.mode==LobbyExact&&effects()==0);checked();
     v=lobby();v.private_panel=true;v.private_room=true;v.st.state=StateInRoom;g_guide_open=true;
     assert(step(&v,HidNpadButton_B)==2);assert(!g_guide_open&&v.private_room&&effects()==0);checked();

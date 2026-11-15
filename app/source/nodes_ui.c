@@ -42,6 +42,8 @@ static char group_code[8];
 static NodeFriendResponse group;
 static uint64_t next_friend_poll;
 static const char *notice;
+static bool language_save_failed;
+static const char *keyboard_error;
 
 static uint32_t read32(const uint8_t *bytes)
 {
@@ -462,19 +464,24 @@ static void language_input(u64 down)
         return;
     const bool chinese = !ui_chinese();
     ui_set_language(chinese, false);
-    (void)ui_locale_save(UI_LOCALE_PATH, chinese);
+    language_save_failed = !ui_locale_save(UI_LOCALE_PATH, chinese);
 }
 static bool ask_friend_code(char code[8])
 {
+    keyboard_error = NULL;
     SwkbdConfig keyboard;
-    if (R_FAILED(swkbdCreate(&keyboard, 0)))
+    if (R_FAILED(swkbdCreate(&keyboard, 0))) {
+        keyboard_error = "Could not open the keyboard. Try again.";
         return false;
+    }
     swkbdConfigMakePresetDefault(&keyboard);
     swkbdConfigSetHeaderText(&keyboard, ui_text("Shared test code"));
     swkbdConfigSetStringLenMin(&keyboard, 6);
     swkbdConfigSetStringLenMax(&keyboard, 6);
     const Result result = swkbdShow(&keyboard, code, 8);
     swkbdClose(&keyboard);
+    if (R_FAILED(result) && result != MAKERESULT(Module_Libnx, LibnxError_LibAppletBadExit))
+        keyboard_error = "Could not open the keyboard. Try again.";
     for (char *p = code; *p; p++)
         if (*p >= 'a' && *p <= 'z')
             *p -= 'a' - 'A';
@@ -558,6 +565,7 @@ static void begin_screen(const char *title)
     gfx_clear_gradient(RGBA(27, 34, 54, 255), RGBA(15, 18, 28, 255));
     gfx_text(56, 36, 40, NODE_COLOR_TEXT, "LANywhere");
     gfx_button(1068, 47, "RS", ui_chinese() ? "English" : "中文");
+    if (language_save_failed) gfx_text(1068, 92, 18, NODE_COLOR_WARN, ui_text("Not saved"));
     gfx_text(56, 125, 30, NODE_COLOR_TEXT, ui_text(title));
 }
 static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *order, unsigned count,
@@ -692,6 +700,8 @@ static void draw_friend_panel(void)
         snprintf(text, sizeof(text), ui_text("Code %s · %u players"), group_code, group.participants);
         gfx_text(56, 290, 32, NODE_COLOR_TEXT, text);
     }
+    if (keyboard_error)
+        gfx_text_fit(56, 460, 21, NODE_COLOR_WARN, ui_text(keyboard_error), 1168);
     if (notice)
         gfx_text_fit(56, 420, 22, NODE_COLOR_WARN, ui_text(notice), 1168);
     gfx_rect(0, 648, 1280, 1, RGBA(255, 255, 255, 28));
@@ -705,6 +715,7 @@ static void draw_friend_panel(void)
 }
 static void friend_panel(PadState *pad)
 {
+    keyboard_error = NULL;
     bool dirty = true, touch_held = true;
     NodeProbeLoop probe_loop = probe_loop_start();
     while (appletMainLoop()) {
@@ -956,14 +967,19 @@ bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway)
 }
 static bool ask_game_search(char query[64])
 {
+    keyboard_error = NULL;
     SwkbdConfig keyboard;
-    if (R_FAILED(swkbdCreate(&keyboard, 0)))
+    if (R_FAILED(swkbdCreate(&keyboard, 0))) {
+        keyboard_error = "Could not open the keyboard. Try again.";
         return false;
+    }
     swkbdConfigMakePresetDefault(&keyboard);
     swkbdConfigSetHeaderText(&keyboard, ui_text("Search game"));
     swkbdConfigSetStringLenMax(&keyboard, 20);
     const Result result = swkbdShow(&keyboard, query, 64);
     swkbdClose(&keyboard);
+    if (R_FAILED(result) && result != MAKERESULT(Module_Libnx, LibnxError_LibAppletBadExit))
+        keyboard_error = "Could not open the keyboard. Try again.";
     return R_SUCCEEDED(result);
 }
 static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *choices, size_t count,
@@ -985,6 +1001,8 @@ static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *ch
                      1130);
     }
     gfx_rect(0, 648, 1280, 1, RGBA(255, 255, 255, 28));
+    if (keyboard_error)
+        gfx_text_fit(56, 595, 21, NODE_COLOR_WARN, ui_text(keyboard_error), 1168);
     gfx_button(56, 670, "A", ui_text("Apply"));
     gfx_button(250, 670, "X", ui_text("Search game"));
     gfx_button(505, 670, "Y", ui_text("All games"));
@@ -994,6 +1012,7 @@ static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *ch
 }
 bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_id, uint8_t *region)
 {
+    keyboard_error = NULL;
     char query[64] = {0};
     CatalogGameChoice choices[6];
     size_t offset = 0, next = SIZE_MAX;

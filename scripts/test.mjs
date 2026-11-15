@@ -69,6 +69,7 @@ async function suite(name, command, args, env = process.env, timeoutMs = 60_000)
 
 try {
     await suite('Shared node catalog generation', process.env.PYTHON || 'python3', ['-B', 'scripts/compile-node-catalog.py', '--check']);
+    await suite('Relay storage, capacity and update recovery audit', process.execPath, ['--test', 'server/relay/test-maintenance-audit.js']);
     await suite('Relay and legacy protocol', process.execPath, ['server/relay/test.js'], {
         ...process.env, LANYWHERE_LANPLAY_PORT: '0', LANYWHERE_PUBLIC_PORT: '0',
     });
@@ -76,6 +77,7 @@ try {
     await suite('Real direct-node locators and legacy peer joins', process.execPath, ['--test', 'server/relay/test-node-real-locator.js']);
     await suite('Preferred raw locator and compatible gateway sessions', process.execPath, ['--test', 'server/relay/test-node-locator-preference.js']);
     await suite('Console measured node probes', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_probe_test.py']);
+    await suite('Node DNS cancellation ownership', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_probe_guard_test.py']);
     await suite('App node directory and exact selection', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_list_test.py']);
     await suite('Node recommendations and friend measurement views', process.env.PYTHON || 'python3', ['-B', 'app/tests/nodes_model_test.py']);
     await suite('Node filtering and input behavior', process.env.PYTHON || 'python3', ['-B', 'app/tests/nodes_input_test.py']);
@@ -135,8 +137,14 @@ try {
     await suite('Native public-node DNS and SDK allocation boundary', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_dns_boundary_test.py']);
     await suite('Native node directory parser', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_directory_test.py']);
     await suite('Native LAN Play direct transport', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/lanplay_direct_test.py'], { ...process.env, NODE: process.execPath }, 180_000);
+    for (const check of ['lifecycle', 'event', 'protocol', 'logging', 'state']) {
+        await suite(`Native audit ${check} recovery`, process.env.PYTHON || 'python3',
+            ['-B', `console/ldn_mitm/tests/native_${check}_test.py`]);
+    }
+    await suite('Virtual UDP BSD descriptor semantics', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/udp_bsd_ipc_test.py']);
     await suite('Native fixed discovery route and configuration', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/discovery_route_test.py']);
     await suite('Tesla overlay IPC and controls', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/overlay_test.py']);
+    await suite('Tesla dependency lifecycle and rendering bounds', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/tesla_dependency_test.py']);
     const lcidBinary = path.join(temp, 'lcid-policy-test');
     const lcidBuilt = await suite('Default game ID policy build', process.env.CXX || 'c++',
         ['-std=c++17', '-Wall', '-Wextra', '-Werror', 'console/ldn_mitm/tests/lcid_policy_test.cpp', '-o', lcidBinary]);
@@ -207,6 +215,7 @@ try {
     if (localeBuilt) await suite('App language preference persistence and failure recovery', localeBinary, []);
     await suite('Player README and game-list packaging', process.env.PYTHON || 'python3', ['-B', 'scripts/package_player_test.py']);
     await suite('Player-facing errors in English and Chinese', process.env.PYTHON || 'python3', ['-B', 'app/tests/player_errors_test.py']);
+    await suite('Capture failure and retry feedback', process.env.PYTHON || 'python3', ['-B', 'app/tests/ui_failure_test.py']);
     report.status = report.suites.every((item) => item.status === 'passed') ? 'passed' : 'failed';
 } catch (error) {
     report.status = 'failed';

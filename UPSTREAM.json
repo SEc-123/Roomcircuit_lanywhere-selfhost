@@ -41,5 +41,14 @@
       "version": "2.2.1",
       "license": "BSD-3-Clause"
     }
-  }
+  },
+  "local_patches": [
+    {
+      "component": "console/libtesla",
+      "files": [
+        "include/tesla.hpp"
+      ],
+      "reason": "Bound glyph memory, maintain list focus safely, handle input-thread/event initialization failure, and support saved Chinese locale."
+    }
+  ]
 }

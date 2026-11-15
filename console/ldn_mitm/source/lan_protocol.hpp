@@ -40,6 +40,8 @@ class LanSocket {
         int compress(const void *input, size_t input_size, uint8_t *output, size_t *output_size);
         int decompress(const void *input, size_t input_size, uint8_t *output, size_t *output_size);
         int recvPartPacket(u8 *buffer, size_t bufLen, struct sockaddr_in *addr);
+        virtual bool isStream() const { return false; }
+        bool bufferedPacket() const;
         virtual ssize_t recvfrom(void *buf, size_t len, struct sockaddr_in *addr) = 0;
         virtual int sendto(const void *buf, size_t len, struct sockaddr_in *addr) = 0;
     public:
@@ -54,16 +56,17 @@ class LanSocket {
 };
 class TcpLanSocketBase : public LanSocket {
     protected:
-        virtual ssize_t recvfrom(void *buf, size_t len, struct sockaddr_in *addr);
-        virtual int sendto(const void *buf, size_t len, struct sockaddr_in *addr);
+        bool isStream() const override { return true; }
+        ssize_t recvfrom(void *buf, size_t len, struct sockaddr_in *addr) override;
+        int sendto(const void *buf, size_t len, struct sockaddr_in *addr) override;
     public:
         TcpLanSocketBase(int fd) : LanSocket(fd) {};
 };
 class UdpLanSocketBase : public LanSocket {
     protected:
         virtual u32 getBroadcast() = 0;
-        virtual ssize_t recvfrom(void *buf, size_t len, struct sockaddr_in *addr);
-        virtual int sendto(const void *buf, size_t len, struct sockaddr_in *addr);
+        ssize_t recvfrom(void *buf, size_t len, struct sockaddr_in *addr) override;
+        int sendto(const void *buf, size_t len, struct sockaddr_in *addr) override;
         u16 listenPort;
     public:
         int sendBroadcast(LANPacketType type, const void *data, size_t size);

@@ -6,6 +6,10 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <unistd.h>
+#include <array>
+#include <cerrno>
+#include <ctime>
+#include <algorithm>
 #include <stratosphere.hpp>
 
 #define POLL_UNKNOWN (~(POLLIN | POLLPRI | POLLOUT))
@@ -13,13 +17,14 @@
 #define DISABLE_COMPRESS 0
 
 int Pollable::Poll(Pollable *fds[], size_t nfds, int timeout) {
-    struct pollfd pfds[nfds];
+    if (nfds > 32) return -1;
+    std::array<struct pollfd, 32> pfds{};
     for (size_t i = 0; i < nfds; i++) {
         pfds[i].fd = fds[i] ? fds[i]->getFd() : -1;
         pfds[i].events = POLLIN;
         pfds[i].revents = 0;
     }
-    int rc = poll(pfds, nfds, timeout);
+    int rc = poll(pfds.data(), nfds, timeout);
     if (rc < 0) {
         LogFormat("Pollable::Poll failed %d", rc);
         return -1;
@@ -34,8 +39,8 @@ int Pollable::Poll(Pollable *fds[], size_t nfds, int timeout) {
             if (pfd.revents & POLL_UNKNOWN) {
                 LogFormat("Poll: %zu(%d) revents=0x%08X", i, pfd.fd, pfd.revents);
             }
-            if (pfd.revents & (POLLERR | POLLHUP)) {
-                LogFormat("Poll: (POLLERR | POLLHUP) %zu(%d) revents=0x%x", i, pfd.fd, pfd.revents);
+            if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                LogFormat("Poll: (POLLERR | POLLHUP | POLLNVAL) %zu(%d) revents=0x%x", i, pfd.fd, pfd.revents);
                 fds[i]->onClose();
             } else if (pfd.revents & (POLLIN | POLLPRI)) {
                 int rc = fds[i]->onRead();
@@ -65,97 +70,86 @@ void LanSocket::resetRecvSize() {
     this->recvSize = 0;
 }
 
-int LanSocket::recvPartPacket(u8 *buffer, size_t bufLen, struct sockaddr_in *addr) {
-	AMS_UNUSED(bufLen);
-    constexpr int HeaderSize = sizeof(LANPacketHeader);
-    ssize_t len = this->recvfrom((void *)(this->buffer + this->recvSize), sizeof(this->buffer) - this->recvSize, addr);
-    if (len <= 0) {
-        return static_cast<int>(len);
-    }
-    this->recvSize += len;
+bool LanSocket::bufferedPacket() const {
+    if (this->recvSize < sizeof(LANPacketHeader)) return false;
+    LANPacketHeader header{};
+    std::memcpy(&header, this->buffer, sizeof(header));
+    return header.magic == LANMagic && header.length <= BufferSize - sizeof(header) &&
+           this->recvSize >= sizeof(header) + header.length;
+}
 
+int LanSocket::recvPartPacket(u8 *output, size_t capacity, struct sockaddr_in *addr) {
+    constexpr size_t HeaderSize = sizeof(LANPacketHeader);
+    if (!this->isStream()) this->resetRecvSize();
+    if (!this->bufferedPacket()) {
+        const ssize_t count = this->recvfrom(this->buffer + this->recvSize, BufferSize - this->recvSize, addr);
+        if (count <= 0) return count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) ? 0 : -1;
+        this->recvSize += count;
+    }
     if (this->recvSize < HeaderSize) {
-        LogFormat("recvPartPacket this->recvSize < HeaderSize");
+        if (!this->isStream()) this->resetRecvSize();
         return 0;
     }
-
-    LANPacketHeader *header = (decltype(header))this->buffer;
-    if (header->magic != LANMagic) {
-        LogFormat("recvPartPacket header->magic != LANMagic");
+    LANPacketHeader header{};
+    std::memcpy(&header, this->buffer, sizeof(header));
+    const size_t total = HeaderSize + header.length;
+    if (header.magic != LANMagic || total > capacity || total > BufferSize) {
         this->resetRecvSize();
-        return 0;
-    }
-
-    const size_t total = HeaderSize + header->length;
-    if (total > bufLen) {
-        LogFormat("recvPartPacket total > bufLen");
-        this->resetRecvSize();
-        return 0;
+        return -1;
     }
     if (this->recvSize < total) {
-        LogFormat("recvPartPacket this->recvSize < total. len: %d total: %d", static_cast<int>(len), static_cast<int>(total));
+        if (!this->isStream()) this->resetRecvSize();
         return 0;
     }
-
-    std::memcpy(buffer, this->buffer, total);
+    std::memcpy(output, this->buffer, total);
     this->recvSize -= total;
     std::memmove(this->buffer, this->buffer + total, this->recvSize);
-
-    return total;
+    return static_cast<int>(total);
 }
 
 int LanSocket::recvPacket(MessageCallback callback) {
-    constexpr int HeaderSize = sizeof(LANPacketHeader);
-    u8 buffer[BufferSize];
-    u8 decompressBuffer[BufferSize];
-
-    ssize_t len;
-    struct sockaddr_in addr;
-
-    len = this->recvPartPacket(buffer, sizeof(buffer), &addr);
-
-    if (len <= 0) {
-        return len;
-    }
-
-    LANPacketHeader *header = (decltype(header))buffer;
-
-    auto body = buffer + HeaderSize;
-    auto bodyLen = len - HeaderSize;
-    if (header->compressed) {
-        size_t outSize = sizeof(decompressBuffer);
-        if (decompress(body, bodyLen, decompressBuffer, &outSize) != 0) {
-            LogFormat("Decompress error");
-            LogHex(header, HeaderSize);
-            LogHex(body, bodyLen);
-            return -1;
+    constexpr size_t HeaderSize = sizeof(LANPacketHeader);
+    u8 frame[BufferSize];
+    u8 expanded[BufferSize];
+    do {
+        struct sockaddr_in address{};
+        const int size = this->recvPartPacket(frame, sizeof(frame), &address);
+        if (size <= 0) return size;
+        LANPacketHeader header{};
+        std::memcpy(&header, frame, sizeof(header));
+        const u8 *body = frame + HeaderSize;
+        size_t body_size = size - HeaderSize;
+        if (header.compressed) {
+            size_t output_size = sizeof(expanded);
+            if (this->decompress(body, body_size, expanded, &output_size) != 0 ||
+                output_size != header.decompress_length) return -1;
+            body = expanded;
+            body_size = output_size;
         }
-        if (outSize != header->decompress_length) {
-            LogFormat("Decompress error length not match");
-            return -1;
-        }
-        body = decompressBuffer;
-        bodyLen = outSize;
-    }
-
-    ReplyFunc reply = [&](LANPacketType type, const void *data, size_t size) {
-        return this->sendPacket(type, data, size, &addr);
-    };
-    return callback(header->type, body, bodyLen, reply);
+        ReplyFunc reply = [&](LANPacketType type, const void *data, size_t count) {
+            return this->sendPacket(type, data, count, &address);
+        };
+        const int result = callback(header.type, body, body_size, reply);
+        if (result != 0) return result;
+        // TCP may contain another complete frame already buffered, without
+        // any more kernel bytes to wake the next poll call.
+    } while (this->isStream() && this->bufferedPacket());
+    return 0;
 }
 int LanSocket::sendPacket(LANPacketType type, const void *data, size_t size) {
     return this->sendPacket(type, data, size, nullptr);
 }
 int LanSocket::sendPacket(LANPacketType type, const void *data, size_t size, struct sockaddr_in *addr) {
-    LANPacketHeader header;
+    if (size > BufferSize - sizeof(LANPacketHeader) || (size && !data)) return -1;
+    LANPacketHeader header{};
     this->prepareHeader(header, type);
     if (data == NULL) {
         size = 0;
     }
     header.length = size;
-    u8 buf[size + sizeof(header)];
+    u8 buf[BufferSize];
     if (size > 0) {
-        u8 compressed[size];
+        u8 compressed[BufferSize];
         size_t outSize = size;
         if (this->compress(data, size, compressed, &outSize) == 0) {
             std::memcpy(buf + sizeof(header), compressed, outSize);
@@ -191,7 +185,29 @@ ssize_t TcpLanSocketBase::recvfrom(void *buf, size_t len, struct sockaddr_in *ad
 }
 int TcpLanSocketBase::sendto(const void *buf, size_t len, struct sockaddr_in *addr) {
 	AMS_UNUSED(addr);
-    return ::sendto(this->fd, buf, len, 0, nullptr, 0);
+    size_t sent = 0;
+    const auto now = []() {
+        timespec time{};
+        clock_gettime(CLOCK_MONOTONIC, &time);
+        return uint64_t(time.tv_sec) * 1000 + time.tv_nsec / 1000000;
+    };
+    const uint64_t deadline = now() + 500;
+    while (sent < len && now() < deadline) {
+        const ssize_t count = ::sendto(this->fd, static_cast<const u8 *>(buf) + sent, len - sent,
+                                      MSG_DONTWAIT, nullptr, 0);
+        if (count > 0) { sent += count; continue; }
+        if (count == 0 || (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)) break;
+        pollfd ready{this->fd, POLLOUT, 0};
+        const uint64_t current = now();
+        if (current >= deadline || ::poll(&ready, 1, static_cast<int>(deadline - current)) <= 0 ||
+            !(ready.revents & POLLOUT)) break;
+    }
+    if (sent != len) {
+        // A truncated frame cannot be resumed by a later protocol message.
+        this->close();
+        return -1;
+    }
+    return static_cast<int>(sent);
 }
 
 ssize_t UdpLanSocketBase::recvfrom(void *buf, size_t len, struct sockaddr_in *addr) {
@@ -203,7 +219,7 @@ int UdpLanSocketBase::sendto(const void *buf, size_t len, struct sockaddr_in *ad
 }
 
 int UdpLanSocketBase::sendBroadcast(LANPacketType type, const void *data, size_t size) {
-    struct sockaddr_in addr;
+    struct sockaddr_in addr{};
 
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(this->getBroadcast());
@@ -229,7 +245,7 @@ int LanSocket::compress(const void *input, size_t input_size, uint8_t *output, s
         uint8_t count = 0;
 
         if (c == 0) {
-            while (*in == 0 && in < in_end && count < 0xFF) {
+            while (in < in_end && count < 0xFF && *in == 0) {
                 count += 1;
                 in++;
             }
@@ -266,10 +282,8 @@ int LanSocket::decompress(const void *input, size_t input_size, uint8_t *output,
                 return -1;
             }
             uint8_t count = *in++;
+            if (static_cast<size_t>(out_end - out) < count) return -1;
             for (int i = 0; i < count; i++) {
-                if (out == out_end) {
-                    break;
-                }
                 *out++ = c;
             }
         }

@@ -36,6 +36,7 @@ body='''#include <assert.h>
 #include "update_core.h"
 #define LANYWHERE_APP_VERSION "0.7.0"
 static bool rollback_pending;
+static bool language_save_failed;
 '''+constants+'\n'+types+'\n'+function('static const char *screen_title(')+'\n'+function('static void draw_update(')+r'''
 int main(int argc,char **argv) {
     assert(argc==2 && gfx_init());

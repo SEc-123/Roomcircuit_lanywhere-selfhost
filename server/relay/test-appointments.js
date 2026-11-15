@@ -85,3 +85,24 @@ test('disconnect before atomic rename cancels and removes temporary file',async 
   assert.equal(await action,null);assert.deepEqual(fs.readdirSync(path.dirname(f)),[]);assert.equal(count(await s.handle(req(1))),0);
  } finally {release();fs.promises.open=open;}
 });
+
+test('creation budget is durable per source and expires without identifying event owners', async t => {
+    const filename = fixture(t);
+    let now = 1000000;
+    let store = A.create({ filename, now: () => now, maxPerSource: 2 });
+    const create = (game, who = user, source = '192.0.2.1') =>
+        store.handle(req(2, { starts: BigInt(now + 1), game: BigInt(game), who }), true, () => true, source);
+    assert.equal(status(await create(10)), A.STATUS.OK);
+    assert.equal(status(await create(11)), A.STATUS.OK);
+    assert.equal(status(await create(12, Buffer.alloc(16, 99))), A.STATUS.LIMIT, 'new client ID cannot evade shared source quota');
+    assert.equal(status(await create(10)), A.STATUS.OK, 'a retry of an existing event costs no quota');
+    assert.equal(status(await create(12, user, '192.0.2.2')), A.STATUS.OK);
+    const saved = fs.readFileSync(filename, 'utf8');
+    assert(!saved.includes('192.0.2.1') && !saved.includes(user.toString('hex')));
+    assert(JSON.parse(saved).events.every(event => Object.keys(event).length === 4));
+    store = A.create({ filename, now: () => now, maxPerSource: 2 });
+    assert.equal(status(await create(13)), A.STATUS.LIMIT, 'restart retains quota');
+    now += 7202;
+    assert.equal(status(await create(14)), A.STATUS.OK, 'expired reservations free source budget');
+    assert.equal(JSON.parse(fs.readFileSync(filename)).creationBudget.entries.length, 1);
+});

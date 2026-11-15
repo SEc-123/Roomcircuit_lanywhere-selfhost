@@ -29,7 +29,9 @@ namespace ams::mitm::ldn {
         private:
             LANDiscovery lanDiscovery;
             os::SystemEvent *state_event;
-            u64 error_state;
+            os::Mutex lifecycle_mutex{false};
+            os::Mutex event_mutex{false};
+            std::atomic<u64> error_state;
         public:
             explicit ICommunicationService(u64 caller_program_id,u64 caller_process_id=0) :
                 lanDiscovery(LANDiscovery::DefaultPort, caller_program_id,caller_process_id), state_event(nullptr), error_state(0) {
@@ -38,11 +40,8 @@ namespace ams::mitm::ldn {
             };
             
             ~ICommunicationService() {
-                LogFormat("~ICommunicationService");
-                if (this->state_event != nullptr) {
-                    delete this->state_event;
-                    this->state_event = nullptr;
-                }
+                // Stop callbacks before releasing their event target.
+                static_cast<void>(this->Finalize());
             };
         private:
             void onEventFired();

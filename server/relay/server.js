@@ -128,11 +128,18 @@ const LIMITS = {
     dataBytes: envInt('LANYWHERE_DATA_BYTES_PER_SEC', 512 * 1024, 1, 64 * 1024 * 1024),
     dataPackets: envInt('LANYWHERE_DATA_PACKETS_PER_SEC', 1000, 1, 10000),
     roomsTotal: 3000,
-    perMinute: { create: envInt('LANYWHERE_CREATE_PER_MIN', 10, 1, 1000), join: 30, find: 120, match: 600,
+    perMinute: { create: envInt('LANYWHERE_CREATE_PER_MIN', 120, 1, 1000), join: 30, find: 120, match: 600,
         appointments: 120, appointmentSubscribe: 30, gameCode: 120, gameAuth: 12, unifiedLobby: 120 },
 };
 const STATE_FILE = path.join(process.env.LANYWHERE_STATE_DIR ?? __dirname, 'traffic.json');
 if (process.env.LANYWHERE_STATE_DIR === '') throw new Error('LANYWHERE_STATE_DIR no puede estar vacío');
+fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true, mode: 0o700 });
+try {
+    fs.lstatSync(path.join(path.dirname(STATE_FILE), '.restore-pending'));
+    throw new Error('State restore is incomplete. Stop the service and rerun state-backup.py restore with the intended archive');
+} catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+}
 const appointments = appointmentStore.create({ filename: path.join(path.dirname(STATE_FILE), 'appointments.json') });
 const UDP_OVERHEAD = 28, TCP_OVERHEAD = 52;  // cabeceras IP/UDP e IP/TCP: también cuentan como tráfico
 
@@ -257,7 +264,7 @@ const ipStr = (ip) => [ip >>> 24, (ip >>> 16) & 255, (ip >>> 8) & 255, ip & 255]
 const plainIp = (a) => (a || '').replace(/^::ffff:/, '');
 
 // --- apodos ---------------------------------------------------------------------------------------------------
-// Los elige cada consola (nunca el nombre de usuario de la consola); aquí solo se limpian. Si un apodo no es válido
+// Clients supply game names, including automatic device names; sanitize them here. If a name is invalid
 // o es ofensivo, el jugador aparece como "Jugador NNNN".
 
 const BAD_WORDS = [
@@ -339,7 +346,6 @@ function networkMembers(member, info) {
 // --- tráfico del mes: tope para no pasarse del presupuesto -------------------------------------------------------
 
 const monthNow = () => new Date().toISOString().slice(0, 7);
-fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true, mode: 0o700 });
 const traffic = trafficStore.load(STATE_FILE, monthNow());
 let paused = false;
 
@@ -365,12 +371,15 @@ function checkMonth() {
     if (paused && !wasPaused) {
         matches.drain();
         streams.shutdown();
-    updates.shutdown();
+        updates.pause();
         log(`TOPE MENSUAL ALCANZADO (${(traffic.bytes / 1e9).toFixed(1)} GB): servidor en pausa hasta el mes que viene`);
         for (const room of rooms.values())
             for (const m of room.members) if (m && m.socket) sendError(m.socket, E.PAUSED, PAUSED_TEXT);
     }
-    if (!paused && wasPaused) log('servidor activo de nuevo');
+    if (!paused && wasPaused) {
+        updates.resume();
+        log('servidor activo de nuevo');
+    }
 }
 const PAUSED_TEXT = 'el servidor llegó a su límite de este mes; vuelve el día 1';
 
@@ -621,7 +630,7 @@ function join(socket, room, nickname, onJoined, features = 0) {
     sendRoom(member);
     for (const m of others(room, member)) send(m.socket, T.MEMBER_JOINED, memberBuf(member));
     stats.count('joins');
-    log(`sala ${room.code}: entra ${member.nick} (${ipStr(member.ip)}), ${room.members.filter(Boolean).length} miembros`);
+    log(`sala ${room.code}: entra seat ${member.index + 1} (${ipStr(member.ip)}), ${room.members.filter(Boolean).length} miembros`);
     return member;
 }
 
@@ -642,7 +651,7 @@ function resumeMember(socket, old, ip) {
     matches.roomChanged(old.room);
     appointmentPush?.roomChanged(old.room);
     stats.count('resumes');
-    log(`sala ${old.room.code}: vuelve ${old.nick} (${ipStr(old.ip)})`);
+    log(`sala ${old.room.code}: vuelve seat ${old.index + 1} (${ipStr(old.ip)})`);
 }
 
 function sendRoom(member) {
@@ -670,7 +679,7 @@ function detach(member) {
     member.grace = setTimeout(() => leave(member, 'no volvió'), GRACE_MS);
     matches.roomChanged(member.room);
     appointmentPush?.roomChanged(member.room);
-    log(`sala ${member.room.code}: se cortó ${member.nick}, se guarda su puesto`);
+    log(`sala ${member.room.code}: se cortó seat ${member.index + 1}, se guarda su puesto`);
     checkShutdown();
 }
 
@@ -695,7 +704,7 @@ function leave(member, why) {
     if (room.published && room.published.member === member) room.published = null;
     for (const m of others(room, member)) send(m.socket, T.MEMBER_LEFT, Buffer.from([member.index]));
     const left = room.members.filter(Boolean).length;
-    log(`sala ${room.code}: sale ${member.nick} (${why}), quedan ${left}`);
+    log(`sala ${room.code}: sale seat ${member.index + 1} (${why}), quedan ${left}`);
     if (left === 0 || (room.gameId && member.index === 0)) rooms.delete(room.code);
     if (room.gameId && member.index === 0) {
         for (const guest of others(room, member)) {
@@ -725,6 +734,8 @@ function relayControl(member, body) {
             if (payload.length !== NETWORK_INFO_SIZE) return;
             if (rejectUnresolvedLcid(member.socket, payload.readBigUInt64LE(0))) return;
             if (dest === 0xff || (publicRoom && member.index !== 0) || !networkMembers(member, payload)) return;
+            if (publicRoom && type === LDN.SCAN_RESP && (!room.published ||
+                !payload.subarray(0, 0x26).equals(room.published.info.subarray(0, 0x26)))) return;
             payload = sanitizeNetworkInfo(room, payload);
             break;
         case LDN.CONNECT:
@@ -827,7 +838,7 @@ function onFrame(socket, type, body) {
         const rateAllowed = available && allowed(plainIp(socket.remoteAddress), 'appointments');
         const connected = () => !socket.destroyed && !socket.writableEnded;
         const reply = !available ? appointments.handle(body, false) : !rateAllowed ?
-            Promise.resolve(appointmentStore.response(appointmentStore.STATUS.LIMIT, Math.floor(Date.now() / 1000))) : appointments.handle(body, true, connected);
+            Promise.resolve(appointmentStore.response(appointmentStore.STATUS.LIMIT, Math.floor(Date.now() / 1000))) : appointments.handle(body, true, connected, plainIp(socket.remoteAddress));
         reply.then(result => { if (result && connected()) send(socket, 0xa6, result); }).catch(() => {
             if (connected()) send(socket, 0xa6, appointmentStore.response(appointmentStore.STATUS.STORAGE, Math.floor(Date.now() / 1000)));
         });
@@ -1253,6 +1264,7 @@ function snapshot() {
     return { online: online + upstream.activeMembers, rooms: rooms.size + upstream.rooms,
              privateRooms: privateRooms + upstream.privateRooms, groups, players, upstream,
              providerEvents: providerDiagnostics.snapshot(), realms: realms?.snapshot() || [], tcpStreams: streams.snapshot(),
+             services: { appointments: appointments.healthy(), updates: updates.snapshot() },
              byGame: [...byGame.values()].sort((a, b) => b.players - a.players) };
 }
 // Grupos abiertos para la web pública: lo mismo que la lista de la app, sin el código de la sala.
@@ -1293,6 +1305,7 @@ stats = require('./stats').create({ stateDir: path.dirname(STATE_FILE), port: ST
 if (OPS_PORT) require('./operations').create({ port: OPS_PORT, status: () => {
     if (draining) return 'draining';
     if (!ready) return 'booting';
+    if (!appointments.healthy()) return 'unavailable';
     return paused ? 'paused' : 'ready';
 }, drain: beginDrain, token: process.env.LANYWHERE_OPS_TOKEN });
 

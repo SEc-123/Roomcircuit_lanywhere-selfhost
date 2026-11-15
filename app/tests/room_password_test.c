@@ -21,6 +21,7 @@ static const char *keyboard_hint = "Visible to everyone. Leave blank to clear.";
 static RoomPasscodeHost host = {.status = RoomPasscodeOk, .room = "ABCD23"};
 static const char *keyboard_text = "";
 static bool change_room_during_request, cancel_keyboard;
+static Result keyboard_create_error, keyboard_show_error;
 static u32 write_status, unlock_status;
 
 void mutexInit(Mutex *lock) { lock->locked = false; }
@@ -93,6 +94,7 @@ Result swkbdCreate(SwkbdConfig *keyboard, int flags)
 {
     assert(!flags);
     *keyboard = (SwkbdConfig){0};
+    if (keyboard_create_error) return keyboard_create_error;
     ++keyboard_opened;
     return 0;
 }
@@ -106,7 +108,7 @@ Result swkbdShow(SwkbdConfig *keyboard, char *out, size_t size)
     assert(!strcmp(keyboard->header, ui_text(keyboard_header)));
     assert(!strcmp(keyboard->subtext, ui_text(keyboard_hint)));
     snprintf(out, size, "%s", keyboard_text);
-    return cancel_keyboard;
+    return cancel_keyboard ? MAKERESULT(Module_Libnx, LibnxError_LibAppletBadExit) : keyboard_show_error;
 }
 void swkbdClose(SwkbdConfig *keyboard) { (void)keyboard; ++keyboard_closed; }
 
@@ -202,6 +204,12 @@ int main(void)
     cancel_keyboard = true;
     assert(!room_password_edit(&g_service, first.code, false, &edit) && writes == 1);
     cancel_keyboard = false;
+    keyboard_create_error = 1;
+    assert(!strcmp(room_password_edit(&g_service, first.code, false, &edit), "Could not open the keyboard. Try again.") && writes == 1);
+    keyboard_create_error = 0;
+    keyboard_show_error = 1;
+    assert(!strcmp(room_password_edit(&g_service, first.code, false, &edit), "Could not open the keyboard. Try again.") && writes == 1);
+    keyboard_show_error = 0;
     keyboard_text = "中文";
     assert(!strcmp(room_password_edit(&g_service, first.code, false, &edit), "Use up to 24 letters, numbers or symbols."));
     assert(writes == 1);

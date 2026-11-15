@@ -5,6 +5,8 @@
 typedef struct { const char *en; const char *zh; } UiTranslation;
 
 static const UiTranslation translations[] = {
+    {"Could not leave the room. Try again.", "无法退出房间，请重试。"},
+    {"Could not open the keyboard. Try again.", "无法打开键盘，请重试。"},
     {"Testing nodes: %u/%u", "正在测速：%u/%u"},
     {"LAN Play room did not respond. Try again.", "LAN Play 房间未响应，请重试。"},
     {"LAN Play connection failed. Try again.", "LAN Play 连接失败，请重试。"},

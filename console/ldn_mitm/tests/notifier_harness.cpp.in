@@ -56,9 +56,10 @@ struct ThreadType {};
 constexpr size_t MemoryPageSize = 4096;
 inline constexpr s32 DefaultThreadPriority = 16;
 inline constexpr s32 LowestThreadPriority = 31;
+static bool fail_thread = false;
 int CreateThread(ThreadType *, void (*)(void *), void *, void *, size_t, s32 priority) {
     assert(priority >= 0 && priority <= LowestThreadPriority && "invalid AMS user thread priority");
-    return 0;
+    return fail_thread ? 7 : 0;
 }
 void StartThread(ThreadType *) { ++worker_starts; }
 void GenerateRandomBytes(void *out, size_t bytes) { std::memset(out, 7, bytes); }
@@ -82,7 +83,7 @@ enum OpenMode { OpenMode_Read, OpenMode_Write };
 enum WriteOption { Flush };
 using FileHandle = std::string;
 struct ResultPathNotFound { static bool Includes(Result result) { return result == 1; } };
-static bool fail_subscription_commit = false;
+static bool fail_subscription_commit = false, fail_open = false;
 static std::map<std::string, std::string> files;
 int GetEntryType(DirectoryEntryType *t, const char *p) {
     std::string s = p;
@@ -105,6 +106,7 @@ int GetEntryType(DirectoryEntryType *t, const char *p) {
     return 1;
 }
 int OpenFile(FileHandle *h, const char *p, OpenMode) {
+    if (fail_open) return 7;
     if (!files.count(p))
         return 1;
     *h = p;
@@ -280,6 +282,17 @@ static void testBootRestore() {
 static void testSubscriptions() {
     resetClock(1000000);
     api_enabled = false;
+    const auto stored_before = fs::files;
+    fs::fail_open = true;
+    g_subscriptions_loaded = false;
+    AppointmentSubscriptions unavailable{};
+    assert(!GetAppointmentSubscriptions(&unavailable));
+    assert(SetAppointmentSubscription(event(101)) == AppointmentStorage && fs::files == stored_before);
+    fs::fail_open = false;
+    os::fail_thread = true;
+    g_worker_started = false;
+    assert(SetAppointmentSubscription(event(101)) == AppointmentUnavailable && fs::files == stored_before);
+    os::fail_thread = false;
     assert(SetAppointmentSubscription(event(101)) == AppointmentOk);
     assert(SetAppointmentSubscription(event(102)) == AppointmentOk);
     assert(SetAppointmentSubscription(event(101)) == AppointmentOk);

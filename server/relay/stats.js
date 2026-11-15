@@ -13,12 +13,74 @@ const crypto = require('crypto');
 const MINUTES = 24 * 60, DAYS = 30, EVENTS = 100;
 const SEARCH_WINDOW_MS = 5 * 60 * 1000;  // "consolas buscando": las que buscaron grupos en los últimos 5 minutos
 
+function validCount(value) {
+    return Number.isSafeInteger(value) && value >= 0;
+}
+
+function validRecord(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function counters(value) {
+    if (!validRecord(value) || Object.entries(value).some(([key, count]) =>
+        !/^[a-zA-Z0-9_.:-]{1,96}$/.test(key) || !validCount(count)))
+        throw new Error('Invalid statistics counters');
+    return Object.assign(Object.create(null), value);
+}
+
+function validateState(value) {
+    if (!validRecord(value)) throw new Error('Invalid statistics state');
+    const state = { counters: counters(value.counters ?? {}), minutes: [], days: [], events: [] };
+    // Explicit null is malformed, while omitted fields support older states.
+    if ('counters' in value) state.counters = counters(value.counters);
+    for (const [key, limit] of [['minutes', MINUTES], ['days', DAYS], ['events', EVENTS]]) {
+        if (!(key in value)) continue;
+        const rows = value[key];
+        if (!Array.isArray(rows) || rows.length > limit || rows.some(row => !validRecord(row)))
+            throw new Error('Invalid statistics history');
+        state[key] = rows.map(row => {
+            if (key === 'events') {
+                if (!validCount(row.t) || typeof row.text !== 'string' || row.text.length > 4096)
+                    throw new Error('Invalid statistics event');
+                return { t: row.t, text: row.text };
+            }
+            const fields = key === 'minutes' ? ['t', 'online', 'rooms', 'groups', 'bytes'] :
+                ['peakOnline', 'bytes', 'searchers', 'appUsers'];
+            if (fields.some(field => !validCount(row[field]))) throw new Error('Invalid statistics record');
+            const clean = Object.fromEntries(fields.map(field => [field, row[field]]));
+            if (key === 'days') {
+                if (typeof row.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.date))
+                    throw new Error('Invalid statistics day');
+                clean.date = row.date;
+                clean.counters = counters(row.counters);
+            }
+            return clean;
+        });
+    }
+    return state;
+}
+
 function create({ stateDir, port, snapshot, traffic, capBytes, paused }) {
     const file = path.join(stateDir, 'stats.json');
-    const state = { counters: {}, minutes: [], days: [], events: [] };
+    let state = validateState({}), saveAllowed = true;
+    let descriptor;
     try {
-        Object.assign(state, JSON.parse(fs.readFileSync(file, 'utf8')));
-    } catch { /* primera vez */ }
+        descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const stat = fs.fstatSync(descriptor);
+        if (!stat.isFile() || stat.size > 4 * 1024 * 1024) throw new Error('Statistics file is invalid or too large');
+        const bytes = Buffer.alloc(stat.size + 1);
+        const read = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
+        if (read !== stat.size) throw new Error('Statistics changed during load');
+        state = validateState(JSON.parse(bytes.subarray(0, read).toString('utf8')));
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            // Preserve malformed state for inspection before starting fresh counters.
+            try { fs.renameSync(file, file + '.invalid-' + crypto.randomBytes(8).toString('hex')); }
+            catch { saveAllowed = false; }
+        }
+    } finally {
+        if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
 
     // Huella de IP (sal aleatoria, solo en memoria) → último momento en que buscó: desde un juego o con la app abierta.
     const recent = { game: new Map(), app: new Map() };
@@ -32,7 +94,7 @@ function create({ stateDir, port, snapshot, traffic, capBytes, paused }) {
         const key = dayKey();
         let d = state.days[state.days.length - 1];
         if (!d || d.date !== key) {
-            d = { date: key, peakOnline: 0, bytes: 0, searchers: 0, appUsers: 0, counters: {} };
+            d = { date: key, peakOnline: 0, bytes: 0, searchers: 0, appUsers: 0, counters: Object.create(null) };
             state.days.push(d);
             if (state.days.length > DAYS) state.days.splice(0, state.days.length - DAYS);
             todaySeen = { game: new Set(), app: new Set() };
@@ -41,9 +103,10 @@ function create({ stateDir, port, snapshot, traffic, capBytes, paused }) {
     }
 
     function count(name, n = 1) {
-        state.counters[name] = (state.counters[name] || 0) + n;
-        const d = today();
-        d.counters[name] = (d.counters[name] || 0) + n;
+        if (!/^[a-zA-Z0-9_.:-]{1,96}$/.test(name) || !validCount(n)) return;
+        const add = target => { target[name] = Math.min(Number.MAX_SAFE_INTEGER, (target[name] || 0) + n); };
+        add(state.counters);
+        add(today().counters);
     }
 
     function event(text) {
@@ -81,6 +144,7 @@ function create({ stateDir, port, snapshot, traffic, capBytes, paused }) {
     }
 
     function save() {
+        if (!saveAllowed) return;
         try {
             fs.writeFileSync(file, JSON.stringify(state));
         } catch { /* el panel no debe tumbar el servidor */ }
@@ -150,4 +214,4 @@ function create({ stateDir, port, snapshot, traffic, capBytes, paused }) {
     return { count, event, noteSearch, save };
 }
 
-module.exports = { create };
+module.exports = { create, validateState };

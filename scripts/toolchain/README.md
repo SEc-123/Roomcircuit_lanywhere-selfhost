@@ -1,6 +1,8 @@
 # Switch 交叉构建与校验
 
-在仓库根目录执行。Linux x86_64 的本地安装脚本需要 Python 3.11、Git、curl、GNU Make、tar 和 zstd。它把固定的 devkitPro 软件包解压到本目录的 `sysroot/`，校验锁文件中的 SHA-256，再构建锁定提交的 libnx。
+复核当前验收包时，先在仓库根目录执行 `bash scripts/build-container.sh --embedded`。容器采用 `container-profile.json` 指定的 GCC 15.2.0 和固定 libnx 提交，并检查实际工具链版本。
+
+以下原生 Linux 安装路径使用 `packages.lock.json` 中的 GCC 16.1.0 工具链，适用于单独构建。它需要 Python 3.11、Git、curl、GNU Make、tar 和 zstd，安装到 `sysroot/` 并核对软件包摘要。该路径的产物应使用自己的构建报告核验。
 
 ```bash
 python3 scripts/toolchain/prepare.py

@@ -130,7 +130,7 @@ static ssize_t MockSend(int fd,const void *body,size_t size,int){
 static int MockShutdown(int fd,int how){assert(how==SHUT_RDWR);shutdowns.push_back(fd);return 0;}
 static int MockClose(int fd){closes.push_back(fd);return 0;}
 static int MockSocket(int,int,int){return 51;}
-static int MockPoll(pollfd*,nfds_t,int){return 1;}
+static int MockPoll(pollfd *p,nfds_t n,int){for(size_t i=0;i<n;i++)p[i].revents=POLLIN;return 1;}
 #define send MockSend
 #define shutdown MockShutdown
 #define close MockClose
@@ -153,16 +153,22 @@ pieces += [function('bool SendFrameTo('), function('void EnqueueControl('), func
 # QueryCapabilities and Handshake below remain unchanged production functions.
 pieces += [r'''
 static u32 offered_caps=0;static int cap_error=0,read_stage=0;static unsigned connects=0;static u8 room_error=0;static const char*room_error_text="";
-static std::vector<u8> direct_reply;
+static std::vector<u8> direct_reply;static bool udp_reply=true;
 static int ConnectServer(const sockaddr_in&,const char**,int,const char*,u32*,u64){connects++;return 61;}
 static ssize_t ReadFrame(int,u8 *type,u8 *body,size_t capacity,int){
  if(read_stage++==0){if(cap_error){*type=T_Error;body[0]=static_cast<u8>(cap_error);return 1;}assert(capacity>=4);*type=T_CapsReply;put32(body,offered_caps);return 4;}
  if(room_error){*type=T_Error;body[0]=room_error;const size_t n=std::strlen(room_error_text);assert(n+1<=capacity);std::memcpy(body+1,room_error_text,n);return n+1;}
  if(!direct_reply.empty()){assert(capacity>=direct_reply.size());*type=T_Room;std::memcpy(body,direct_reply.data(),direct_reply.size());return direct_reply.size();}
- assert(capacity>=24);std::memset(body,0,24);*type=T_Room;std::memcpy(body,"ABC234",6);put32(body+7,g_my_ip);put32(body+11,1234);return 24;
+ assert(capacity>=61);std::memset(body,0,61);*type=T_Room;std::memcpy(body,"ABC234",6);put32(body+7,g_my_ip);put32(body+11,1234);
+ body[23]=1;put32(body+25,g_my_ip);
+ for(auto it=writes.rbegin();it!=writes.rend();++it){if(it->bytes.size()<3)continue;auto *request=it->bytes.data()+3;
+  if(it->bytes[2]==T_Create){std::memcpy(body+15,request,8);break;}
+  if(it->bytes[2]==T_Join){std::memcpy(body,request,6);std::memcpy(body+15,request+38,8);break;}}
+ return 61;
 }
 static bool UdpSendTo(int,const sockaddr_in&,u32,u8,const void*,size_t){return true;}
 static ssize_t UdpReceiveFrom(int,const sockaddr_in&,u8 *body,size_t){
+ if(!udp_reply)return -1;
  put32(body,UdpMagic);const u32 flags=cap_error?0:offered_caps&12;body[4]=flags?U_RegisteredV2:U_Registered;if(flags)put32(body+5,flags);return flags?9:5;
 }
 ''', function('ssize_t ReadListFrame('),
@@ -305,7 +311,7 @@ int main(){
   assert(proxy->GetMetrics().pending_accepts==0&&sent_open_ok==0);checks++;}
  for(u32 caps:{0u,127u,128u,255u,256u,462u,511u})for(u8 type:{T_Create,T_Join,T_Resume}) {
   const size_t size=type==T_Create?41:type==T_Join?47:10,feature=type==T_Create?40:46;
-  std::vector<u8>body(size,0x5a);if(type!=T_Resume)body[feature]=Features;
+  std::vector<u8>body(size,0x5a);if(type==T_Join)std::memcpy(body.data(),"ABC234",6);if(type!=T_Resume)body[feature]=Features;
   auto original=body;ResetMocks();offered_caps=caps;cap_error=0;read_stage=0;Session session{};sockaddr_in server{};
   assert(Handshake(server,type,body.data(),size,&session));assert(session.capabilities==caps&&body==original);
   auto at=std::find_if(writes.begin(),writes.end(),[&](const Write&w){return w.bytes.size()>=3&&w.bytes[2]==type;});assert(at!=writes.end());
@@ -313,7 +319,7 @@ int main(){
   if(type!=T_Resume&&caps&real_tcp::Capability)expected[feature]|=real_tcp::MemberFeature;
   assert(sent==expected);checks++;
  }
- for(u32 caps:{127u,255u}){std::vector<u8>body(65,0x5a);body[46]=Features;ResetMocks();offered_caps=caps;cap_error=0;read_stage=0;Session session{};sockaddr_in server{};assert(Handshake(server,T_Join,body.data(),body.size(),&session));
+ for(u32 caps:{127u,255u}){std::vector<u8>body(65,0x5a);std::memcpy(body.data(),"ABC234",6);body[46]=Features;ResetMocks();offered_caps=caps;cap_error=0;read_stage=0;Session session{};sockaddr_in server{};assert(Handshake(server,T_Join,body.data(),body.size(),&session));
   const auto&w=writes.at(1);assert(w.bytes[2]==T_Join);auto expected=body;if(caps&real_tcp::Capability)expected[46]|=real_tcp::MemberFeature;assert(std::equal(expected.begin(),expected.end(),w.bytes.begin()+3));checks++;}
  for(u32 caps:{0u,128u,256u,511u})for(bool ready:{false,true}){u8 admission[41]{};admission[40]=0xa7;
   assert(ApplyTcpAdmissionFeatures(T_Create,admission,sizeof(admission),caps,ready));assert(admission[40]==static_cast<u8>((0xa7&~2)|((caps&128)&&ready?2:0)));checks++;}
@@ -356,6 +362,7 @@ int main(){
    if(type!=T_Resume)assert(writes[1].bytes.back()==Features);
    checks++;
   }
+  for(const char *provider:{"self", "lanywhere-public", "lanplay-cn-jax", REGION_PROVIDER_COMMUNITY})
   for(unsigned malformed=0;malformed<8;++malformed) {
    ResetMocks();direct_reply=room();read_stage=0;
    switch(malformed) {
@@ -369,11 +376,20 @@ int main(){
     case 7: put64(direct_reply.data()+15,43);break;
    }
    Session bad{};
-   assert(!Handshake(endpoint,T_Join,join,sizeof(join),&bad,5000,REGION_PROVIDER_COMMUNITY));
-   assert(!std::strcmp(bad.error,"Community node returned an invalid room."));
+   assert(!Handshake(endpoint,T_Join,join,sizeof(join),&bad,5000,provider));
+   assert(!std::strcmp(bad.error,"respuesta inesperada"));
    checks++;
   }
   direct_reply.clear();
+  for(u8 type:{T_Create,T_Join,T_Resume}) {
+   ResetMocks();read_stage=0;udp_reply=false;
+   Session failed{};const auto *data=type==T_Create?create:type==T_Join?join:resume;
+   const size_t size=type==T_Create?sizeof(create):type==T_Join?sizeof(join):sizeof(resume);
+   assert(!Handshake(endpoint,type,data,size,&failed,5000,"self"));
+   const bool released=std::any_of(writes.begin(),writes.end(),[](const Write&w){return w.bytes.size()>=3&&w.bytes[2]==T_Leave;});
+   assert(released==(type!=T_Resume));checks++;
+  }
+  udp_reply=true;
  }
  proxy.reset();std::printf("Actual relay/Proxy glue: %u epoch, failure, ingress, SYNC-order and negotiation scenarios passed.\n",checks);
 }

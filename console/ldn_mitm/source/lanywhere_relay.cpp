@@ -547,7 +547,7 @@ namespace ams::mitm::lanywhere {
             // El juego envía a ráfagas (los datos de la carrera, por ejemplo): si el búfer de salida está lleno, se
             // espera un poco en lugar de perder el paquete.
             for (int tries = 0;; tries++) {
-                if (::sendto(fd, buf, 9 + size, 0, reinterpret_cast<const sockaddr *>(std::addressof(server)), sizeof(server)) >= 0) return true;
+                if (::sendto(fd, buf, 9 + size, MSG_DONTWAIT, reinterpret_cast<const sockaddr *>(std::addressof(server)), sizeof(server)) >= 0) return true;
                 const int err = errno;
                 if ((err == ENOBUFS || err == EAGAIN || err == EWOULDBLOCK) && tries < 40) {
                     if (++g_send_retries % 200 == 1) Log("udp: búfer de salida lleno, reintentando (%u veces)", g_send_retries);
@@ -567,7 +567,7 @@ namespace ams::mitm::lanywhere {
         ssize_t UdpReceiveFrom(int fd, const sockaddr_in &server, void *buffer, size_t size) {
             sockaddr_in sender{};
             socklen_t length = sizeof(sender);
-            const ssize_t received = ::recvfrom(fd, buffer, size, 0, reinterpret_cast<sockaddr *>(&sender), &length);
+            const ssize_t received = ::recvfrom(fd, buffer, size, MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&sender), &length);
             if (received < 0 || length < sizeof(sender) || sender.sin_family != AF_INET ||
                 sender.sin_addr.s_addr != server.sin_addr.s_addr || sender.sin_port != server.sin_port) {
                 return -1;
@@ -839,11 +839,12 @@ namespace ams::mitm::lanywhere {
                             code == 3 ? "la sala es de otro juego" : msg);
             }
             if (rtype != T_Room || n < 24) return fail("respuesta inesperada");
-            if (!std::strcmp(provider, REGION_PROVIDER_COMMUNITY) && (!ValidCommunityRoom(s->reply, n) ||
+            if (!ValidCommunityRoom(s->reply, n) ||
                 (type == T_Create && (size < 8 || s->reply[6] != 0 || le64(s->reply + 15) != le64(body))) ||
                 (type == T_Join && (size < 46 || std::memcmp(s->reply, body, CodeLength) ||
-                    (le64(body + 38) && le64(s->reply + 15) != le64(body + 38)))))) {
-                return fail("Community node returned an invalid room.");
+                    (le64(body + 38) && le64(s->reply + 15) != le64(body + 38))))) {
+                if (type != T_Resume) SendFrameTo(s->tcp, T_Leave, nullptr, 0, nullptr, 0);
+                return fail("respuesta inesperada");
             }
             s->reply_size = n;
 
@@ -859,7 +860,7 @@ namespace ams::mitm::lanywhere {
                 if (requested) UdpSendTo(s->udp, server, token, U_RegisterV2, feature_bytes, sizeof(feature_bytes));
                 else UdpSendTo(s->udp, server, token, U_Register, nullptr, 0);
                 pollfd up = { s->udp, POLLIN, 0 };
-                if (::poll(std::addressof(up), 1, available) > 0) {
+                if (::poll(std::addressof(up), 1, available) > 0 && (up.revents & POLLIN)) {
                     u8 r[16];
                     const ssize_t rn = UdpReceiveFrom(s->udp, server, r, sizeof(r));
                     if (requested) {
@@ -870,8 +871,7 @@ namespace ams::mitm::lanywhere {
                 }
             }
             if (!registered) {
-                if ((type == T_Join && size == 65) ||
-                    (type != T_Resume && !std::strcmp(provider, REGION_PROVIDER_COMMUNITY))) {
+                if (type != T_Resume) {
                     SendFrameTo(s->tcp, T_Leave, nullptr, 0, nullptr, 0);
                     s->error_code = 0xff;  // the relay committed; the seat was explicitly released
                 }
@@ -2705,16 +2705,16 @@ namespace ams::mitm::lanywhere {
         return static_cast<ssize_t>(c.size);
     }
 
-    ssize_t ReceiveData(u16 port, void *buffer, size_t size, u32 *src_ip, u16 *src_port, bool peek) {
-        if (g_direct_session.load()) return lanplay::ReceiveData(port, buffer, size, src_ip, src_port, peek);
+    ssize_t ReceiveData(u16 port, void *buffer, size_t size, u32 *src_ip, u16 *src_port, bool peek, u32 peer_ip, u16 peer_port) {
+        if (g_direct_session.load()) return lanplay::ReceiveData(port, buffer, size, src_ip, src_port, peek, peer_ip, peer_port);
         std::scoped_lock lk(g_queue_lock);
-        return g_queue.Take(port, buffer, size, src_ip, src_port, peek);
+        return g_queue.Take(port, buffer, size, src_ip, src_port, peek, peer_ip, peer_port);
     }
 
-    bool HasData(u16 port) {
-        if (g_direct_session.load()) return lanplay::HasData(port);
+    bool HasData(u16 port, u32 peer_ip, u16 peer_port) {
+        if (g_direct_session.load()) return lanplay::HasData(port, peer_ip, peer_port);
         std::scoped_lock lk(g_queue_lock);
-        return g_queue.Has(port);
+        return g_queue.Has(port, peer_ip, peer_port);
     }
 
     namespace {

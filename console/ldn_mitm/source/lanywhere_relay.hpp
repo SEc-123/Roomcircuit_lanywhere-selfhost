@@ -195,9 +195,9 @@ namespace ams::mitm::lanywhere {
     bool SendData(u32 dst_ip, u16 src_port, u16 dst_port, const void *data, size_t size);
 
     // Saca de la cola el primer paquete para ese puerto: devuelve su tamaño (truncado a `size`) o -1 si no hay.
-    ssize_t ReceiveData(u16 port, void *buffer, size_t size, u32 *src_ip, u16 *src_port, bool peek = false);
+    ssize_t ReceiveData(u16 port, void *buffer, size_t size, u32 *src_ip, u16 *src_port, bool peek = false, u32 peer_ip = 0, u16 peer_port = 0);
     // Hay algún paquete esperando para ese puerto.
-    bool HasData(u16 port);
+    bool HasData(u16 port, u32 peer_ip = 0, u16 peer_port = 0);
 
     // Control de ldn (búsqueda, unión y sincronización de grupos) entre miembros de la sala, por la conexión TCP
     // con el servidor: llega entero y en orden. Cada mensaje es [LdnMsg][datos].

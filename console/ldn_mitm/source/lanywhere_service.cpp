@@ -257,7 +257,7 @@ namespace ams::mitm::lanywhere {
     Result LanywhereService::ReadAppointmentSubscriptions(const sf::OutBuffer &out) {
         if (out.GetSize() != sizeof(AppointmentSubscriptions)) return ResultRelayFailed();
         AppointmentSubscriptions result{};
-        GetAppointmentSubscriptions(&result);
+        if (!GetAppointmentSubscriptions(&result)) return ResultRelayFailed();
         std::memcpy(out.GetPointer(), &result, sizeof(result));
         R_SUCCEED();
     }

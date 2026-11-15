@@ -58,9 +58,15 @@ async function waitFor(fn, label) {
     throw new Error(`timed out waiting for ${label}`);
 }
 
-async function launch(t, env = {}) {
+async function launch(t, env = {}, freezeClock = false) {
     const state = fs.mkdtempSync(path.join(os.tmpdir(), 'lanywhere-safety-'));
-    const child = spawn(process.execPath, [serverPath, '--port', '0'], {
+    const args = [serverPath, '--port', '0'];
+    if (freezeClock) {
+        const clock = path.join(state, 'fixed-clock.cjs');
+        fs.writeFileSync(clock, 'Date.now = () => ' + Date.now() + ';\n');
+        args.unshift('--require', clock);
+    }
+    const child = spawn(process.execPath, args, {
         env: { ...testEnv, ...env, LANYWHERE_STATE_DIR: state }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     const exited = once(child, 'exit');
@@ -418,4 +424,64 @@ test('UDP replies use the configured local interface', async (t) => {
     assert.equal(body[4], U.REGISTERED);
     assert.equal(sender.address, localhost);
     assert.equal(sender.port, port);
+});
+
+test('host scan responses stay on the published game session and BSSID', async t => {
+    const port = await launch(t);
+    const host = await new Peer(t, port).connect();
+    const guest = await new Peer(t, port).connect();
+    await host.create(GAME);
+    host.send(T.PUBLISH, network(GAME, [host]));
+    await host.sync();
+    await guest.join(host, GAME);
+    host.send(T.PUBLISH);
+    await host.sync();
+    const info = network(GAME, [host]);
+    info[16] = 7;
+    info[32] = 8;
+    const relay = payload => host.send(T.RELAY, Buffer.concat([Buffer.from([guest.index, 2]), payload]));
+    relay(info);
+    await host.sync(); await guest.sync();
+    assert.equal(guest.frames.filter(x => x.type === T.RELAY_IN).length, 0, 'unpublished host is not a scan source');
+    host.send(T.PUBLISH, info);
+    await host.sync();
+    for (const offset of [16, 32]) {
+        const wrong = Buffer.from(info);
+        wrong[offset]++;
+        relay(wrong);
+    }
+    relay(info);
+    await host.sync(); await guest.sync();
+    const replies = guest.frames.filter(x => x.type === T.RELAY_IN);
+    assert.equal(replies.length, 1);
+    assert(replies[0].body.subarray(2, 2 + 0x26).equals(info.subarray(0, 0x26)));
+});
+
+test('two local-search clients can recreate rooms past ten attempts on one network', async t => {
+    const port = await launch(t, {}, true);
+    const players = [await new Peer(t, port).connect(), await new Peer(t, port).connect()];
+    for (let round = 0; round < 7; round++) {
+        for (const player of players) {
+            await player.create(GAME);
+            player.send(T.PUBLISH, network(GAME, [player]));
+            player.send(3); // Local-search games close a temporary host before searching again.
+            await player.sync();
+        }
+    }
+    players[0].send(T.FIND, u64(GAME));
+    assert.equal((await players[0].recv(T.GROUPS))[0], 0, 'temporary rooms were all removed');
+});
+
+test('an explicit low creation quota remains enforced after local-search cleanup', async t => {
+    const port = await launch(t, { LANYWHERE_CREATE_PER_MIN: '10' }, true);
+    const players = [await new Peer(t, port).connect(), await new Peer(t, port).connect()];
+    for (let attempt = 0; attempt < 10; attempt++) {
+        const player = players[attempt % 2];
+        await player.create(GAME);
+        player.send(3);
+        await player.sync();
+    }
+    players[0].send(T.CREATE, Buffer.concat([u64(GAME), Buffer.alloc(32), Buffer.from([1])]));
+    assert.equal((await players[0].recv(T.ERROR))[0], 7, 'the former default rejects attempt eleven');
+    await players[0].sync();
 });

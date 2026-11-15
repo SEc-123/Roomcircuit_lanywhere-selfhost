@@ -1,3 +1,4 @@
+// Modified by LANywhere Self-host, 2026-11-15: bounded glyph cache, safe list focus and thread lifecycle.
 /**
  * Copyright (C) 2020 werwolv
  *
@@ -26,6 +27,8 @@
 #include <math.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstring>
 #include <cwctype>
 #include <string>
@@ -757,17 +760,6 @@ namespace tsl {
                 s32 currX = x;
                 s32 currY = y;
 
-                struct Glyph {
-                    stbtt_fontinfo *currFont;
-                    float currFontSize;
-                    int bounds[4];
-                    int xAdvance;
-                    u8 *glyphBmp;
-                    int width, height;
-                };
-
-                static std::unordered_map<u64, Glyph> s_glyphCache;
-
                 do {
                     if (maxWidth > 0 && maxWidth < (currX - x))
                         break;
@@ -791,33 +783,7 @@ namespace tsl {
 
                     u64 key = (static_cast<u64>(currCharacter) << 32) | static_cast<u64>(monospace) << 31 | static_cast<u64>(std::bit_cast<u32>(fontSize));
 
-                    Glyph *glyph = nullptr;
-
-                    auto it = s_glyphCache.find(key);
-                    if (it == s_glyphCache.end()) {
-                        /* Cache glyph */
-                        glyph = &s_glyphCache.emplace(key, Glyph()).first->second;
-
-                        if (stbtt_FindGlyphIndex(&this->m_extFont, currCharacter))
-                            glyph->currFont = &this->m_extFont;
-                        else if(this->m_hasLocalFont && stbtt_FindGlyphIndex(&this->m_stdFont, currCharacter)==0)
-                            glyph->currFont = &this->m_localFont;
-                        else
-                            glyph->currFont = &this->m_stdFont;
-
-                        glyph->currFontSize = stbtt_ScaleForPixelHeight(glyph->currFont, fontSize);
-
-                        stbtt_GetCodepointBitmapBoxSubpixel(glyph->currFont, currCharacter, glyph->currFontSize, glyph->currFontSize,
-                                                            0, 0, &glyph->bounds[0], &glyph->bounds[1], &glyph->bounds[2], &glyph->bounds[3]);
-
-                        int yAdvance = 0;
-                        stbtt_GetCodepointHMetrics(glyph->currFont, monospace ? 'W' : currCharacter, &glyph->xAdvance, &yAdvance);
-
-                        glyph->glyphBmp = stbtt_GetCodepointBitmap(glyph->currFont, glyph->currFontSize, glyph->currFontSize, currCharacter, &glyph->width, &glyph->height, nullptr, nullptr);
-                    } else {
-                        /* Use cached glyph */
-                        glyph = &it->second;
-                    }
+                    Glyph *glyph = this->cachedGlyph(key, currCharacter, monospace, fontSize);
 
                     if (glyph->glyphBmp != nullptr && !std::iswspace(currCharacter) && fontSize > 0 && color.a != 0x0) {
 
@@ -870,14 +836,7 @@ namespace tsl {
 
                     strPos += codepointWidth;
 
-                    stbtt_fontinfo *currFont = nullptr;
-
-                    if (stbtt_FindGlyphIndex(&this->m_extFont, currCharacter))
-                        currFont = &this->m_extFont;
-                    else if(this->m_hasLocalFont && stbtt_FindGlyphIndex(&this->m_stdFont, currCharacter)==0)
-                        currFont = &this->m_localFont;
-                    else
-                        currFont = &this->m_stdFont;
+                    stbtt_fontinfo *currFont = this->fontForCodepoint(currCharacter);
 
                     float currFontSize = stbtt_ScaleForPixelHeight(currFont, fontSize);
 
@@ -896,6 +855,74 @@ namespace tsl {
 
         private:
             Renderer() {}
+            ~Renderer() { this->clearGlyphCache(); }
+
+            struct Glyph {
+                u64 key = 0;
+                bool valid = false;
+                stbtt_fontinfo *currFont = nullptr;
+                float currFontSize = 0;
+                int bounds[4]{};
+                int xAdvance = 0;
+                u8 *glyphBmp = nullptr;
+                int width = 0, height = 0;
+                size_t bitmapBytes = 0;
+            };
+            static constexpr size_t GlyphCacheCapacity = 512;
+            static constexpr size_t GlyphBitmapBudget = 256 * 1024;
+            std::array<Glyph, GlyphCacheCapacity> m_glyphCache{};
+            size_t m_nextGlyph = 0, m_glyphBytes = 0;
+
+            void releaseGlyph(Glyph &glyph) {
+                if (glyph.glyphBmp) stbtt_FreeBitmap(glyph.glyphBmp, nullptr);
+                this->m_glyphBytes -= glyph.bitmapBytes;
+                glyph = {};
+            }
+
+            void clearGlyphCache() {
+                for (auto &glyph : this->m_glyphCache) this->releaseGlyph(glyph);
+                this->m_nextGlyph = 0;
+            }
+
+            stbtt_fontinfo *fontForCodepoint(u32 character) {
+                if (stbtt_FindGlyphIndex(&this->m_extFont, character)) return &this->m_extFont;
+                if (stbtt_FindGlyphIndex(&this->m_stdFont, character)) return &this->m_stdFont;
+                if (this->m_hasLocalFont && stbtt_FindGlyphIndex(&this->m_localFont, character)) return &this->m_localFont;
+                if (this->m_hasChineseFont && stbtt_FindGlyphIndex(&this->m_chineseFont, character)) return &this->m_chineseFont;
+                return &this->m_stdFont;
+            }
+
+            Glyph *cachedGlyph(u64 key, u32 character, bool monospace, float fontSize) {
+                for (auto &glyph : this->m_glyphCache)
+                    if (glyph.valid && glyph.key == key) return &glyph;
+                auto &glyph = this->m_glyphCache[this->m_nextGlyph];
+                this->m_nextGlyph = (this->m_nextGlyph + 1) % GlyphCacheCapacity;
+                this->releaseGlyph(glyph);
+                glyph.key = key;
+                glyph.currFont = this->fontForCodepoint(character);
+                glyph.currFontSize = stbtt_ScaleForPixelHeight(glyph.currFont, fontSize);
+                stbtt_GetCodepointBitmapBoxSubpixel(glyph.currFont, character, glyph.currFontSize, glyph.currFontSize,
+                    0, 0, &glyph.bounds[0], &glyph.bounds[1], &glyph.bounds[2], &glyph.bounds[3]);
+                int unused = 0;
+                stbtt_GetCodepointHMetrics(glyph.currFont, monospace ? 'W' : character, &glyph.xAdvance, &unused);
+                const int width = glyph.bounds[2] - glyph.bounds[0];
+                const int height = glyph.bounds[3] - glyph.bounds[1];
+                glyph.valid = true;
+                if (width <= 0 || height <= 0 || static_cast<size_t>(width) > GlyphBitmapBudget / static_cast<size_t>(height))
+                    return &glyph;
+                const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height);
+                for (size_t i = 0; this->m_glyphBytes + bytes > GlyphBitmapBudget && i < GlyphCacheCapacity; ++i) {
+                    if (&this->m_glyphCache[i] != &glyph) this->releaseGlyph(this->m_glyphCache[i]);
+                }
+                glyph.glyphBmp = stbtt_GetCodepointBitmap(glyph.currFont, glyph.currFontSize, glyph.currFontSize,
+                    character, &glyph.width, &glyph.height, nullptr, nullptr);
+                if (glyph.glyphBmp) {
+                    glyph.bitmapBytes = bytes;
+                    this->m_glyphBytes += bytes;
+                } else glyph.valid = false; // Retry after transient allocation failure.
+                return &glyph;
+            }
+
 
             /**
              * @brief Gets the renderer instance
@@ -930,8 +957,8 @@ namespace tsl {
 
             std::stack<ScissoringConfig> m_scissoringStack;
 
-            stbtt_fontinfo m_stdFont, m_localFont, m_extFont;
-            bool m_hasLocalFont = false;
+            stbtt_fontinfo m_stdFont{}, m_localFont{}, m_extFont{}, m_chineseFont{};
+            bool m_hasLocalFont = false, m_hasChineseFont = false;
 
             static inline float s_opacity = 1.0F;
 
@@ -1079,12 +1106,14 @@ namespace tsl {
                 if (!this->m_initialized)
                     return;
 
+                this->clearGlyphCache();
                 framebufferClose(&this->m_framebuffer);
                 nwindowClose(&this->m_window);
                 viDestroyManagedLayer(&this->m_layer);
                 viCloseDisplay(&this->m_display);
                 eventClose(&this->m_vsyncEvent);
                 viExit();
+                this->m_initialized = false;
             }
 
             /**
@@ -1093,7 +1122,9 @@ namespace tsl {
              * @return Result
              */
             Result initFonts() {
-                static PlFontData stdFontData, localFontData, extFontData;
+                static PlFontData stdFontData, localFontData, extFontData, chineseFontData;
+                this->clearGlyphCache();
+                this->m_hasLocalFont = this->m_hasChineseFont = false;
 
                 // Nintendo's default font
                 TSL_R_TRY(plGetSharedFontByType(&stdFontData, PlSharedFontType_Standard));
@@ -1128,6 +1159,13 @@ namespace tsl {
                         fontBuffer = reinterpret_cast<u8*>(localFontData.address);
                         stbtt_InitFont(&this->m_localFont, fontBuffer, stbtt_GetFontOffsetForIndex(fontBuffer, 0));
                     }
+                }
+
+                // The app's saved language may differ from the system language.
+                if (R_SUCCEEDED(plGetSharedFontByType(&chineseFontData, PlSharedFontType_ChineseSimplified))) {
+                    fontBuffer = reinterpret_cast<u8*>(chineseFontData.address);
+                    this->m_hasChineseFont = stbtt_InitFont(&this->m_chineseFont, fontBuffer,
+                        stbtt_GetFontOffsetForIndex(fontBuffer, 0)) != 0;
                 }
 
                 // Nintendo's extended font containing a bunch of icons
@@ -1802,6 +1840,8 @@ namespace tsl {
             virtual ~List() {
                 for (auto& item : this->m_items)
                     delete item;
+                for (auto& entry : this->m_itemsToAdd)
+                    delete entry.second;
             }
 
             virtual void draw(gfx::Renderer *renderer) override {
@@ -1810,7 +1850,8 @@ namespace tsl {
                         delete item;
 
                     this->m_items.clear();
-                    this->m_offset = 0;
+                    this->m_itemsToRemove.clear();
+                    this->m_offset = this->m_nextOffset = 0;
                     this->m_focusedIndex = 0;
                     this->invalidate();
                     this->m_clearList = false;
@@ -1821,6 +1862,7 @@ namespace tsl {
                     if (index >= 0 && (this->m_items.size() > static_cast<size_t>(index))) {
                         const auto& it = this->m_items.cbegin() + static_cast<size_t>(index);
                         this->m_items.insert(it, element);
+                        if (this->m_focusedIndex >= static_cast<size_t>(index)) ++this->m_focusedIndex;
                     } else {
                         this->m_items.push_back(element);
                     }
@@ -1832,10 +1874,11 @@ namespace tsl {
                 for (auto element : this->m_itemsToRemove) {
                     for (auto it = m_items.cbegin(); it != m_items.cend(); ++it) {
                         if (*it == element) {
+                            const size_t removedIndex = static_cast<size_t>(it - this->m_items.cbegin());
                             this->m_items.erase(it);
-                            if (this->m_focusedIndex >= (it - this->m_items.cbegin())) {
-                                this->m_focusedIndex--;
-                            }
+                            if (this->m_focusedIndex > removedIndex) --this->m_focusedIndex;
+                            if (this->m_items.empty()) this->m_focusedIndex = 0;
+                            else if (this->m_focusedIndex >= this->m_items.size()) this->m_focusedIndex = this->m_items.size() - 1;
                             this->invalidate();
                             this->updateScrollOffset();
                             delete element;
@@ -1890,7 +1933,7 @@ namespace tsl {
                 }
             }
 
-            virtual bool onTouch(TouchEvent event, s32 currX, s32 currY, s32 prevX, s32 prevY, s32 initialX, s32 initialY) {
+            virtual bool onTouch(TouchEvent event, s32 currX, s32 currY, s32 prevX, s32 prevY, s32 initialX, s32 initialY) override {
                 bool handled = false;
 
                 // Discard touches out of bounds
@@ -1972,11 +2015,11 @@ namespace tsl {
             virtual Element* requestFocus(Element *oldFocus, FocusDirection direction) override {
                 Element *newFocus = nullptr;
 
-                if (this->m_clearList || this->m_itemsToAdd.size() > 0)
+                if (this->m_clearList || !this->m_itemsToAdd.empty() || this->m_items.empty())
                     return nullptr;
 
                 if (direction == FocusDirection::None) {
-                    u16 i = 0;
+                    size_t i = 0;
 
                     if (oldFocus == nullptr) {
                         s32 elementHeight = 0;
@@ -1999,7 +2042,7 @@ namespace tsl {
                 } else {
                     if (direction == FocusDirection::Down) {
 
-                        for (u16 i = this->m_focusedIndex + 1; i < this->m_items.size(); i++) {
+                        for (size_t i = this->m_focusedIndex + 1; i < this->m_items.size(); i++) {
                             newFocus = this->m_items[i]->requestFocus(oldFocus, direction);
 
                             if (newFocus != nullptr && newFocus != oldFocus) {
@@ -2014,8 +2057,8 @@ namespace tsl {
                     } else if (direction == FocusDirection::Up) {
                         if (this->m_focusedIndex > 0) {
 
-                            for (u16 i = this->m_focusedIndex - 1; i >= 0; i--) {
-                                if (i > this->m_items.size() || this->m_items[i] == nullptr)
+                            for (size_t i = this->m_focusedIndex; i-- > 0;) {
+                                if (i >= this->m_items.size() || this->m_items[i] == nullptr)
                                     return oldFocus;
                                 else
                                     newFocus = this->m_items[i]->requestFocus(oldFocus, direction);
@@ -2073,7 +2116,7 @@ namespace tsl {
 
         protected:
             std::vector<Element*> m_items;
-            u16 m_focusedIndex = 0;
+            size_t m_focusedIndex = 0;
 
             float m_offset = 0, m_nextOffset = 0;
             s32 m_listHeight = 0;
@@ -2096,7 +2139,7 @@ namespace tsl {
                 }
 
                 this->m_nextOffset = 0;
-                for (u16 i = 0; i < this->m_focusedIndex; i++)
+                for (size_t i = 0; i < std::min(this->m_focusedIndex, this->m_items.size()); i++)
                     this->m_nextOffset += this->m_items[i]->getHeight();
 
                 this->m_nextOffset -= this->getHeight() / 3;
@@ -3329,11 +3372,13 @@ namespace tsl {
          *
          */
         struct SharedThreadData {
-            bool running = false;
+            std::atomic<bool> running{false};
 
             Event comboEvent = { 0 };
 
-            bool overlayOpen = false;
+            std::atomic<bool> overlayOpen{false};
+            std::atomic<bool> hideRequested{false};
+            std::atomic<Result> failure{0};
 
             std::mutex dataMutex;
             u64 keysDown = 0;
@@ -3380,13 +3425,25 @@ namespace tsl {
 
             // To prevent focus glitchout, close the overlay immediately when the home button gets pressed
             Event homeButtonPressEvent = {};
-            hidsysAcquireHomeButtonEventHandle(&homeButtonPressEvent, false);
+            Result result = hidsysAcquireHomeButtonEventHandle(&homeButtonPressEvent, false);
+            if (R_FAILED(result)) {
+                shData->failure = result;
+                shData->running = false;
+                eventFire(&shData->comboEvent);
+                return;
+            }
             eventClear(&homeButtonPressEvent);
             hlp::ScopeGuard homeButtonEventGuard([&] { eventClose(&homeButtonPressEvent); });
 
             // To prevent focus glitchout, close the overlay immediately when the power button gets pressed
             Event powerButtonPressEvent = {};
-            hidsysAcquireSleepButtonEventHandle(&powerButtonPressEvent, false);
+            result = hidsysAcquireSleepButtonEventHandle(&powerButtonPressEvent, false);
+            if (R_FAILED(result)) {
+                shData->failure = result;
+                shData->running = false;
+                eventFire(&shData->comboEvent);
+                return;
+            }
             eventClear(&powerButtonPressEvent);
             hlp::ScopeGuard powerButtonEventGuard([&] { eventClose(&powerButtonPressEvent); });
 
@@ -3438,7 +3495,7 @@ namespace tsl {
 
                     if (((shData->keysHeld & tsl::cfg::launchCombo) == tsl::cfg::launchCombo) && shData->keysDown & tsl::cfg::launchCombo) {
                         if (shData->overlayOpen) {
-                            tsl::Overlay::get()->hide();
+                            shData->hideRequested = true;
                             shData->overlayOpen = false;
                         }
                         else
@@ -3453,7 +3510,7 @@ namespace tsl {
                 Result rc = waitObjects(&idx, objects, WaiterObject_Count, 20'000'000ul);
                 if (R_SUCCEEDED(rc)) {
                     if (shData->overlayOpen) {
-                        tsl::Overlay::get()->hide();
+                        shData->hideRequested = true;
                         shData->overlayOpen = false;
                     }
 
@@ -3466,11 +3523,41 @@ namespace tsl {
                             break;
                     }
                 } else if (rc != KERNELRESULT(TimedOut)) {
-                    ASSERT_FATAL(rc);
+                    shData->failure = rc;
+                    shData->running = false;
+                    eventFire(&shData->comboEvent);
                 }
             }
         }
 
+    }
+
+    namespace impl {
+        static Result startInputThread(SharedThreadData &data, Thread &thread) {
+            Result result = eventCreate(&data.comboEvent, false);
+            if (R_FAILED(result)) return result;
+            data.running = true;
+            result = threadCreate(&thread, backgroundEventPoller, &data, nullptr, 0x4000, 0x2c, -2);
+            if (R_FAILED(result)) {
+                data.running = false;
+                eventClose(&data.comboEvent);
+                return result;
+            }
+            result = threadStart(&thread);
+            if (R_FAILED(result)) {
+                data.running = false;
+                threadClose(&thread);
+                eventClose(&data.comboEvent);
+            }
+            return result;
+        }
+
+        static void stopInputThread(SharedThreadData &data, Thread &thread) {
+            data.running = false;
+            threadWaitForExit(&thread);
+            threadClose(&thread);
+            eventClose(&data.comboEvent);
+        }
     }
 
     /**
@@ -3520,13 +3607,9 @@ namespace tsl {
 
         impl::SharedThreadData shData;
 
-        shData.running = true;
-
-        Thread backgroundThread;
-        threadCreate(&backgroundThread, impl::backgroundEventPoller, &shData, nullptr, 0x1000, 0x2c, -2);
-        threadStart(&backgroundThread);
-
-        eventCreate(&shData.comboEvent, false);
+        Thread backgroundThread{};
+        const Result inputStarted = impl::startInputThread(shData, backgroundThread);
+        if (R_FAILED(inputStarted)) return static_cast<int>(inputStarted);
 
         auto& overlay = tsl::Overlay::s_overlayInstance;
         overlay = new TOverlay();
@@ -3548,8 +3631,11 @@ namespace tsl {
 
         while (shData.running) {
 
-            eventWait(&shData.comboEvent, UINT64_MAX);
+            const Result waitResult = eventWait(&shData.comboEvent, UINT64_MAX);
+            if (R_FAILED(waitResult)) { shData.failure = waitResult; break; }
             eventClear(&shData.comboEvent);
+            if (!shData.running) break;
+            shData.hideRequested = false;
             shData.overlayOpen = true;
 
 
@@ -3560,6 +3646,7 @@ namespace tsl {
 
 
             while (shData.running) {
+                if (shData.hideRequested.exchange(false)) overlay->hide();
                 overlay->loop();
 
                 {
@@ -3586,17 +3673,15 @@ namespace tsl {
             eventClear(&shData.comboEvent);
         }
 
-        eventClose(&shData.comboEvent);
-
-        threadWaitForExit(&backgroundThread);
-        threadClose(&backgroundThread);
+        impl::stopInputThread(shData, backgroundThread);
 
         overlay->exitScreen();
         overlay->exitServices();
 
         delete overlay;
+        overlay = nullptr;
 
-        return 0;
+        return static_cast<int>(shData.failure.load());
     }
 
 }

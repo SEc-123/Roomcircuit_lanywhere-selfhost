@@ -18,6 +18,7 @@ typedef struct {
 } NodeMeasurement;
 
 typedef struct {
+    atomic_bool locked;
     atomic_uint handle;
     atomic_uint_fast64_t deadline;
 } NodeProbeGuard;

@@ -28,6 +28,8 @@ code='''#include <assert.h>
 static NodeFriendResponse group;
 static char group_code[8];
 static const char *notice;
+static const char *keyboard_error;
+static bool language_save_failed;
 '''+ '\n'.join(routes.function(text,x) for x in functions)+r'''
 static void capture(const char *dir,const char *kind,int zh){char path[4096];snprintf(path,sizeof(path),"%s/nodes-%s-%s.png",dir,zh?"zh":"en",kind);assert(gfx_save_png(path));}
 int main(int argc,char **argv){

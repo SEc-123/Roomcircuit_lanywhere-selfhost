@@ -156,7 +156,13 @@ def read_archive(path):
     return entries
 
 
+def restore_marker():
+    return PATHS['traffic.json'][0].parent / '.restore-pending'
+
+
 def backup(path):
+    if read_optional(restore_marker(), 256) is not None:
+        raise ValueError('A restore is incomplete. Complete restore before creating a backup')
     entries = {name: data for name, (file, limit) in PATHS.items()
                if (data := read_optional(file, limit)) is not None}
     validate(entries)
@@ -209,6 +215,13 @@ def restore(archive):
     changes = []
     committed = []
     preserve = set()
+    marker = restore_marker()
+    previous_marker = read_optional(marker, 256)
+    if previous_marker not in (None, b'Switch Online restore in progress\n'):
+        raise ValueError('Unrecognized restore marker; inspect before changing state')
+    marker_created = False
+    completed = False
+    rollback_complete = False
     try:
         for name, content in entries.items():
             path, limit = PATHS[name]
@@ -222,10 +235,19 @@ def restore(archive):
             changes.append([path, new, None])
             if previous is not None:
                 changes[-1][2] = staged_file(path, previous)
+        if previous_marker is None:
+            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            marker_created = True
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(b'Switch Online restore in progress\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+            fsync_directory(marker.parent)
         for path, new, previous in changes:
             os.replace(new, path)
             committed.append((path, previous))
             fsync_directory(path.parent)
+        completed = True
     except BaseException as error:
         preserve.update(previous for _, previous in committed if previous is not None)
         failures = []
@@ -241,10 +263,14 @@ def restore(archive):
                 failures.append(f'{path}: {rollback_error}{recovery}')
             else:
                 preserve.discard(previous)
+        rollback_complete = not failures
         if failures:
             raise OSError(f'Restore failed and rollback needs attention: {"; ".join(failures)}') from error
         raise
     finally:
+        if completed or (marker_created and rollback_complete):
+            marker.unlink(missing_ok=True)
+            fsync_directory(marker.parent)
         for _, new, previous in changes:
             new.unlink(missing_ok=True)
             if previous is not None and previous not in preserve:

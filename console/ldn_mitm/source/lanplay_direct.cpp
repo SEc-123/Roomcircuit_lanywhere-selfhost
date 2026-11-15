@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <memory>
@@ -420,7 +421,7 @@ struct Impl {
     void Data(uint32_t source, uint16_t sport, uint16_t dport, const void *data, size_t size) {
         if (packet_count == packets.size() || size > GameBytes || packet_bytes + size > 128 * 1024)
             return;
-        auto *copy = new (std::nothrow) uint8_t[size ? size : 1];
+        auto *copy = static_cast<uint8_t *>(std::malloc(size ? size : 1));
         if (!copy)
             return;
         if (size)
@@ -1320,7 +1321,7 @@ struct Impl {
                 listener = {};
             }
         for (auto &packet : packets) {
-            delete[] packet.data;
+            std::free(packet.data);
             packet = {};
         }
         peers = {};
@@ -1348,8 +1349,9 @@ struct Impl {
             Put32(ping + 1, static_cast<uint32_t>(now));
             if (!SendRaw(ping, sizeof(ping)) || (last_pong && now - last_pong > 15000)) {
                 const int replacement = ::socket(AF_INET, SOCK_DGRAM, 0);
-                if (replacement >= 0) {
-                    ::fcntl(replacement, F_SETFL, O_NONBLOCK);
+                if (replacement >= 0 && ::fcntl(replacement, F_SETFL, O_NONBLOCK) < 0) {
+                    ::close(replacement);
+                } else if (replacement >= 0) {
                     if (socket >= 0)
                         ::close(socket);
                     socket = replacement;
@@ -1613,17 +1615,22 @@ bool Configure(uint32_t node, const Endpoint &endpoint) {
     if (impl->active)
         return impl->node == node && impl->endpoint.ipv4 == endpoint.ipv4 &&
                impl->endpoint.port == endpoint.port;
-    if (impl->configured && !impl->renew_address && impl->node == node &&
+    if (impl->configured && impl->socket >= 0 && !impl->renew_address && impl->node == node &&
         impl->endpoint.ipv4 == endpoint.ipv4 && impl->endpoint.port == endpoint.port)
         return true;
     impl->Reset();
+    impl->configured = false;
     impl->fork_mappings = {};
     if (impl->socket >= 0)
         ::close(impl->socket);
     impl->socket = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (impl->socket < 0)
         return false;
-    ::fcntl(impl->socket, F_SETFL, O_NONBLOCK);
+    if (::fcntl(impl->socket, F_SETFL, O_NONBLOCK) < 0) {
+        ::close(impl->socket);
+        impl->socket = -1;
+        return false;
+    }
     impl->node = node;
     impl->endpoint = endpoint;
     impl->configured = true;
@@ -1661,7 +1668,8 @@ int Scan(const void *filter, size_t filter_size, const NodeRoomLocator *selected
             impl->LdnUdp(Broadcast, 0, nullptr, 0, true);
     }
     Sleep(900);
-    std::unique_ptr<ScanEntry[]> result(new (std::nothrow) ScanEntry[MaxScans]);
+    std::unique_ptr<ScanEntry[], decltype(&std::free)> result(
+        static_cast<ScanEntry *>(std::calloc(MaxScans, sizeof(ScanEntry))), &std::free);
     size_t count = 0;
     if (!result) {
         std::scoped_lock lock(impl->mutex);
@@ -1952,7 +1960,7 @@ bool SendData(uint32_t destination, uint16_t sport, uint16_t dport, const void *
         impl->sent++;
     return sent;
 }
-ssize_t ReceiveData(uint16_t port, void *out, size_t capacity, uint32_t *source, uint16_t *sport, bool peek) {
+ssize_t ReceiveData(uint16_t port, void *out, size_t capacity, uint32_t *source, uint16_t *sport, bool peek, uint32_t peer_ip, uint16_t peer_port) {
     auto *impl = Peek();
     if (!impl)
         return -1;
@@ -1960,7 +1968,7 @@ ssize_t ReceiveData(uint16_t port, void *out, size_t capacity, uint32_t *source,
     for (size_t i = 0; i < impl->packet_count; i++) {
         const size_t at = (impl->packet_head + i) % impl->packets.size();
         auto &entry = impl->packets[at];
-        if (entry.destination_port != port)
+        if (entry.destination_port != port || (peer_ip && (entry.source != peer_ip || entry.source_port != peer_port)))
             continue;
         const size_t size = std::min(capacity, entry.size);
         if (size)
@@ -1969,7 +1977,7 @@ ssize_t ReceiveData(uint16_t port, void *out, size_t capacity, uint32_t *source,
         *sport = entry.source_port;
         if (!peek) {
             impl->packet_bytes -= entry.size;
-            delete[] entry.data;
+            std::free(entry.data);
             for (size_t j = i; j + 1 < impl->packet_count; j++)
                 impl->packets[(impl->packet_head + j) % impl->packets.size()] =
                     impl->packets[(impl->packet_head + j + 1) % impl->packets.size()];
@@ -1980,14 +1988,16 @@ ssize_t ReceiveData(uint16_t port, void *out, size_t capacity, uint32_t *source,
     errno = EAGAIN;
     return -1;
 }
-bool HasData(uint16_t port) {
+bool HasData(uint16_t port, uint32_t peer_ip, uint16_t peer_port) {
     auto *impl = Peek();
     if (!impl)
         return false;
     std::scoped_lock lock(impl->mutex);
-    for (size_t i = 0; i < impl->packet_count; i++)
-        if (impl->packets[(impl->packet_head + i) % impl->packets.size()].destination_port == port)
+    for (size_t i = 0; i < impl->packet_count; i++) {
+        const auto &packet = impl->packets[(impl->packet_head + i) % impl->packets.size()];
+        if (packet.destination_port == port && (!peer_ip || (packet.source == peer_ip && packet.source_port == peer_port)))
             return true;
+    }
     return false;
 }
 bool SendStream(uint64_t epoch, const void *body, size_t size) {

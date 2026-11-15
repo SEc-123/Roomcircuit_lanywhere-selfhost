@@ -720,15 +720,16 @@ namespace ams::mitm::lanywhere {
             static_cast<void>(StartWorkerLocked());
     }
 
-    void GetAppointmentSubscriptions(AppointmentSubscriptions *out) {
+    bool GetAppointmentSubscriptions(AppointmentSubscriptions *out) {
         *out = {};
         std::scoped_lock lock(g_watch_lock);
-        if (!LoadSubscriptionsLocked()) return;
+        if (!LoadSubscriptionsLocked()) return false;
         PruneSubscriptionsLocked(NowLocked());
         if (g_subscription_count) static_cast<void>(StartWorkerLocked());
         out->count = static_cast<u32>(g_subscription_count);
         for (size_t i = 0; i < g_subscription_count; ++i)
             out->ids[i] = g_subscriptions[i].event.id;
+        return true;
     }
 
     u32 SetAppointmentSubscription(const AppointmentWatchRequest &request) {
@@ -742,8 +743,7 @@ namespace ams::mitm::lanywhere {
         const bool exists = index < g_subscription_count;
         if (!request.enabled && !exists) return AppointmentOk;
         if (request.enabled && exists && SameEvent(g_subscriptions[index].event, request)) {
-            static_cast<void>(StartWorkerLocked());
-            return AppointmentOk;
+            return StartWorkerLocked() ? AppointmentOk : AppointmentUnavailable;
         }
         if (request.enabled && !exists && g_subscription_count == APPOINTMENT_SUBSCRIPTION_LIMIT)
             return AppointmentLimit;
@@ -756,6 +756,7 @@ namespace ams::mitm::lanywhere {
             for (size_t i = index + 1; i < state.count; ++i) state.events[i - 1] = state.events[i];
             state.events[--state.count] = {};
         }
+        if (request.enabled && !StartWorkerLocked()) return AppointmentUnavailable;
         if (!StoreSubscriptionsLocked(state)) return AppointmentStorage;
 
         if (request.enabled) {

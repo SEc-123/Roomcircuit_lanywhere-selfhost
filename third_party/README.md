@@ -2,6 +2,7 @@
 
 The original LANywhere/ldn_mitm GPL-2.0 notice is preserved in the project root.
 Atmosphere-libs and libtesla source, with their licenses, is included under `console/`.
+The libtesla header includes local lifecycle, focus, glyph-cache and Chinese-font fixes recorded in `UPSTREAM.json`.
 
 The front end links the devkitPro builds of FreeType, HarfBuzz, libpng, bzip2, zlib,
 libjpeg-turbo and libnx, together with the devkitA64 runtime. Packaged license notices

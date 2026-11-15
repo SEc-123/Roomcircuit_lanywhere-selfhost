@@ -162,9 +162,9 @@ static Result lanywhere_join(u64 game_id, const char *code)
         .buffers = { { code, strlen(code) }, { "", 0 } });
 }
 
-static void lanywhere_leave(void)
+static Result lanywhere_leave(void)
 {
-    serviceDispatch(&g_lanywhere, 2);
+    return serviceDispatch(&g_lanywhere, 2);
 }
 
 static Result lanywhere_status(LanywhereStatus *out)
@@ -954,11 +954,11 @@ static void save_capture_if_requested(void)
     struct stat st;
     for (int n = 1; n < 1000; n++) {
         snprintf(path, sizeof(path), "sdmc:/lanywhere/captura-%d.png", n);
-        if (stat(path, &st) != 0)
-            break;
+        if (stat(path, &st) == 0) continue;
+        if (errno != ENOENT) return;
+        if (gfx_save_png(path)) remove(CAPTURE_FLAG);
+        return;
     }
-    gfx_save_png(path);
-    remove(CAPTURE_FLAG);
 }
 
 static const char *list_error_title(u32 status)
@@ -1380,7 +1380,7 @@ static void groups_column(const View *v)
 
 static bool can_change_visibility(const View *v)
 {
-    return v->discovery == LobbyDiscoveryLegacy && v->status_valid && v->config_state == RelayConfigReady && !is_self_network(v) &&
+    return !v->node_picker_available && v->discovery == LobbyDiscoveryLegacy && v->status_valid && v->config_state == RelayConfigReady && !is_self_network(v) &&
         !v->private_room && !v->private_panel && !v->provider_panel && !v->external_confirm && !show_matching(v) &&
         v->st.state != StateInRoom && v->st.state != StateConnecting;
 }
@@ -1528,7 +1528,7 @@ static void side_column(const View *v)
         gfx_round_rect(x, y, SIDE_W, 116, 18, C_PANEL);
         gfx_text(x + 20, y + 18, 24, C_TEXT, TR("Crear en el juego", "Game room visibility"));
         const char *visibility = v->private_room ? TR("Solo amigos", "Friends only") :
-            v->config.public_groups ? TR("Público", "Public") : TR("Solo local", "Local only");
+            (v->node_picker_available || v->config.public_groups) ? TR("Público", "Public") : TR("Solo local", "Local only");
         gfx_text(x + 20, y + 65, 24, C_CODE, visibility);
         if (can_change_visibility(v)) {
             gfx_button(x + SIDE_W - 82, y + 62, "X", "");
@@ -1727,11 +1727,16 @@ static void draw_busy(const char *text)
     gfx_end();
 }
 
+static const char *g_keyboard_error;
+
 static bool ask_code(char *out, size_t size)
 {
+    g_keyboard_error = NULL;
     SwkbdConfig kbd;
-    if (R_FAILED(swkbdCreate(&kbd, 0)))
+    if (R_FAILED(swkbdCreate(&kbd, 0))) {
+        g_keyboard_error = "Could not open the keyboard. Try again.";
         return false;
+    }
     swkbdConfigMakePresetDefault(&kbd);
     swkbdConfigSetHeaderText(&kbd, TR("Código de la sala", "Room code"));
     swkbdConfigSetGuideText(&kbd, TR("6 letras o números", "6 letters or numbers"));
@@ -1739,6 +1744,8 @@ static bool ask_code(char *out, size_t size)
     swkbdConfigSetStringLenMin(&kbd, 6);
     Result rc = swkbdShow(&kbd, out, size);
     swkbdClose(&kbd);
+    if (R_FAILED(rc) && rc != MAKERESULT(Module_Libnx, LibnxError_LibAppletBadExit))
+        g_keyboard_error = "Could not open the keyboard. Try again.";
     for (char *p = out; *p; p++)
         if (*p >= 'a' && *p <= 'z')
             *p -= 32;
@@ -1748,9 +1755,12 @@ static bool ask_code(char *out, size_t size)
 #if !RELAY_PROFILE_FIXED
 static bool ask_server_field(bool address, const char *current, char *out, size_t size)
 {
+    g_keyboard_error = NULL;
     SwkbdConfig kbd;
-    if (R_FAILED(swkbdCreate(&kbd, 0)))
+    if (R_FAILED(swkbdCreate(&kbd, 0))) {
+        g_keyboard_error = "Could not open the keyboard. Try again.";
         return false;
+    }
     swkbdConfigMakePresetDefault(&kbd);
     swkbdConfigSetType(&kbd, SwkbdType_NumPad);
     if (address)
@@ -1763,6 +1773,8 @@ static bool ask_server_field(bool address, const char *current, char *out, size_
     swkbdConfigSetStringLenMax(&kbd, address ? RELAY_IPV4_SIZE - 1 : 5);
     Result rc = swkbdShow(&kbd, out, size);
     swkbdClose(&kbd);
+    if (R_FAILED(rc) && rc != MAKERESULT(Module_Libnx, LibnxError_LibAppletBadExit))
+        g_keyboard_error = "Could not open the keyboard. Try again.";
     return R_SUCCEEDED(rc);
 }
 #endif
@@ -1790,8 +1802,10 @@ static bool edit_server(View *v)
     }
 
     char address[RELAY_IPV4_SIZE] = {0};
-    if (!ask_server_field(true, v->config.server, address, sizeof(address)))
+    if (!ask_server_field(true, v->config.server, address, sizeof(address))) {
+        if (g_keyboard_error) snprintf(v->message, sizeof(v->message), "%s", ui_text(g_keyboard_error));
         return false;
+    }
     if (!relay_config_ipv4_valid(address)) {
         snprintf(v->message, sizeof(v->message), "%s", TR("Introduce una IPv4 válida.", "Enter a valid IPv4 address."));
         return false;
@@ -1799,8 +1813,10 @@ static bool edit_server(View *v)
 
     char current_port[6], port_text[6] = {0};
     snprintf(current_port, sizeof(current_port), "%u", (unsigned)v->config.port);
-    if (!ask_server_field(false, current_port, port_text, sizeof(port_text)))
+    if (!ask_server_field(false, current_port, port_text, sizeof(port_text))) {
+        if (g_keyboard_error) snprintf(v->message, sizeof(v->message), "%s", ui_text(g_keyboard_error));
         return false;
+    }
     uint16_t port;
     if (!relay_config_parse_port(port_text, &port)) {
         snprintf(v->message, sizeof(v->message), "%s", TR("El puerto debe ser de 1 a 65535.", "Port must be 1 to 65535."));
@@ -2486,8 +2502,11 @@ int main(int argc, char **argv)
                 g_zh=ui_chinese();dirty=true;next_status=0;
             }
         } else if (v.private_room && (down & HidNpadButton_B)) {
-            lanywhere_leave();
-            snprintf(v.message, sizeof(v.message), "%s", TR("Saliste de la sala privada.", "You left the private room."));
+            const Result result = lanywhere_leave();
+            snprintf(v.message, sizeof(v.message), "%s", R_SUCCEEDED(result) ?
+                TR("Saliste de la sala privada.", "You left the private room.") :
+                ui_text("Could not leave the room. Try again."));
+            poll_lanywhere(&v);
         } else if (v.discovery == LobbyDiscoveryLegacy && v.status_valid && v.private_panel && !is_self_network(&v) && !lobby_provider_is_lanplay(v.config.provider) && v.config_state == RelayConfigReady && v.st.state != StateInRoom && v.st.state != StateConnecting && (down & HidNpadButton_A)) {
             draw_busy(TR("Creando la sala…", "Creating the room…"));
             v.message[0] = '\0';
@@ -2506,6 +2525,8 @@ int main(int argc, char **argv)
                     snprintf(v.message, sizeof(v.message), TR("No se pudo entrar en la sala %s.", "Could not join room %s."), code);
                 else
                     snprintf(v.message, sizeof(v.message), TR("Estás en la sala %s. Ya puedes abrir el juego.", "Joined %s. Open the game."), code);
+            } else if (g_keyboard_error) {
+                snprintf(v.message, sizeof(v.message), "%s", ui_text(g_keyboard_error));
             }
         } else if (can_change_visibility(&v) && (down & HidNpadButton_X)) {
             const bool visible = !v.config.public_groups;

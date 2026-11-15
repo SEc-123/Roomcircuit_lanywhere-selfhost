@@ -43,6 +43,8 @@ namespace ams::mitm::ldn {
                     LogFormat("NodeInfo size is wrong");
                     return -1;
                 }
+                if (lanywhere::InRoom() || info->localCommunicationVersion !=
+                        this->discovery->networkInfo.ldn.nodes[0].localCommunicationVersion) return -1;
                 *this->nodeInfo = *info;
                 this->status = NodeStatus::Connected;
 
@@ -71,7 +73,7 @@ namespace ams::mitm::ldn {
         return this->recvPacket([&](LANPacketType type, const void *data, size_t size, ReplyFunc reply) -> int {
             switch (type) {
                 case LANPacketType::Scan: {
-                    if (!lanplay::State().active && this->discovery->getState() == CommState::AccessPointCreated &&
+                    if (!lanywhere::InRoom() && this->discovery->getState() == CommState::AccessPointCreated &&
                         this->discovery->networkInfo.ldn.stationAcceptPolicy != LdnAcceptPolicy_AlwaysReject) {
                         reply(LANPacketType::ScanResp, &this->discovery->networkInfo, sizeof(NetworkInfo));
                     }
@@ -85,7 +87,8 @@ namespace ams::mitm::ldn {
                     }
                     std::memcpy(&info, data, sizeof(info));
                     std::scoped_lock lock(this->discovery->scanResultsMutex);
-                    if (!this->discovery->physicalScanActive) break;
+                    if (!this->discovery->physicalScanActive || this->scanResults.size() >= LANDiscovery::MaxScanResults ||
+                        !MatchesScanFilter(this->discovery->activeScanFilter, info)) break;
                     this->scanResults.try_emplace(info.common.bssid, info);
                     break;
                 }
@@ -99,6 +102,7 @@ namespace ams::mitm::ldn {
     }
 
     void LDUdpSocket::onClose() {
+        this->close();
         discovery->disconnect_reason = DisconnectReason::SignalLost;
         discovery->setState(CommState::Error);
     };
@@ -125,7 +129,7 @@ namespace ams::mitm::ldn {
                 return 0;
             });
         } else if (state == CommState::AccessPointCreated) {
-            struct sockaddr_in addr;
+            struct sockaddr_in addr{};
             socklen_t addrlen = sizeof(addr);
             int new_fd = accept(this->getFd(), (struct sockaddr *)&addr, &addrlen);
             if (new_fd < 0)
@@ -142,12 +146,13 @@ namespace ams::mitm::ldn {
     }
 
     void LDTcpSocket::onClose() {
+        this->close();
         LogFormat("LDTcpSocket::onClose");
         this->discovery->onDisconnectFromHost();
     }
 
     u32 LDUdpSocket::getBroadcast() {
-        u32 address, netmask, gateway, primary_dns, secondary_dns;
+        u32 address = 0, netmask = 0, gateway = 0, primary_dns = 0, secondary_dns = 0;
         Result rc = nifmGetCurrentIpConfigInfo(&address, &netmask, &gateway, &primary_dns, &secondary_dns);
         address = ntohl(address);
         netmask = ntohl(netmask);
@@ -169,7 +174,8 @@ namespace ams::mitm::ldn {
 
     void LANDiscovery::onConnect(int new_fd) {
         LogFormat("Accepted %d", new_fd);
-        if (this->stationCount() >= StationCountMax) {
+        if (lanywhere::InRoom() || this->networkInfo.ldn.nodeCountMax < 1 ||
+            this->stationCount() >= this->networkInfo.ldn.nodeCountMax - 1) {
             LogFormat("Close new_fd. stations are full");
             close(new_fd);
             return;
@@ -200,12 +206,15 @@ namespace ams::mitm::ldn {
     void LANDiscovery::onNetworkInfoChanged() {
         this->refreshTcpBinding();
         if (this->isNodeStateChanged()) {
-            this->lanEvent();
+            if (this->lanEvent) this->lanEvent();
         }
         return;
     }
 
     Result LANDiscovery::setAdvertiseData(const u8 *data, uint16_t size) {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock lock(this->pollMutex);
+        if (!this->initialized || this->state != CommState::AccessPointCreated || (size && !data)) return MAKERESULT(LdnModuleId, 32);
         if (size > AdvertiseDataSizeMax) {
             return MAKERESULT(ModuleID, 10);
         }
@@ -223,6 +232,7 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::setStationAcceptPolicy(u8 policy) {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
         std::scoped_lock lock(this->pollMutex);
         if (this->state != CommState::AccessPoint && this->state != CommState::AccessPointCreated) {
             return MAKERESULT(LdnModuleId, 32);
@@ -307,7 +317,7 @@ namespace ams::mitm::ldn {
     Result LANDiscovery::initTcp(bool listening) {
         int fd;
         Result rc;
-        struct sockaddr_in addr;
+        struct sockaddr_in addr{};
         std::scoped_lock lock(this->pollMutex);
 
         if (this->tcp) {
@@ -321,7 +331,7 @@ namespace ams::mitm::ldn {
 
         if (listening) {
             addr.sin_family = AF_INET;
-            addr.sin_addr.s_addr = htonl(lanplay::State().active ? INADDR_LOOPBACK : INADDR_ANY);
+            addr.sin_addr.s_addr = htonl(lanywhere::InRoom() ? INADDR_LOOPBACK : INADDR_ANY);
             addr.sin_port = htons(listenPort);
             if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
                 return MAKERESULT(ModuleID, 7);
@@ -343,7 +353,7 @@ namespace ams::mitm::ldn {
     Result LANDiscovery::initUdp(bool listening) {
         int fd;
         Result rc;
-        struct sockaddr_in addr;
+        struct sockaddr_in addr{};
         std::scoped_lock lock(this->pollMutex);
 
         if (this->udp) {
@@ -357,7 +367,7 @@ namespace ams::mitm::ldn {
 
         if (listening) {
             addr.sin_family = AF_INET;
-            addr.sin_addr.s_addr = htons(INADDR_ANY);
+            addr.sin_addr.s_addr = htonl(INADDR_ANY);
             addr.sin_port = htons(listenPort);
             if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
                 return MAKERESULT(ModuleID, 2);
@@ -437,6 +447,15 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::scan(NetworkInfo *pOutNetwork, u16 *count, ScanFilter filter) {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        if (!count || (*count && !pOutNetwork)) return MAKERESULT(LdnModuleId, 32);
+        {
+            std::scoped_lock lock(this->pollMutex);
+            if (!this->initialized || !this->udp || filter.ssid.length > SsidLengthMax) {
+                *count = 0;
+                return MAKERESULT(LdnModuleId, 32);
+            }
+        }
         lanywhere::GameRoute gameRoute{};
         if (!lanywhere::CaptureGameRoute(&gameRoute)) {
             *count = 0;
@@ -463,6 +482,8 @@ namespace ams::mitm::ldn {
             this->lastScanRoute = gameRoute;
             this->haveScanRoute = true;
             this->physicalScanActive = !gameRoute.room_epoch && !gameRoute.discovery.public_enabled;
+            this->roomScanActive = gameRoute.room_epoch != 0;
+            this->activeScanFilter = filter;
         }
         if (wrong_selection) {
             *count = 0;
@@ -481,7 +502,7 @@ namespace ams::mitm::ldn {
         bool waitForReplies = true;
         if (!lanywhere::GameRouteStillCurrent(gameRoute)) {
             std::scoped_lock lock(this->scanResultsMutex);
-            this->physicalScanActive = false;
+            this->physicalScanActive = this->roomScanActive = false;
             *count = 0;
             lanywhere::ReportGameRouteChanged();
             return lanywhere::ResultRelayFailed();
@@ -519,7 +540,7 @@ namespace ams::mitm::ldn {
             waitForReplies = this->udp->sendBroadcast(LANPacketType::Scan) >= 0;
             if (!waitForReplies) {
                 std::scoped_lock lock(this->scanResultsMutex);
-                this->physicalScanActive = false;
+                this->physicalScanActive = this->roomScanActive = false;
                 *count = 0;
                 return MAKERESULT(ModuleID, 20);
             }
@@ -531,14 +552,14 @@ namespace ams::mitm::ldn {
 
         if (!lanywhere::GameRouteStillCurrent(gameRoute)) {
             std::scoped_lock lock(this->scanResultsMutex);
-            this->physicalScanActive = false;
+            this->physicalScanActive = this->roomScanActive = false;
             *count = 0;
             lanywhere::ReportGameRouteChanged();
             return lanywhere::ResultRelayFailed();
         }
 
         std::scoped_lock lock(this->scanResultsMutex);
-        this->physicalScanActive = false;
+        this->physicalScanActive = this->roomScanActive = false;
         int i = 0;
         for (auto& item : this->udp->scanResults) {
             if (i >= *count) {
@@ -603,12 +624,11 @@ namespace ams::mitm::ldn {
 
     int LANDiscovery::loopPoll() {
         int rc;
+        std::scoped_lock lock(this->pollMutex);
         if (!initialized) {
             return 0;
         }
-
-        std::scoped_lock lock(this->pollMutex);
-        int nfds = 2 + StationCountMax;
+        constexpr size_t nfds = 2 + StationCountMax;
         Pollable *fds[nfds];
         fds[0] = this->udp.get();
         fds[1] = this->tcp.get();
@@ -624,12 +644,29 @@ namespace ams::mitm::ldn {
     // LANywhere: con una sala activa, la búsqueda, la unión y la sincronización del grupo van entre miembros
     // de la sala por el servidor en lugar de por broadcast UDP y TCP en la red local.
     void LANDiscovery::pollRoom() {
-        static u8 buffer[lanywhere::MaxControl];
+        u8 *buffer = this->controlBuffer;
+        if (this->onlineGame && !lanywhere::InRoom()) {
+            lanywhere::Status status{};
+            lanywhere::GetStatus(&status);
+            // Retain LDN state while the transport is recovering. A final
+            // error or explicit leave must also disconnect the game's view.
+            if (status.state != lanywhere::RelayState::Connecting) {
+                this->disconnect_reason = DisconnectReason::SignalLost;
+                this->hostMember = -1;
+                this->resetStations();
+                this->leaveAutoRoom();
+                for (auto &node : this->networkInfo.ldn.nodes) node.isConnected = 0;
+                this->networkInfo.ldn.nodeCount = 0;
+                this->onNetworkInfoChanged();
+                this->setState(CommState::Error);
+                return;
+            }
+        }
         u8 from;
         lanywhere::LdnMsg msg;
         ssize_t size;
-        while ((size = lanywhere::TakeControl(&from, &msg, buffer, sizeof(buffer))) >= 0) {
-            if (static_cast<size_t>(size) <= sizeof(buffer)) {
+        while ((size = lanywhere::TakeControl(&from, &msg, buffer, sizeof(this->controlBuffer))) >= 0) {
+            if (static_cast<size_t>(size) <= sizeof(this->controlBuffer)) {
                 this->onRoomMessage(from, static_cast<u8>(msg), buffer, size);
             }
         }
@@ -672,7 +709,9 @@ namespace ams::mitm::ldn {
                     NetworkInfo info;
                     std::memcpy(&info, data, sizeof(info));
                     std::scoped_lock lock(this->scanResultsMutex);
-                    this->udp->scanResults.try_emplace(info.common.bssid, info);
+                    if (this->roomScanActive && this->udp->scanResults.size() < MaxScanResults &&
+                        MatchesScanFilter(this->activeScanFilter, info))
+                        this->udp->scanResults.try_emplace(info.common.bssid, info);
                 }
                 break;
             }
@@ -757,6 +796,7 @@ namespace ams::mitm::ldn {
     }
 
     void LANDiscovery::leaveAutoRoom() {
+        this->onlineGame = false;
         if (this->autoRoom) {
             this->autoRoom = false;
             this->hostMember = -1;
@@ -786,15 +826,10 @@ namespace ams::mitm::ldn {
 
     LANDiscovery::~LANDiscovery() {
         LogFormat("~LANDiscovery");
-        if (this->initialized) {
-            LogFormat("finalize not called");
-            Result rc = this->finalize();
-            LogFormat("finalize: %d", rc);
-        }
+        static_cast<void>(this->finalize());
     }
 
     void LANDiscovery::worker() {
-        this->stop = false;
         while (!this->stop) {
 
             int rc = loopPoll();
@@ -808,6 +843,7 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::getNetworkInfo(NetworkInfo *pOutNetwork) {
+        std::scoped_lock lock(this->pollMutex);
         Result rc = 0;
 
         if (this->state == CommState::AccessPointCreated || this->state == CommState::StationConnected) {
@@ -820,6 +856,7 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::getNetworkInfo(NetworkInfo *pOutNetwork, NodeLatestUpdate *pOutUpdates, int bufferCount) {
+        std::scoped_lock lock(this->pollMutex);
         Result rc = 0;
 
         if (bufferCount < 0 || bufferCount > NodeCountMax) {
@@ -831,6 +868,7 @@ namespace ams::mitm::ldn {
 
             char str[10] = {0};
             for (int i = 0; i < bufferCount; i++) {
+                pOutUpdates[i] = {};
                 pOutUpdates[i].stateChange = nodeChanges[i].stateChange;
                 nodeChanges[i].stateChange = NodeStateChange_None;
                 str[i] = '0' + pOutUpdates[i].stateChange;
@@ -867,7 +905,9 @@ namespace ams::mitm::ldn {
             memset(node->userName, 0, sizeof(node->userName));
             lanywhere::Nickname(node->userName, sizeof(node->userName));
         } else {
-            strcpy(node->userName, userConfig->userName);
+            const char *end = static_cast<const char *>(std::memchr(userConfig->userName, 0, sizeof(userConfig->userName)));
+            if (!end) return MAKERESULT(LdnModuleId, 32);
+            std::memcpy(node->userName, userConfig->userName, end - userConfig->userName + 1);
         }
         node->localCommunicationVersion = localCommunicationVersion;
         node->ipv4Address = ipAddress;
@@ -876,9 +916,13 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::createNetwork(const SecurityConfig *securityConfig, const UserConfig *userConfig, const NetworkConfig *networkConfig) {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock state_lock(this->pollMutex);
+        if (!this->initialized) return MAKERESULT(LdnModuleId, 32);
         Result rc = 0;
 
-        if (this->state != CommState::AccessPoint) {
+        if (!securityConfig || !userConfig || !networkConfig || networkConfig->nodeCountMax < 1 ||
+            networkConfig->nodeCountMax > NodeCountMax || this->state != CommState::AccessPoint) {
             return MAKERESULT(LdnModuleId, 32);
         }
         lanywhere::GameRoute gameRoute{};
@@ -948,6 +992,7 @@ namespace ams::mitm::ldn {
             return lanywhere::ResultRelayFailed();
         }
 
+        this->onlineGame = gameRoute.room_epoch != 0;
         this->setState(CommState::AccessPointCreated);
 
         this->initNodeStateChange();
@@ -958,6 +1003,9 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::destroyNetwork() {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock state_lock(this->pollMutex);
+        if (!this->initialized) return MAKERESULT(LdnModuleId, 32);
         this->roomCloseStations();
         this->leaveAutoRoom();
         if (this->tcp) {
@@ -975,6 +1023,9 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::disconnect() {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock state_lock(this->pollMutex);
+        if (!this->initialized) return MAKERESULT(LdnModuleId, 32);
         if (this->hostMember >= 0) {
             lanywhere::SendControl(this->hostMember, lanywhere::LdnMsg::Disconnect, nullptr, 0);
             this->hostMember = -1;
@@ -989,6 +1040,9 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::openAccessPoint() {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock state_lock(this->pollMutex);
+        if (!this->initialized) return MAKERESULT(LdnModuleId, 32);
         this->disconnect_reason = DisconnectReason::None;
         if (this->state == CommState::None) {
             return MAKERESULT(LdnModuleId, 32);
@@ -1011,6 +1065,9 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::closeAccessPoint() {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock state_lock(this->pollMutex);
+        if (!this->initialized) return MAKERESULT(LdnModuleId, 32);
         if (this->state == CommState::None) {
             return MAKERESULT(LdnModuleId, 32);
         }
@@ -1028,6 +1085,9 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::openStation() {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock state_lock(this->pollMutex);
+        if (!this->initialized) return MAKERESULT(LdnModuleId, 32);
         this->disconnect_reason = DisconnectReason::None;
         if (this->state == CommState::None) {
             return MAKERESULT(LdnModuleId, 32);
@@ -1045,6 +1105,9 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::closeStation() {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock state_lock(this->pollMutex);
+        if (!this->initialized) return MAKERESULT(LdnModuleId, 32);
         if (this->state == CommState::None) {
             return MAKERESULT(LdnModuleId, 32);
         }
@@ -1061,6 +1124,11 @@ namespace ams::mitm::ldn {
     }
 
     Result LANDiscovery::connect(const NetworkInfo *networkInfo, UserConfig *userConfig, u16 localCommunicationVersion) {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::unique_lock state_lock(this->pollMutex);
+        if (!this->initialized || this->state != CommState::Station || !networkInfo || !userConfig ||
+            networkInfo->ldn.nodeCountMax < 1 || networkInfo->ldn.nodeCountMax > NodeCountMax ||
+            networkInfo->ldn.nodeCount > networkInfo->ldn.nodeCountMax) return MAKERESULT(LdnModuleId, 32);
         if (networkInfo->ldn.nodeCount == 0) {
             return MAKERESULT(ModuleID, 30);
         }
@@ -1099,7 +1167,9 @@ namespace ams::mitm::ldn {
                 this->autoRoom = true;
                 this->ownsMatchRoom = true;
                 this->matchRoom = attempt;
+                state_lock.unlock();
                 const Result rc = this->connectRoom(networkInfo, userConfig, localCommunicationVersion, &attempt, &gameRoute);
+                state_lock.lock();
                 if (!lanywhere::FinishMatch(attempt, R_SUCCEEDED(rc))) {
                     this->autoRoom = this->ownsMatchRoom = false;
                     this->hostMember = -1;
@@ -1114,7 +1184,9 @@ namespace ams::mitm::ldn {
                     return MAKERESULT(ModuleID, 31);
                 }
                 this->autoRoom = true;
+                state_lock.unlock();
                 Result rc = this->connectRoom(networkInfo, userConfig, localCommunicationVersion, nullptr, &this->ownedGameRoute);
+                state_lock.lock();
                 if (R_FAILED(rc)) {
                     this->leaveAutoRoom();
                 }
@@ -1122,6 +1194,7 @@ namespace ams::mitm::ldn {
             }
         }
         if (gameRoute.room_epoch) {
+            state_lock.unlock();
             return this->connectRoom(networkInfo, userConfig, localCommunicationVersion, nullptr, &gameRoute);
         }
         if (gameRoute.discovery.public_enabled) {
@@ -1131,7 +1204,7 @@ namespace ams::mitm::ldn {
             return lanywhere::ResultRelayFailed();
         }
         u32 hostIp = networkInfo->ldn.nodes[0].ipv4Address;
-        struct sockaddr_in addr;
+        struct sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(hostIp);
         addr.sin_port = htons(listenPort);
@@ -1160,6 +1233,7 @@ namespace ams::mitm::ldn {
         }
         this->initNodeStateChange();
 
+        state_lock.unlock();
         svcSleepThread(1000000000L); // 1sec
 
         return 0;
@@ -1168,6 +1242,9 @@ namespace ams::mitm::ldn {
     // LANywhere: unirse al grupo de otro miembro de la sala. Espera su Sync como mucho 3 s.
     Result LANDiscovery::connectRoom(const NetworkInfo *networkInfo, UserConfig *userConfig, u16 localCommunicationVersion,
                                      const lanywhere::MatchJoinAttempt *match, const lanywhere::GameRoute *expectedRoute) {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::unique_lock state_lock(this->pollMutex);
+        if (!this->initialized || this->state != CommState::Station) return MAKERESULT(LdnModuleId, 32);
         if (match && !lanywhere::MatchJoinPending(*match)) return MAKERESULT(ModuleID, 31);
         lanywhere::GameRoute route{};
         if (!lanywhere::CaptureGameRoute(&route) || !route.room_epoch) return lanywhere::ResultRelayFailed();
@@ -1200,6 +1277,7 @@ namespace ams::mitm::ldn {
             return rc;
         }
         this->initNodeStateChange();
+        this->onlineGame = true;
         this->hostMember = host;
         {
             std::scoped_lock lock(this->tcpBindingLock);
@@ -1222,10 +1300,12 @@ namespace ams::mitm::ldn {
             this->hostMember = -1;
             return MAKERESULT(ModuleID, 32);
         }
-        for (int i = 0; i < 30 && this->state != CommState::StationConnected; i++) {
+        state_lock.unlock();
+        for (int i = 0; i < 30 && this->getState() != CommState::StationConnected; i++) {
             if (match && !lanywhere::MatchJoinPending(*match)) break;
             svcSleepThread(100000000L); // 100ms
         }
+        state_lock.lock();
         if (this->state != CommState::StationConnected) {
             tcpstream::Global().EndBinding(this->tcpBindingId);
             this->hostMember = -1;
@@ -1234,118 +1314,88 @@ namespace ams::mitm::ldn {
         return 0;
     }
 
-    Result LANDiscovery::finalize() {
-        Result rc = 0;
-        tcpstream::Global().EndBinding(this->tcpBindingId);
+    Result LANDiscovery::restoreNetworkResources() {
+        Result result = 0;
+        if (this->requestCreated) {
+            result = nifmRequestCancel(&this->request);
+            nifmRequestClose(&this->request);
+            this->requestCreated = false;
+            this->request = {};
+        }
+        return result;
+    }
 
+    Result LANDiscovery::finalize() {
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        this->stop = true;
+        if (this->threadCreated) {
+            // Never wait with pollMutex held: the worker may be leaving a callback.
+            os::WaitThread(&this->workerThread);
+            os::DestroyThread(&this->workerThread);
+            this->threadCreated = false;
+        }
+        std::scoped_lock state_lock(this->pollMutex);
+        tcpstream::Global().EndBinding(this->tcpBindingId);
         if (this->initialized) {
             this->roomCloseStations();
             this->leaveAutoRoom();
-            this->stop = true;
-            os::WaitThread(&this->workerThread);
-            os::DestroyThread(&this->workerThread);
-            this->udp.reset();
-            this->tcp.reset();
-            this->resetStations();
-            this->initialized = false;
-
-            rc = nifmRequestCancel(&request);
-            if (R_FAILED(rc))
-            {
-                LogFormat("final nifmRequestCancel failed: %x", rc);
-            }
-
-            NifmNetworkProfileData networkProfile;
-            rc = nifmGetCurrentNetworkProfile(&networkProfile);
-            if (R_FAILED(rc))
-            {
-                LogFormat("final nifmGetCurrentProfile failed: %x", rc);
-            }
-
-            if (networkProfile.ip_setting_data.mtu != originalMtu) {
-                networkProfile.ip_setting_data.mtu = originalMtu;
-                rc = nifmSetNetworkProfile(&networkProfile, &networkProfile.uuid);
-                if (R_FAILED(rc)) {
-                    LogFormat("final nifmSetNetworkProfile failed: %x", rc);
-                }
-            }
         }
-
+        this->udp.reset();
+        this->tcp.reset();
+        this->resetStations();
+        this->initialized = false;
+        {
+            std::scoped_lock scan_lock(this->scanResultsMutex);
+            this->physicalScanActive = this->roomScanActive = false;
+            this->publicGroupCount = 0;
+            this->haveScanRoute = false;
+        }
+        const Result result = this->restoreNetworkResources();
         this->setState(CommState::None);
-
-        return rc;
+        this->lanEvent = EmptyFunc;
+        return result;
     }
 
     Result LANDiscovery::initialize(LanEventFunc lanEvent, bool listening) {
-        if (this->initialized)
-        {
-            return 0;
+        std::scoped_lock lifecycle(this->lifecycleMutex);
+        std::scoped_lock state_lock(this->pollMutex);
+        if (this->initialized) return 0;
+        if (!this->stack) return MAKERESULT(ModuleID, 10);
+        bool complete = false;
+        ON_SCOPE_EXIT { if (!complete) static_cast<void>(this->finalize()); };
+        this->lanEvent = lanEvent ? std::move(lanEvent) : EmptyFunc;
+        this->disconnect_reason = DisconnectReason::None;
+
+        // The virtual transports fragment their own datagrams and TCP uses
+        // the kernel path MTU. Keep the existing shared Wi-Fi profile.
+        R_TRY(nifmCreateRequest(&this->request, true));
+        this->requestCreated = true;
+        R_TRY(nifmSetLocalNetworkMode(&this->request, true));
+        R_TRY(nifmRequestSubmit(&this->request));
+        const auto began = os::GetSystemTick();
+        for (;;) {
+            NifmRequestState state{};
+            R_TRY(nifmGetRequestState(&this->request, &state));
+            if (state != NifmRequestState_OnHold) break;
+            if ((os::GetSystemTick() - began).ToTimeSpan() >= TimeSpan::FromSeconds(10))
+                return MAKERESULT(ModuleID, 20);
+            svcSleepThread(10000000L);
         }
-
-        NifmNetworkProfileData networkProfile;
-        Result rc = nifmGetCurrentNetworkProfile(&networkProfile);
-        if (R_FAILED(rc))
-        {
-            LogFormat("nifmGetCurrentNetworkProfile failed: %x", rc);
-            return rc;
+        R_TRY(nifmGetResult(&this->request));
+        for (auto &station : this->stations) {
+            station.nodeInfo = &this->networkInfo.ldn.nodes[station.nodeId];
+            station.reset();
         }
-
-        originalMtu = networkProfile.ip_setting_data.mtu;
-        // Cambiar el perfil reconecta la red (y corta la conexión de LANywhere con el servidor): solo si hace falta.
-        if (originalMtu != 1500) {
-            networkProfile.ip_setting_data.mtu = 1500;
-
-            rc = nifmSetNetworkProfile(&networkProfile, &networkProfile.uuid);
-            if (R_FAILED(rc))
-            {
-                LogFormat("nifmSetNetworkProfile failed: %x", rc);
-                return rc;
-            }
-        }
-
-        rc = nifmCreateRequest(&request, true);
-        if (R_FAILED(rc))
-        {
-            LogFormat("nifmCreateRequest failed: %x", rc);
-            return rc;
-        }
-
-        rc = nifmSetLocalNetworkMode(&request, true);
-        if (R_FAILED(rc)) {
-            LogFormat("nifmSetLocalNetworkMode failed %x", rc);
-            return rc;
-        }
-
-        rc = nifmRequestSubmitAndWait(&request);
-        if (R_FAILED(rc))
-        {
-            LogFormat("nifmRequestSubmitAndWait failed: %x", rc);
-            return rc;
-        }
-
-        for (auto &i : stations) {
-            i.discovery = this;
-            i.nodeInfo = &this->networkInfo.ldn.nodes[i.nodeId];
-            i.reset();
-        }
-
-        this->lanEvent = lanEvent;
-        rc = this->initUdp(listening);
-        if (R_FAILED(rc)) {
-            LogFormat("initUdp %x", rc);
-            return rc;
-        }
-
-        rc = os::CreateThread(&this->workerThread, &Worker, this, reinterpret_cast<void *>(util::AlignUp(reinterpret_cast<uintptr_t>(stack.get()), os::ThreadStackAlignment)), StackSize, 0x15, 2);
-        if (R_FAILED(rc)) {
-            LogFormat("LANDiscovery Failed to threadCreate: %x", rc);
-            return 0xF601;
-        }
-
-        os::StartThread(&this->workerThread);
-        this->setState(CommState::Initialized);
-
+        R_TRY(this->initUdp(listening));
+        this->stop = false;
+        R_TRY(os::CreateThread(&this->workerThread, &Worker, this,
+            reinterpret_cast<void *>(util::AlignUp(reinterpret_cast<uintptr_t>(this->stack.get()), os::ThreadStackAlignment)),
+            StackSize, 0x15, 2));
+        this->threadCreated = true;
         this->initialized = true;
+        this->setState(CommState::Initialized);
+        os::StartThread(&this->workerThread);
+        complete = true;
         return 0;
     }
 }

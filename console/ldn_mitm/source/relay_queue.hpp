@@ -37,10 +37,10 @@ namespace ams::mitm::lanywhere {
             return true;
         }
         // Returns -1 when empty, otherwise copied byte count. Peek does not consume.
-        long Take(uint16_t port, void *buffer, std::size_t size, uint32_t *ip, uint16_t *src, bool peek) {
+        long Take(uint16_t port, void *buffer, std::size_t size, uint32_t *ip, uint16_t *src, bool peek, uint32_t peer_ip = 0, uint16_t peer_port = 0) {
             for (std::size_t i = 0; i < count; ++i) {
                 auto &p = packets[(head + i) % MaxCount];
-                if (p.dst != port) continue;
+                if (p.dst != port || (peer_ip && (p.ip != peer_ip || p.src != peer_port))) continue;
                 const std::size_t n = std::min<std::size_t>(p.size, size);
                 if (n) std::memcpy(buffer, p.data, n);
                 *ip = p.ip; *src = p.src;
@@ -53,8 +53,11 @@ namespace ams::mitm::lanywhere {
             }
             return -1;
         }
-        bool Has(uint16_t port) const {
-            for (std::size_t i = 0; i < count; ++i) if (packets[(head + i) % MaxCount].dst == port) return true;
+        bool Has(uint16_t port, uint32_t peer_ip = 0, uint16_t peer_port = 0) const {
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto &packet = packets[(head + i) % MaxCount];
+                if (packet.dst == port && (!peer_ip || (packet.ip == peer_ip && packet.src == peer_port))) return true;
+            }
             return false;
         }
     };

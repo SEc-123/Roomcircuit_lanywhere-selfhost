@@ -18,11 +18,17 @@ namespace ams::mitm::ldn {
     // https://reswitched.github.io/SwIPC/ifaces.html#nn::ldn::detail::IUserLocalCommunicationService
 
     Result ICommunicationService::Initialize(const sf::ClientProcessId &client_process_id) {
+        std::scoped_lock lifecycle(this->lifecycle_mutex);
         LogFormat("ICommunicationService::Initialize pid: %" PRIu64, client_process_id);
 
-        if (this->state_event == nullptr) {
-            // ClearMode, inter_process
-            this->state_event = new os::SystemEvent(::ams::os::EventClearMode_AutoClear, true);
+        {
+            std::scoped_lock event_lock(this->event_mutex);
+            if (this->state_event == nullptr) {
+                auto event = std::unique_ptr<os::SystemEvent>(new (std::nothrow) os::SystemEvent());
+                if (!event) return MAKERESULT(0xCB, 32);
+                R_TRY(os::CreateSystemEvent(event->GetBase(), os::EventClearMode_AutoClear, true));
+                this->state_event = event.release();
+            }
         }
 
         R_TRY(lanDiscovery.initialize([&](){
@@ -39,7 +45,9 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::Finalize() {
+        std::scoped_lock lifecycle(this->lifecycle_mutex);
         Result rc = lanDiscovery.finalize();
+        std::scoped_lock event_lock(this->event_mutex);
         if (this->state_event) {
             delete this->state_event;
             this->state_event = nullptr;
@@ -76,6 +84,7 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::SetAdvertiseData(sf::InAutoSelectBuffer data) {
+        if (data.GetSize() > AdvertiseDataSizeMax) return MAKERESULT(0xCB, 32);
         return lanDiscovery.setAdvertiseData(data.GetPointer(), data.GetSize());
     }
 
@@ -83,8 +92,8 @@ namespace ams::mitm::ldn {
         state.SetValue(static_cast<u32>(this->lanDiscovery.getState()));
 
         if (this->error_state) {
-            if (this->lanDiscovery.disconnect_reason != DisconnectReason::None) {
-                return MAKERESULT(0x10, static_cast<u32>(this->lanDiscovery.disconnect_reason));
+            if (this->lanDiscovery.getDisconnectReason() != DisconnectReason::None) {
+                return MAKERESULT(0x10, static_cast<u32>(this->lanDiscovery.getDisconnectReason()));
             }
         }
 
@@ -92,7 +101,9 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::GetIpv4Address(sf::Out<u32> address, sf::Out<u32> netmask) {
-        u32 gateway, primary_dns, secondary_dns;
+        u32 gateway = 0, primary_dns = 0, secondary_dns = 0;
+        address.SetValue(0);
+        netmask.SetValue(0);
         Result rc = nifmGetCurrentIpConfigInfo(address.GetPointer(), netmask.GetPointer(), &gateway, &primary_dns, &secondary_dns);
 
         address.SetValue(ntohl(address.GetValue()));
@@ -116,7 +127,7 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::GetDisconnectReason(sf::Out<u32> reason) {
-        auto dr = static_cast<u32>(this->lanDiscovery.disconnect_reason);
+        auto dr = static_cast<u32>(this->lanDiscovery.getDisconnectReason());
         LogFormat("GetDisconnectReason %p state: %d reason: %u", reason.GetPointer(), static_cast<u32>(this->lanDiscovery.getState()), dr);
         reason.SetValue(dr);
 
@@ -133,8 +144,8 @@ namespace ams::mitm::ldn {
     Result ICommunicationService::GetSecurityParameter(sf::Out<SecurityParameter> out) {
         Result rc = 0;
 
-        SecurityParameter data;
-        NetworkInfo info;
+        SecurityParameter data{};
+        NetworkInfo info{};
         rc = lanDiscovery.getNetworkInfo(&info);
         if (R_SUCCEEDED(rc)) {
             NetworkInfo2SecurityParameter(&info, &data);
@@ -147,8 +158,8 @@ namespace ams::mitm::ldn {
     Result ICommunicationService::GetNetworkConfig(sf::Out<NetworkConfig> out) {
         Result rc = 0;
 
-        NetworkConfig data;
-        NetworkInfo info;
+        NetworkConfig data{};
+        NetworkInfo info{};
         rc = lanDiscovery.getNetworkInfo(&info);
         if (R_SUCCEEDED(rc)) {
             NetworkInfo2NetworkConfig(&info, &data);
@@ -159,6 +170,8 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::AttachStateChangeEvent(sf::Out<sf::CopyHandle> handle) {
+        std::scoped_lock event_lock(this->event_mutex);
+        if (!this->state_event) return MAKERESULT(0xCB, 32);
         handle.SetValue(this->state_event->GetReadableHandle(), false);
         return ResultSuccess();
     }
@@ -166,7 +179,8 @@ namespace ams::mitm::ldn {
     Result ICommunicationService::Scan(sf::Out<u32> outCount, sf::OutAutoSelectArray<NetworkInfo> buffer, u16 channel, ScanFilter filter) {
 		AMS_UNUSED(channel);
         Result rc = 0;
-        u16 count = buffer.GetSize();
+        if (buffer.GetSize() > UINT16_MAX) return MAKERESULT(0xCB, 32);
+        u16 count = static_cast<u16>(buffer.GetSize());
 
         rc = lanDiscovery.scan(buffer.GetPointer(), &count, filter);
         outCount.SetValue(count);
@@ -183,6 +197,7 @@ namespace ams::mitm::ldn {
     }
 
     void ICommunicationService::onEventFired() {
+        std::scoped_lock event_lock(this->event_mutex);
         if (this->state_event) {
             LogFormat("onEventFired signal_event");
             this->state_event->Signal();

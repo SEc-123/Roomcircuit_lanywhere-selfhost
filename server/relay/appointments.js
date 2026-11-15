@@ -33,8 +33,20 @@ function response(status, now, rows = [], next = 0xffffffff) {
     });
     return b;
 }
+function validateBudget(value) {
+    if (value === undefined) return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        typeof value.salt !== 'string' || !/^[0-9a-f]{64}$/.test(value.salt) ||
+        !Array.isArray(value.entries) || value.entries.length > MAX_EVENTS ||
+        value.entries.some(entry => !entry || typeof entry.key !== 'string' ||
+            !/^[0-9a-f]{64}$/.test(entry.key) || !Number.isSafeInteger(entry.expires) || entry.expires < 0))
+        throw new Error('invalid appointment creation budget');
+    return { salt: value.salt, entries: value.entries.map(({ key, expires }) => ({ key, expires })) };
+}
+
 function validate(input) {
     if (!input || ![1,2].includes(input.version) || !Array.isArray(input.events) || input.events.length > MAX_EVENTS) throw Error('invalid appointments state');
+    validateBudget(input.creationBudget);
     const events = [], ids = new Set(), combinations = new Set();
     for (const x of input.events) {
         if (!x || typeof x.id !== 'string' || typeof x.starts !== 'string' || typeof x.game !== 'string' || typeof x.app !== 'string' ||
@@ -60,11 +72,11 @@ function load(filename) {
         const bytes = Buffer.alloc(st.size + 1); const n = fs.readSync(fd, bytes, 0, bytes.length, 0);
         if (n !== st.size) throw Error('appointments changed while reading');
         const state = JSON.parse(bytes.subarray(0,n).toString('utf8'));
-        return {events:validate(state), migrate:state.version === 1};
+        return {events:validate(state), migrate:state.version === 1, budget:validateBudget(state.creationBudget)};
     } finally { fs.closeSync(fd); }
 }
-async function save(filename, events, connected) {
-    const content = Buffer.from(JSON.stringify({version:2,events}) + '\n');
+async function save(filename, events, budget, connected) {
+    const content = Buffer.from(JSON.stringify({version:2,events,creationBudget:budget}) + '\n');
     if (content.length > MAX_STATE_BYTES) throw Error('appointments storage budget exceeded');
     const dir = path.dirname(filename), tmp = path.join(dir, `.${path.basename(filename)}.${crypto.randomBytes(8).toString('hex')}.tmp`); let made = false;
     try {
@@ -77,7 +89,10 @@ async function save(filename, events, connected) {
         return true;
     } finally { if (made) await fs.promises.rm(tmp, {force:true}); }
 }
-function create({ filename, now = () => Math.floor(Date.now() / 1000) }) {
+function create({ filename, now = () => Math.floor(Date.now() / 1000), maxPerSource = 64 }) {
+    if (!Number.isSafeInteger(maxPerSource) || maxPerSource < 1 || maxPerSource > MAX_EVENTS)
+        throw new Error('invalid per-source appointment budget');
+    let creationBudget = { salt: crypto.randomBytes(32).toString('hex'), entries: [] };
     let events = [], healthy = true, pending = 0, needsMigration = false;
     const ready = new Map(); // hash -> {id, expires}; never persisted, one event per device
     let readyTimer;
@@ -86,8 +101,8 @@ function create({ filename, now = () => Math.floor(Date.now() / 1000) }) {
         events = next;
         eventsById = new Map(next.map(e => [BigInt(e.id), { starts: Number(e.starts), game: BigInt(e.game), app: BigInt(e.app) }]));
     }
-    try { const loaded = load(filename); replaceEvents(loaded.events); needsMigration = loaded.migrate; } catch { healthy = false; }
-    const startup = needsMigration ? save(filename,events,()=>true).catch(() => { healthy = false; }) : Promise.resolve();
+    try { const loaded = load(filename); replaceEvents(loaded.events); needsMigration = loaded.migrate; if (loaded.budget) creationBudget = loaded.budget; } catch { healthy = false; }
+    const startup = needsMigration ? save(filename,events,creationBudget,()=>true).catch(() => { healthy = false; }) : Promise.resolve();
     let tail = startup;
     function sweep(current) { for (const [key, value] of ready) if (value.expires <= current) ready.delete(key); }
     function scheduleSweep(current) {
@@ -110,7 +125,7 @@ function create({ filename, now = () => Math.floor(Date.now() / 1000) }) {
         const page = sorted.slice(offset,offset+PAGE).map(e => ({...e, interested:counts.get(e.id) || 0, ready:e.id === own}));
         return response(STATUS.OK,current,page,offset+page.length < sorted.length ? offset+page.length : 0xffffffff);
     }
-    async function mutate(req, connected) {
+    async function mutate(req, connected, sourceKey) {
         if (!connected()) return null;
         const current = now();
         if (!Number.isSafeInteger(current) || current < 0) return response(STATUS.STORAGE, 0);
@@ -121,10 +136,18 @@ function create({ filename, now = () => Math.floor(Date.now() / 1000) }) {
             const event = live.find(e => e.starts === req.starts.toString() && e.game === req.game.toString() && e.app === req.app.toString());
             if (!event) {
                 if (req.starts < BigInt(current) || req.starts > BigInt(current + MAX_AHEAD)) return response(STATUS.INVALID,current);
-                if (live.length >= MAX_EVENTS) return response(STATUS.LIMIT,current);
+                const activeBudget = creationBudget.entries.filter(entry => entry.expires > current);
+                if (live.length >= MAX_EVENTS || activeBudget.filter(entry => entry.key === sourceKey).length >= maxPerSource)
+                    return response(STATUS.LIMIT,current);
                 let id; do { id = crypto.randomBytes(8).readBigUInt64LE().toString(); } while (id === '0' || live.some(e => e.id === id));
                 live.push({id, starts:req.starts.toString(), game:req.game.toString(), app:req.app.toString()});
-                try { if (!await save(filename,live,connected)) return null; replaceEvents(live); }
+                const nextBudget = { salt: creationBudget.salt,
+                    entries: [...activeBudget, { key: sourceKey, expires: Number(req.starts) + GRACE }] };
+                try {
+                    if (!await save(filename,live,nextBudget,connected)) return null;
+                    replaceEvents(live);
+                    creationBudget = nextBudget;
+                }
                 catch { healthy = false; return response(STATUS.STORAGE,current); }
             }
         } else {
@@ -142,15 +165,21 @@ function create({ filename, now = () => Math.floor(Date.now() / 1000) }) {
         }
         return listing(req,current);
     }
-    function handle(body, available = true, connected = () => true) {
+    function handle(body, available = true, connected = () => true, sourceAddress = null) {
         const current = now();
         if (!Number.isSafeInteger(current) || current < 0) return Promise.resolve(response(STATUS.STORAGE, 0));
         if (!available) return Promise.resolve(response(STATUS.UNAVAILABLE, current));
         const req = parse(body); if (!req) return Promise.resolve(response(STATUS.INVALID, current));
         if (req.op === 1) return startup.then(() => healthy ? listing(req,now()) : response(STATUS.STORAGE,current));
         if (pending >= MAX_PENDING) return Promise.resolve(response(STATUS.LIMIT,current));
+        // Production supplies the transport source address. The request identity
+        // is only a fallback for embedding/testing this module without a socket.
+        const source = sourceAddress === null ? req.identity : sourceAddress;
+        if (typeof source !== 'string' || source.length > 128)
+            return Promise.resolve(response(STATUS.INVALID, current));
+        const sourceKey = crypto.createHmac('sha256', creationBudget.salt).update(source).digest('hex');
         pending++;
-        const operation = tail.then(() => mutate(req,connected));
+        const operation = tail.then(() => mutate(req,connected,sourceKey));
         tail = operation.catch(() => { healthy = false; return null; }).finally(() => { pending--; });
         return operation.catch(() => response(STATUS.STORAGE, current));
     }
@@ -158,6 +187,6 @@ function create({ filename, now = () => Math.floor(Date.now() / 1000) }) {
         const event = eventsById.get(id);
         return healthy && event && current >= event.starts - READY_BEFORE && current < event.starts + GRACE ? event : null;
     }
-    return { handle, activeAppointment };
+    return { handle, activeAppointment, healthy: () => healthy };
 }
 module.exports = { create, parse, response, validateState: validate, STATUS };
