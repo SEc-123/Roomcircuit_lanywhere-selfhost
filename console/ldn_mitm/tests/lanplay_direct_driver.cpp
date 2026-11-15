@@ -281,6 +281,11 @@ int main(int argc, char **argv) {
             const size_t n = tcpstream::Encode(wire, sizeof(wire), frame);
             assert(n && lanplay::SendStream(state.epoch, wire, n));
             sent_open = true;
+            if (!hosting) {
+                // The accepted game stream confirms the host's SYNC has been applied.
+                std::puts("ADMITTED");
+                std::fflush(stdout);
+            }
         }
         if (own_open && !sent_payload) {
             const auto state = lanplay::State();

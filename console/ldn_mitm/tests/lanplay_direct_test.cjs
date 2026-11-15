@@ -49,7 +49,11 @@ async function run(mode){
   if(mode==='host'){
    const connection=emu.join(nativeIp);connection.onOpen=()=>{const n=nodeInfo(emu.ip,emu.name);n.writeUInt16LE(1,46);connection.write(L.ldnFrame(L.LT.CONNECT,n));};
    await until(()=>emu.syncs?.length||(result&&result.code!==0));assert(!result,errors);assert.equal(emu.syncs.at(-1).readUInt32LE(0x68),nativeIp);
-  }else await until(()=>emu.stations.length||(result&&result.code!==0));
+  }else{
+   await until(()=>emu.stations.length||(result&&result.code!==0));
+   await until(()=>output.includes('ADMITTED\n')||result);
+   assert.match(output,/^ADMITTED$/m,errors||output);
+  }
   const game=new L.Tcp(emu.ip,50110,nativeIp,6500,pkt=>emu.sendIp(pkt));emu.tcps.set(game.key(),game);
   const streamData=Buffer.alloc(16384);for(let i=0;i<streamData.length;i++)streamData[i]=i%239;
   let gameReply=Buffer.alloc(0);game.onOpen=()=>game.write(streamData);game.onData=data=>{gameReply=Buffer.concat([gameReply,data]);};game.connect();
@@ -108,7 +112,11 @@ async function forkRun(mode){
    peer.control(0);await until(()=>peer.scan.some(s=>s.from===nativeIp)||(result&&result.code!==0));assert(!result,errors||output);
    const seen=peer.scan.find(s=>s.from===nativeIp);const n=nodeInfo(peer.real,peer.name);n.writeUInt16LE(1,46);
    peer.control(2,Buffer.concat([n,seen.info.subarray(0x20,0x26)]));await until(()=>peer.sync.length||(result&&result.code!==0));assert(!result,errors||output);
-  }else await until(()=>peer.connectSeen||(result&&result.code!==0));
+  }else{
+   await until(()=>peer.connectSeen||(result&&result.code!==0));
+   await until(()=>output.includes('ADMITTED\n')||result);
+   assert.match(output,/^ADMITTED$/m,errors||output);
+  }
   peer.game(nativeIp,nativeIp,streamWire(1,0,streamId,6500),11453);await delay(100);
   const expected=Buffer.alloc(16384);for(let i=0;i<expected.length;i++)expected[i]=i%239;
   for(let at=0;at<expected.length;at+=512){peer.game(nativeIp,nativeIp,streamWire(2,0,streamId,0,expected.subarray(at,at+512)),11453);await delay(20);}
