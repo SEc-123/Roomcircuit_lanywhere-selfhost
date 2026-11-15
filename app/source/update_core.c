@@ -149,7 +149,9 @@ UpdateResult update_manifest_parse(const uint8_t raw[UPDATE_MANIFEST_SIZE],
 }
 
 static bool path_join(char path[PATH_MAX], const char *root, const char *relative) {
-    int length = snprintf(path, PATH_MAX, "%s/%s", root, relative);
+    if (!root || !*root || !relative || !*relative || *relative == '/') return false;
+    const char *separator = root[strlen(root) - 1] == '/' ? "" : "/";
+    int length = snprintf(path, PATH_MAX, "%s%s%s", root, separator, relative);
     return length > 0 && length < PATH_MAX;
 }
 static bool regular_or_missing(const char *path, bool *exists) {
@@ -162,7 +164,9 @@ static bool safe_parent(const char *root, const char *relative, bool create) {
     if (!path_join(path, root, relative)) return false;
     struct stat info;
     if (lstat(root, &info) != 0 || !S_ISDIR(info.st_mode)) return false;
-    for (char *p = path + strlen(root) + 1; *p; p++) {
+    const size_t prefix = strlen(root);
+    char *first_component = path + prefix + (root[prefix - 1] != '/');
+    for (char *p = first_component; *p; p++) {
         if (*p != '/') continue;
         *p = 0;
         if (lstat(path, &info) != 0) {
@@ -600,10 +604,11 @@ static UpdateResult install_locked(const char *root, const UpdateManifest *manif
             !matches_file(target, journal.new_size[i], journal.new_hash[i])) {
             return rollback(root, &journal) ? UPDATE_RECOVERED : UPDATE_RECOVERY_REQUIRED;
         }
-        if (progress) progress(step + 1, UPDATE_FILE_COUNT, context);
+        if (progress && step + 1 < UPDATE_FILE_COUNT) progress(step + 1, UPDATE_FILE_COUNT, context);
     }
     journal.phase = COMMITTED;
     if (!mark_transaction(root, "committed")) return UPDATE_RECOVERY_REQUIRED;
+    if (progress) progress(UPDATE_FILE_COUNT, UPDATE_FILE_COUNT, context);
     return UPDATE_INSTALLED;
 }
 UpdateResult update_install(const char *root, const UpdateManifest *manifest,

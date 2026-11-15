@@ -34,6 +34,7 @@ const { groupPage } = require('./group-page');
 const { create: createUnifiedLobby } = require('./unified-lobby');
 const regionalDirectory = require('./regional-directory');
 const nodeDirectory = require('./node-directory');
+const directRoomMetadata = require('./direct-room-metadata');
 const nodeFriends = require('./node-friends');
 const nodeLocator = require('./node-locator');
 const trafficStore = require('./traffic-store');
@@ -92,7 +93,8 @@ const SELF_CAPABILITIES = (process.env.LANYWHERE_LANPLAY_REALM ? 65536 : 0) | 3 
     ((LANPLAY_PORT || process.env.LANYWHERE_LANPLAY_REALM) ? streamProtocol.LEGACY_CAPABILITY : 0) |
     (process.env.LANYWHERE_LANPLAY_REALM ? 0 : upstreamGateway.ROOM_PASSCODE_CAPABILITY |
         upstreamGateway.ROOM_ACCESS_CAPABILITY | upstreamGateway.UNIFIED_LOBBY_CAPABILITY |
-        pushProtocol.CAPABILITY | nodeDirectory.CAPABILITY | (regionalEndpoint ? regionalDirectory.CAPABILITY : 0) |
+        pushProtocol.CAPABILITY | nodeDirectory.CAPABILITY | directRoomMetadata.CAPABILITY |
+        (regionalEndpoint ? regionalDirectory.CAPABILITY : 0) |
         (communityEndpoint ? regionalDirectory.COMMUNITY_LOBBY_CAPABILITY : 0));
 const IDLE_MS = 20000;
 const GRACE_MS = envInt('LANYWHERE_GRACE_MS', 60000, 1, 300000);
@@ -129,7 +131,8 @@ const LIMITS = {
     dataPackets: envInt('LANYWHERE_DATA_PACKETS_PER_SEC', 1000, 1, 10000),
     roomsTotal: 3000,
     perMinute: { create: envInt('LANYWHERE_CREATE_PER_MIN', 120, 1, 1000), join: 30, find: 120, match: 600,
-        appointments: 120, appointmentSubscribe: 30, gameCode: 120, gameAuth: 12, unifiedLobby: 120 },
+        appointments: 120, appointmentSubscribe: 30, gameCode: 120, gameAuth: 12, unifiedLobby: 120,
+        directRoomMetadata: 120 },
 };
 const STATE_FILE = path.join(process.env.LANYWHERE_STATE_DIR ?? __dirname, 'traffic.json');
 if (process.env.LANYWHERE_STATE_DIR === '') throw new Error('LANYWHERE_STATE_DIR no puede estar vacío');
@@ -777,11 +780,20 @@ function onFrame(socket, type, body) {
     }
     if (updates.has(socket) && type !== T.PING)
         return sendError(socket, E.BAD_REQUEST, 'Update connection is read-only.');
-    if ([nodeDirectory.CATALOG_REQUEST,nodeDirectory.REQUEST,nodeFriends.REQUEST].includes(type)) {
+    if (type === directRoomMetadata.REQUEST) {
+        if (realmId || !upstreams.isSelf(socket) || socket.member || appointmentPush?.has(socket))
+            return sendError(socket, E.BAD_REQUEST, 'Direct room info requires an idle connection.');
+        if (paused || draining) return sendError(socket, E.BUSY, 'Direct room info is unavailable. Try again.');
+        const ip = plainIp(socket.remoteAddress);
+        if (!allowed(ip, 'directRoomMetadata')) return sendError(socket, E.BUSY, 'Direct room info is busy. Try again.');
+        return send(socket, directRoomMetadata.RESPONSE, nodesLobby.exchangeMetadata(body, ip));
+    }
+    const annotatedDirectory = type === nodeDirectory.ANNOTATED_REQUEST;
+    if (annotatedDirectory || [nodeDirectory.CATALOG_REQUEST,nodeDirectory.REQUEST,nodeFriends.REQUEST].includes(type)) {
         if (realmId || !upstreams.isSelf(socket) || socket.member || appointmentPush?.has(socket))
             return sendError(socket, E.BAD_REQUEST, 'Node selection requires an idle connection.');
         if (paused || draining) return sendError(socket, E.BUSY, 'Node selection is unavailable. Try again.');
-        if (type === nodeDirectory.REQUEST && !allowed(plainIp(socket.remoteAddress),'unifiedLobby'))
+        if ((type === nodeDirectory.REQUEST || annotatedDirectory) && !allowed(plainIp(socket.remoteAddress),'unifiedLobby'))
             return sendError(socket,E.BUSY,'Node selection is busy. Try again.');
         upstreams.handleFrame(socket,type,body);
         if (type === nodeDirectory.CATALOG_REQUEST) {
@@ -790,9 +802,9 @@ function onFrame(socket, type, body) {
         }
         if (type === nodeFriends.REQUEST)
             return send(socket,nodeFriends.RESPONSE,friends.exchange(body,plainIp(socket.remoteAddress)));
-        const page = nodesLobby.page(body);
+        const page = nodesLobby.page(body, annotatedDirectory);
         if (!page) return sendError(socket,E.BAD_REQUEST,'Invalid node room query.');
-        return send(socket,nodeDirectory.RESPONSE,page);
+        return send(socket, annotatedDirectory ? nodeDirectory.ANNOTATED_RESPONSE : nodeDirectory.RESPONSE, page);
     }
     if (type === nodeDirectory.REALM_REQUEST) {
         if (!realmId || !socket.remoteAddress || !['127.0.0.1','::ffff:127.0.0.1'].includes(socket.remoteAddress) ||

@@ -45,11 +45,34 @@ namespace ams::mitm::lanywhere {
         R_RETURN(lanywhere::SetHostNode(node));
     }
 
+    namespace {
+        Result ListNodeRoomPage(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out, bool annotate) {
+            UnifiedPage result{-1, UNIFIED_LOBBY_END, 0, 0, 0, ListStatusProtocol};
+            if (out.GetSize() >= NODE_LOBBY_PAGE_SIZE * sizeof(NodeRoomWire))
+                lanywhere::FindNodeRooms(request, &result, reinterpret_cast<NodeRoomWire *>(out.GetPointer()),
+                                         out.GetSize() / sizeof(NodeRoomWire), annotate);
+            page.SetValue(result);
+            R_SUCCEED();
+        }
+    }
+
     Result LanywhereService::ListNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out) {
-        UnifiedPage result{-1, UNIFIED_LOBBY_END, 0, 0, 0, ListStatusProtocol};
-        if (out.GetSize() >= NODE_LOBBY_PAGE_SIZE * sizeof(NodeRoomWire))
-            lanywhere::FindNodeRooms(request, &result, reinterpret_cast<NodeRoomWire *>(out.GetPointer()), out.GetSize() / sizeof(NodeRoomWire));
-        page.SetValue(result);
+        return ListNodeRoomPage(request, page, out, false);
+    }
+
+    Result LanywhereService::ListAnnotatedNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out) {
+        return ListNodeRoomPage(request, page, out, true);
+    }
+
+    Result LanywhereService::GetDirectHostRoom(const sf::OutBuffer &out) {
+        if (out.GetSize() != sizeof(DirectRoomHost)) return ResultRelayFailed();
+        const auto host = DescribeDirectHost();
+        std::memcpy(out.GetPointer(), &host, sizeof(host));
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::GetDirectRoomPasscode(NodeRoomSelection request, sf::Out<RoomPasscodeReply> reply) {
+        reply.SetValue(LookupDirectRoomPasscode(request));
         R_SUCCEED();
     }
 

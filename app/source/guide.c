@@ -5,10 +5,10 @@
 typedef struct { const char *title, *steps[3], *key; } GuidePage;
 static const GuidePage pages_zh[] = {
     { "创建房间", {
-        "大厅按 Y 选节点，按 R 切换地区。",
-        "回到游戏，在“本地无线”里创建房间。",
-        "参考主机实测延迟，或直接选择推荐节点。"
-    }, "跨节点找房、测速选线路，或提前约局。" },
+        "大厅按 Y 打开节点列表，选中节点后按 A。",
+        "确认大厅底部的「建房线路」已显示所选节点。",
+        "按 + 回到游戏，在「本地无线」里创建房间。"
+    }, "新房间会使用当前建房线路。选了第三方节点，房间就开在该节点。" },
     { "加入房间", {
         "在大厅按 A 选房，线路按房间来源自动切换。",
         "按提示打开游戏，或从 HOME 回游戏。",
@@ -23,7 +23,7 @@ static const GuidePage pages_zh[] = {
         "“在大厅分享”会让选房的玩家看到密码。",
         "“隐藏密码”需要玩家向房主获取密码。",
         "留空并确认可清除大厅中的密码设置。"
-    }, "大厅密码用于主服务器。社区线路的密码在游戏里输入。" },
+    }, "先在游戏里设置密码。使用第三方节点时，加入者在游戏里输入。" },
     { "约局", {
         "大厅按 − 或点「约局」。按 B 回大厅。",
         "选中约局按 A 加入或退出。按 L 发起新约局。",
@@ -47,10 +47,10 @@ static const GuidePage pages_zh[] = {
 };
 static const GuidePage pages_en[] = {
     { "Host a room", {
-        "Press Y in the lobby to choose a node. R filters regions.",
-        "Return to the game and create a room in Local Wireless.",
-        "Use measured latency or select a recommended node."
-    }, "Find rooms across nodes, test your connection, or schedule a session." },
+        "Press Y in the lobby, choose a node, then press A.",
+        "Check the selected node under Hosting line in the lobby.",
+        "Press + to return to the game and host in Local Wireless."
+    }, "New rooms use the selected hosting node, including third-party nodes." },
     { "Join a room", {
         "Select with A. The lobby uses that room's source.",
         "Open the game when prompted, or return to it from HOME.",
@@ -65,7 +65,7 @@ static const GuidePage pages_en[] = {
         "Share in lobby lets players see the password.",
         "Keep password hidden: players ask the host for it.",
         "Leave it blank to clear the lobby password setting."
-    }, "Lobby passwords are for Main server. On Community, enter the password in the game." },
+    }, "Set the password in the game. On direct nodes, guests enter it in the game." },
     { "Appointments", {
         "Press − or tap Appointments. B returns to the lobby.",
         "A to join or leave a selected appointment. L to create.",

@@ -12,6 +12,8 @@ static const LobbyRoomId second = {.code = "ABCD23", .game_id = 2};
 static const LobbyRoomId eu = {.code = "ABCD23", .game_id = 1, .provider = REGION_PROVIDER_EU};
 static RoomPasscodeLookup last_lookup;
 static unsigned regional_reads, regional_unlocks;
+static unsigned direct_reads;
+static NodeRoomSelection last_direct;
 static RoomPasscodeReply next_reply;
 static RoomPasscodeChange last_write;
 static RoomAccessChange last_access;
@@ -51,6 +53,12 @@ Result mock_password_dispatch(Service *service, unsigned command, const void *in
         ++regional_reads;
         return 0;
     }
+    case DIRECT_ROOM_PASSCODE_IPC:
+        assert(in_size == sizeof(last_direct) && out_size == sizeof(next_reply));
+        memcpy(&last_direct, input, in_size);
+        memcpy(output, &next_reply, out_size);
+        ++direct_reads;
+        return 0;
     case ROOM_PASSCODE_IPC_HOST:
         assert(!input && !in_size && out_size == sizeof(host));
         memcpy(output, &host, out_size);
@@ -231,5 +239,22 @@ int main(void)
     write_status = RoomPasscodeRoomUnavailable;
     assert(!strcmp(room_password_edit(&g_service, first.code, true, &edit), "无法更新游戏密码。"));
     assert(!edit.active && writes == 5 && keyboard_opened == keyboard_closed);
+
+    const LobbyRoomId third_party = {.code = "ABCD23", .game_id = UINT64_MAX, .provider = "lanplay-nl"};
+    NodeRoomSelection direct = {.game_id = UINT64_MAX, .node_id = 2,
+        .locator = {.code = "ABCD23", .network_id = {1, 2, 3}, .bssid = {4, 5, 6}, .host_ip = 0x0a0d0101}};
+    next_reply = (RoomPasscodeReply){.length = 6, .passcode = "p-test"};
+    assert(room_password_tick_direct(&guest, third_party, &direct, false, 1) && guest.pending);
+    assert(room_password_worker_exchange(&g_service) && direct_reads == 1);
+    assert(!memcmp(&last_direct, &direct, sizeof(direct)));
+    assert(room_password_tick_direct(&guest, third_party, &direct, false, 2) && !strcmp(guest.value, "p-test"));
+    assert(room_password_tick_direct(&guest, third_party, &direct, true, 3) && guest.locked && !guest.value[0]);
+    assert(!room_password_worker_exchange(&g_service) && !guest.pending);
+    assert(room_password_tick_direct(&guest, third_party, &direct, false, 4) && guest.pending);
+    assert(room_password_worker_exchange(&g_service) && direct_reads == 2);
+    direct.locator.bssid[3]++;
+    assert(room_password_tick_direct(&guest, third_party, &direct, false, 5) && !guest.value[0] && guest.pending);
+    assert(room_password_tick(&guest, (LobbyRoomId){0}, false, 6) && !guest.pending && !guest.locked);
+    assert(!room_password_worker_exchange(&g_service));
     puts("Room password app IPC: hidden/shared/clear, owner check, unlock and wrong code, stale reply, exact text, and EN/ZH passed.");
 }

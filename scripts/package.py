@@ -159,11 +159,12 @@ def package_files(version, server, port, embedded):
         "安装中断时，从自制软件菜单打开 RoomCircuit Recovery。\n"
         f"{setup}\n"
         "按 RS 切换中英文，右下角可查看教程。\n"
-        "大厅按 Y 看节点地区和本机延迟；R 筛地区，X 重测。选好后回游戏的“本地无线”建房。\n"
+        "大厅按 Y 选节点，按 A 确认。检查底部「建房线路」，再按 + 回游戏的「本地无线」建房。\n"
+        "新房间会用这条线路，选了第三方节点就用该节点建房。节点页按 R 筛地区，X 重测。\n"
         "左键浏览游戏，A 筛选，右键回房间。ZL+ZR 可筛游戏和地区。\n"
         "节点页按 L 可和好友一起测速；推荐只依据参与测速的网络。\n"
         "Switch LAN Play：原生直连房间实际节点；旧房兼容转发会单独标明。\n"
-        "对局固定所选节点，断线重试原节点。约局提醒和大厅密码分享请用主服务器。完整说明见根目录 README.txt。\n\n"
+        "直连房间确认「我的房间」后可在大厅分享或隐藏密码。实际密码在游戏中设定、输入。约局提醒用主服务器。完整说明见根目录 README.txt。\n\n"
         "上游源码及作者信息 https://github.com/augustocco/lanywhere\n"
     ).encode("utf-8")
     if embedded is not None:

@@ -8,6 +8,7 @@
 #include "../../common/unified_lobby.h"
 #include "../../common/node_lobby.h"
 #include "../../common/node_catalog.h"
+#include "../../common/direct_room_metadata.h"
 
 #define LANYWHERE_IPC_MAJOR 5
 #define LANYWHERE_IPC_CAPABILITIES_COMMAND 10
@@ -48,11 +49,7 @@ typedef struct {
 } LobbyNodeRoom;
 _Static_assert(sizeof(LobbyNodeRoom) == NODE_LOBBY_ROW_SIZE, "node row IPC layout");
 
-typedef struct {
-    uint64_t game_id;
-    uint32_t node_id, reserved;
-    NodeRoomLocator locator;
-} LobbyNodeSelection;
+typedef NodeRoomSelection LobbyNodeSelection;
 _Static_assert(sizeof(LobbyNodeSelection) == 80, "node selection IPC layout");
 
 enum LobbyDiscovery { LobbyDiscoveryUnknown, LobbyDiscoveryUnified, LobbyDiscoveryLegacy };
@@ -88,6 +85,7 @@ typedef struct {
 
 typedef struct {
     LobbyRoomId room;
+    NodeRoomSelection direct;
     char value[ROOM_PASSCODE_MAX + 1];
     uint64_t refresh_at;
     bool pending, failed, locked, unlocked;

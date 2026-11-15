@@ -17,6 +17,7 @@
 #include "../../../common/unified_lobby.h"
 #include "../../../common/regional_relay.h"
 #include "../../../common/node_lobby.h"
+#include "../../../common/direct_room_metadata.h"
 
 namespace ams::mitm::ldn {
     struct NetworkInfo;
@@ -108,7 +109,7 @@ namespace ams::mitm::lanywhere {
     Result SetRelayRegion(u32 region);
     u32 GetHostNode();
     Result SetHostNode(u32 node);
-    void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity);
+    void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity, bool annotate = false);
     Result SelectNodeRoom(const NodeRoomSelection &request);
 
     struct GroupPageV2 { s32 count; u32 next, capabilities, reserved; };
@@ -170,6 +171,9 @@ namespace ams::mitm::lanywhere {
     // Active rooms retain their joined provider even if preferences change.
     bool CaptureGameRoute(GameRoute *out);
     bool CaptureHostGameRoute(GameRoute *out);
+    bool PrepareDirectHostIdentity(const GameRoute &route, void *session_id, size_t size);
+    DirectRoomHost DescribeDirectHost();
+    RoomPasscodeReply LookupDirectRoomPasscode(const NodeRoomSelection &room);
     bool GameRouteStillCurrent(const GameRoute &route);
     void ReportGameNetworkError(bool unavailable);
     void ReportGameRouteChanged();

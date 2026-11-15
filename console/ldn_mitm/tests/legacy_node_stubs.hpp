@@ -5,6 +5,7 @@
 #include <cassert>
 #include "node_catalog.h"
 #include "node_lobby.h"
+#include "../source/lanplay_direct.hpp"
 [[maybe_unused]] static std::atomic<bool> g_direct_session{false};
 [[maybe_unused]] static GameRoute g_direct_room{};
 bool DirectNodeRoute(const DiscoveryRoute &route);
@@ -19,6 +20,12 @@ struct Snapshot {
     char error[64]{};
 };
 inline Snapshot State() { return {}; }
+using HostedRoom = ams::mitm::lanplay::HostedRoom;
+inline HostedRoom hosted_room{};
+inline bool GetHostedRoom(HostedRoom *out) {
+    *out = hosted_room;
+    return out->epoch != 0;
+}
 inline bool Configure(uint32_t, const Endpoint &) { assert(false); return false; }
 inline int Scan(const void *, size_t, const NodeRoomLocator *, void (*)(const char *, const void *, void *), void *) {
     assert(false); return -1;

@@ -20,6 +20,7 @@ static char test_root[4096];
 static unsigned fault_at, mutation_count;
 static bool inject_fail;
 static uint64_t fake_available;
+static unsigned last_progress;
 static int injected_statvfs(const char *path, struct statvfs *info) {
     int result = statvfs(path, info);
     if (result == 0 && fake_available) { info->f_frsize = 1; info->f_bavail = fake_available; }
@@ -120,6 +121,14 @@ static void assert_settings(void) {
     assert(path_join(path, test_root, "lanywhere/appointments.bin")); f = fopen(path, "rb");
     assert(f && fread(data, 1, 18, f) == 18 && !memcmp(data, "saved-appointments", 18)); fclose(f);
 }
+static void assert_commit_before_complete(unsigned completed, unsigned total, void *context) {
+    assert(total == UPDATE_FILE_COUNT && completed == last_progress + 1);
+    last_progress = completed;
+    if (completed == total) {
+        Journal journal; bool found;
+        assert(journal_read(context, &journal, &found) && found && journal.phase == COMMITTED);
+    }
+}
 int main(int argc, char **argv) {
     assert(argc == 2 && sodium_init() >= 0);
     uint8_t seed[32] = {7}; assert(crypto_sign_seed_keypair(test_key, secret_key, seed) == 0);
@@ -139,6 +148,29 @@ int main(int argc, char **argv) {
     assert(update_acknowledge(test_root) == UPDATE_OK && update_recover(test_root) == UPDATE_OK);
     assert(update_transaction_pending(test_root) == UPDATE_OK);
     assert_settings();
+
+    char rooted[PATH_MAX], joined[PATH_MAX];
+    assert(path_join(joined, "sdmc:/", "switch/lanywhere.nro"));
+    assert(!strcmp(joined, "sdmc:/switch/lanywhere.nro"));
+    assert(path_join(joined, "/", "switch/lanywhere.nro"));
+    assert(!strcmp(joined, "/switch/lanywhere.nro"));
+    assert(!path_join(joined, "sdmc:/", "/switch/lanywhere.nro"));
+    prepare_root(argv[1], 207, false);
+    const int root_length = snprintf(rooted, sizeof(rooted), "%s/", test_root);
+    assert(root_length > 0 && root_length < (int)sizeof(rooted));
+    // Switch-style rename still rolls back with the absolute root's final slash.
+    mutation_count = 0; fault_at = 7; inject_fail = true;
+    assert(update_install(rooted, &manifest, download_path, NULL, NULL) == UPDATE_RECOVERED);
+    inject_fail = false; fault_at = 0;
+    assert(update_recover(rooted) == UPDATE_RECOVERED);
+    assert_old(false); assert_settings();
+    assert(update_acknowledge(rooted) == UPDATE_OK);
+    assert(update_install(rooted, &manifest, download_path, assert_commit_before_complete, rooted) == UPDATE_INSTALLED);
+    assert(last_progress == UPDATE_FILE_COUNT);
+    assert(update_recover(rooted) == UPDATE_INSTALLED);
+    assert(update_acknowledge(rooted) == UPDATE_OK && update_transaction_pending(rooted) == UPDATE_OK);
+    assert_settings();
+
     unsigned cases = 0;
     for (unsigned missing = 0; missing < 2; missing++) {
         unsigned mutations = missing ? 22 + 14 : 22 + 22;

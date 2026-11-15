@@ -51,7 +51,8 @@ def main():
         'VIEW': view,
         'PREDICATES': '\n'.join(function(source, signature) for signature in (
             'static bool show_matching(', 'static bool external_room_expired(', 'static bool supports_reserved(', 'static bool is_self_network(',
-            'static bool is_self_room_context(', 'static bool can_change_visibility(', 'static bool can_change_provider(', 'static bool can_change_host_region(', 'static u32 next_host_region(', 'static bool can_share_game_password(',
+            'static bool is_self_room_context(', 'static bool has_direct_host(', 'static bool owns_direct_room(', 'static bool has_pinned_direct_room(',
+            'static bool can_change_visibility(', 'static bool can_change_provider(', 'static bool can_change_host_region(', 'static u32 next_host_region(', 'static bool can_share_game_password(',
              'static LobbyRoomId room_password_target(', 'static bool can_enter_game_password(',
             'static bool appointment_entry_available(', 'static bool room_board_available(', 'static bool lobby_guide_available(')),
         'ROOM_BOARD_INPUT': '\n'.join(function(source, signature) for signature in (

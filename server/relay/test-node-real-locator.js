@@ -98,3 +98,92 @@ test('temporary measurement groups run through real relay frames without creatin
  await first.enter();first.send(0x34,request(4,code,1));const denied=await until(()=>{const index=first.frames.findIndex(frame=>frame[0]===0x85);return index>=0?first.frames.splice(index,1)[0]:null;});assert.equal(denied[1],4,'active game session cannot be reused for node selection');
  await first.leave();second.send(0x34,request(5,code,2));assert.equal((await second.frame(0xb4))[30],1);
 });
+
+for (const flavor of ['standard', 'fork']) {
+    test(`live ${flavor} directory transports direct room annotations over TCP without changing LAN Play identity`,
+        { timeout: 30000 }, async t => {
+            const { randomBytes, createHash } = require('node:crypto');
+            const { networkInfo: forkInfo } = require('./test-lanplay-fork');
+            const { STATUS } = require('./direct-room-metadata');
+            const relay = await standard(t), central = await launch(t, relay);
+            const wireGame = 0xffffffffffffffffn, address = 0x0a0d5555, node = 2;
+            const proof = randomBytes(32);
+            const binding = Buffer.alloc(8);
+            binding.writeUInt32LE(node, 0);
+            binding.writeUInt32LE(address, 4);
+            const commitment = createHash('sha256').update(proof).update(binding).digest().subarray(0, 16);
+            const host = flavor === 'standard' ? new Emu(address, 'MetadataHost', relay, wireGame) :
+                new ForkPeer(address, 0xc0a80155, 'MetadataHost', relay);
+            await host.start();
+            t.after(() => host.close());
+            if (flavor === 'standard') {
+                host.host();
+                commitment.copy(host.hosting, 16);
+            } else {
+                host.info = forkInfo(host.real, host.name);
+                host.info.writeBigUInt64LE(wireGame);
+                commitment.copy(host.info, 16);
+                host.control(1, host.info);
+            }
+
+            const owner = await central.peer('Publisher');
+            const browser = await central.peer('Directory');
+            browser.send(11);
+            assert((await browser.frame(0x89)).readUInt32LE() & 131072);
+            const raw = await directRow(browser, wireGame), location = raw.subarray(344);
+            assert.equal(location.readUInt32LE(40), address);
+            assert(location.subarray(16, 32).equals(commitment));
+            assert.equal(raw[34], 0);
+            const request = Buffer.alloc(384);
+            request.writeUInt32LE(1);
+            binding.copy(request, 4);
+            location.copy(request, 12, 0, 38);
+            proof.copy(request, 76);
+            request.writeBigUInt64LE(0x0100000000abc000n, 112);
+            request.writeBigUInt64LE(0x0100000000abc010n, 120);
+            request.write('Fixture Game', 128);
+            request.write('测试游戏', 256);
+            request[50] = 1;
+            request[51] = request.write('test-shared', 52);
+            owner.send(0x36, request);
+            const saved = await owner.frame(0xb6);
+            assert.equal(saved.readUInt32LE(), STATUS.OK);
+            assert(saved.subarray(4).every(byte => byte === 0));
+
+            const browse = Buffer.alloc(20);
+            browse.writeUInt32LE(1 << node, 16);
+            browser.send(0x37, browse);
+            const page = await browser.frame(0xb7);
+            const row = page.subarray(16);
+            assert.equal(page[8], 1);
+            assert.equal(row.readBigUInt64LE(8), wireGame);
+            assert.equal(row.readBigUInt64LE(16), 0x0100000000abc000n);
+            assert.equal(row.toString('utf8', 80, 92), 'Fixture Game');
+            assert.equal(row.toString('utf8', 208, 220), '测试游戏');
+            assert.equal(row[34], 1);
+            assert.equal(row[35], 1);
+            assert(row.subarray(344).equals(location), 'route locator is byte-identical');
+
+            const read = Buffer.from(request.subarray(0, 52));
+            read.writeUInt32LE(2);
+            read[50] = read[51] = 0;
+            browser.send(0x36, read);
+            const shared = await browser.frame(0xb6);
+            assert.equal(shared.readUInt32LE(), STATUS.OK);
+            assert.equal(shared.toString('ascii', 8, 8 + shared[5]), 'test-shared');
+
+            browser.send(0x33, browse);
+            const legacy = (await browser.frame(0xb3)).subarray(16);
+            assert.equal(legacy[34], 0);
+            assert.equal(legacy[35], 0);
+
+            request[50] = 2;
+            request.fill(0, 51, 76);
+            owner.send(0x36, request);
+            assert.equal((await owner.frame(0xb6)).readUInt32LE(), STATUS.OK);
+            browser.send(0x36, read);
+            const hidden = await browser.frame(0xb6);
+            assert.equal(hidden[4], 2);
+            assert(hidden.subarray(5).every(byte => byte === 0));
+        });
+}

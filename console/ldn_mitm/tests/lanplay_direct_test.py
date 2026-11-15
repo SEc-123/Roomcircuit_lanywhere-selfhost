@@ -79,6 +79,9 @@ class NativeLanPlayTransport(unittest.TestCase):
                 check=True,
             )
             subprocess.run(
+                [str(driver), "hostidentity", "12345"], check=True, timeout=5,
+            )
+            subprocess.run(
                 ["node", str(ROOT / "console/ldn_mitm/tests/lanplay_direct_test.cjs"), str(driver)],
                 check=True, timeout=130,
             )

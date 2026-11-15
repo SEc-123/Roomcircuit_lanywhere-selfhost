@@ -11,7 +11,7 @@ Merge `atmosphere/` and `switch/` from the SD ZIP into your SD card root. Restar
 ## Play
 
 - **Join.** Press **←** to browse games, **A** to filter, and **→** to return to rooms. Select a room, then search in the game's **Local Wireless** mode.
-- **Host.** Press **Y** to choose a node. Press **R** to change region, **X** to measure again, or **L** to test with friends. Return to the game and create a Local Wireless room.
+- **Host.** Press **Y**, pick a node, then confirm with **A**. Check **Hosting line** in the lobby before returning to the game. New Local Wireless rooms use that node, including third-party nodes. Press **R** to change region, **X** to test again, or **L** to test with friends.
 - **Schedule.** Press **−** for appointments on Main server. In-game room alerts require Ultrahand with API notifications enabled.
 - **Settings.** Press **RS** to switch languages, **→** from the room list for the guide, and **LS** to check for updates. Restart Atmosphère after installing an update.
 
@@ -29,7 +29,7 @@ Merge `atmosphere/` and `switch/` from the SD ZIP into your SD card root. Restar
 **安装**　将[最新 SD 安装包](https://github.com/SEc-123/lanywhere-selfhost/releases/latest)的 `atmosphere/` 和 `switch/` 合并到卡根目录。重启大气层，从相册打开 **RoomCircuit**。安装会替换同模块 ID 的 ldn_mitm，并保留 RoomCircuit 原有设置。
 
 - **加入。** 按 **←** 浏览游戏，**A** 筛选，**→** 回房间。选房后在游戏的「本地无线」里搜索。
-- **建房。** 按 **Y** 选节点，**R** 切地区，**X** 重测，**L** 和好友一起测速。选好后回游戏，在「本地无线」里建房。
+- **建房。** 按 **Y** 打开节点列表，选中后按 **A**。确认大厅底部的「建房线路」，再回游戏用「本地无线」建房。新房间会使用这条线路，选了第三方节点就用该节点建房。**R** 切地区，**X** 重测，**L** 和好友一起测速。
 - **约局。** 按 **−** 打开主服务器约局。游戏内开房提醒需要 Ultrahand 开启 API 通知。
 - **设置。** 按 **RS** 切换语言，在房间列按 **→** 看教程，按 **LS** 检查更新。安装更新后重启大气层。
 

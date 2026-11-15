@@ -14,7 +14,7 @@ routes = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(routes)
 game_type = re.search(r'typedef struct\s*\{[^}]*\}\s*GameInfo;', source).group()
 functions = '\n\n'.join(routes.function(source, 'static ' + name) for name in
-    ('const GameInfo *local_game_info(', 'CatalogMatch room_catalog_match(', 'bool game_info_has_lcid(', 'const char *room_title(', 'bool room_password_allows_launch(', 'bool open_selected_game('))
+    ('const GameInfo *local_game_info(', 'CatalogMatch room_catalog_match(', 'bool game_info_has_lcid(', 'const char *room_title(', 'bool has_pinned_direct_room(', 'bool room_password_allows_launch(', 'bool open_selected_game('))
 harness = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -23,6 +23,7 @@ harness = r'''
 #include <string.h>
 #include "lobby_model.h"
 #include "game_catalog.h"
+#include "../../common/node_catalog.h"
 #include "ui_text.h"
 #include "../../common/game_identity_text.h"
 typedef uint64_t u64;
@@ -30,7 +31,7 @@ typedef struct { void *px; int w,h; } Image;
 #define TR(es,en) ui_tr((es),(en))
 #define R_FAILED(x) ((x)!=0)
 ''' + game_type + r'''
-typedef struct { LobbyRoomId pinned; LobbyGroup pinned_group; RoomPasswordView password; char message[128]; } View;
+typedef struct { LobbyRoomId pinned; LobbyGroup pinned_group; LobbyNodeSelection pinned_node; bool external_confirm; RoomPasswordView password; char message[128]; } View;
 static bool g_zh, installed;
 static GameCatalog g_catalog;
 static GameInfo fake;
@@ -58,6 +59,16 @@ int main(void) {
     assert(!open_selected_game(&v) && launches == 0);
     v.password.unlocked = true;
     assert(open_selected_game(&v) && launches == 1);
+    v.external_confirm=true;
+    v.password.unlocked=false;
+    v.pinned_node.node_id=7; v.pinned_node.game_id=room.game_id;
+    strcpy(v.pinned.provider,LanywhereNodes[7].provider);
+    memcpy(v.pinned.code,room.code,sizeof(v.pinned.code));
+    memcpy(v.pinned_node.locator.code,room.code,sizeof(v.pinned_node.locator.code));
+    assert(open_selected_game(&v) && launches == 2); /* Direct password is checked in game. */
+    v.pinned_node.locator.code[0]='X';
+    assert(!open_selected_game(&v) && launches == 2);
+    v.external_confirm=false; v.password.unlocked=true;
     fake.lcids[0]=0x333; launches=0;
     assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Host game"));
     assert(!open_selected_game(&v) && launches==0); /* claimed ID does not match local LCID */

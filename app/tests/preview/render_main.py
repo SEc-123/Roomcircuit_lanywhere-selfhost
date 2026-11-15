@@ -17,7 +17,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent.parent / 'source'
 FUNCTIONS = ['tr_error', 'button_mask', 'add_zone', 'draw_language_control', 'touch_action_at', 'show_matching', 'external_room_expired', 'supports_reserved', 'is_self_network', 'can_enter_game_password', 'room_password_allows_launch', 'match_state_text', 'list_error_title', 'status_pill', 'seats',
-             'local_game_info', 'room_catalog_match', 'game_info_has_lcid', 'room_title', 'display_game_icon', 'room_title_note', 'provider_label', 'region_label', 'group_card', 'matching_column', 'network_offline_hint', 'list_error_hint', 'groups_column', 'can_change_visibility', 'can_change_provider', 'can_change_host_region', 'current_host_line_available', 'is_self_room_context', 'can_share_game_password', 'provider_column', 'private_column',
+             'local_game_info', 'room_catalog_match', 'game_info_has_lcid', 'room_title', 'direct_host_title', 'display_game_icon', 'room_title_note', 'provider_label', 'region_label', 'group_card', 'draw_room_password_panel', 'matching_column', 'network_offline_hint', 'list_error_hint', 'groups_column', 'can_change_visibility', 'can_change_provider', 'can_change_host_region', 'current_host_line_available', 'is_self_room_context', 'can_share_game_password', 'provider_column', 'private_column',
              'appointment_entry_available', 'lobby_guide_available', 'side_column', 'room_board_available', 'room_board_games',
              'draw_brand', 'board_game_title', 'board_room_node', 'board_room_region', 'draw_room_board', 'draw_board_header', 'draw_password_visibility', 'draw_update_entry', 'draw_appointments_link', 'draw', 'draw_no_service']
 
@@ -67,7 +67,8 @@ def main():
     prefixes = ('C_', 'MARGIN', 'LIST_W', 'SIDE_X', 'SIDE_W', 'FOOTER_Y', 'TOUCH_', 'NETWORK_ROW_')
     defines = '\n'.join(line for line in main_source.splitlines()
                         if line.startswith('#define ') and line.split()[1].startswith(prefixes))
-    extracted = '\n\n'.join(function(main_source, name) for name in FUNCTIONS)
+    host_predicates = ['has_direct_host', 'owns_direct_room', 'has_pinned_direct_room']
+    extracted = '\n\n'.join(function(main_source, name) for name in host_predicates + FUNCTIONS)
     node_labels = '\n\n'.join(function(node_source, name) for name in ('nodes_ui_name', 'nodes_ui_region', 'nodes_ui_country'))
     source = '''#include <stdio.h>
 #include <stdlib.h>

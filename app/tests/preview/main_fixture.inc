@@ -18,7 +18,8 @@ int main(int argc, char **argv)
                              "network-config-unreadable", "network-config-invalid", "local-match", "inventory-error", "external-offline",
                              "olunira-catalog-restored", "game-password", "share-password",
                               "protected-and-full-rooms", "protected-room", "unlocked-room", "password-visibility", "unified-mixed", "regional-lobby", "regional-locked",
-                              "community-lobby", "community-room","roomcircuit-lobby","roomcircuit-filtered","roomcircuit-rail-focus","roomcircuit-empty" };
+                              "community-lobby", "community-room","roomcircuit-lobby","roomcircuit-filtered","roomcircuit-rail-focus","roomcircuit-empty",
+                              "direct-owned-room", "direct-guest-shared-password" };
     for (int zh = 0; zh < 2; zh++) {
         g_zh = zh != 0; ui_set_language(g_zh, false);
         snprintf(sample_games[0].name, sizeof(sample_games[0].name), "%s", zh ? "示例游戏：多人冒险与合作挑战" : "Sample game: multiplayer adventure");
@@ -181,6 +182,41 @@ int main(int argc, char **argv)
                 if (v.count > 2) { v.groups[1].room_access=RoomAccessHidden; v.groups[2].players=4; }
                 if (v.count) { v.sel=0; v.selection=lobby_room_id_on(&v.groups[0],v.sources[0]); }
             }
+            if (scene == 45 || scene == 46) {
+                v.count = 2;
+                v.sel = -1;
+                v.host_node = 7;
+                const char *game = zh ? "宝可梦 紫" : "Pokémon Violet";
+                for (int i = 0; i < v.count; ++i) {
+                    const char *room_code = i ? "ABC235" : "ABC234";
+                    v.groups[i] = (LobbyGroup){.game_id=UINT64_MAX,.players=1,.max_players=4};
+                    memcpy(v.groups[i].code,room_code,7);
+                    snprintf(v.sources[i],sizeof(v.sources[i]),"%s",LanywhereNodes[7].provider);
+                    v.node_rows[i] = (LobbyNodeRoom){.group=v.groups[i],.node_id=7,.flags=NodeRoomDirect,
+                        .locator={.network_id={0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff},.bssid={2,3,4,5,6,7},.host_ip=0x0a0d0101}};
+                    v.node_rows[i].locator.network_id[16] = i + 1;
+                    memcpy(v.node_rows[i].locator.code,room_code,7);
+                }
+                if (scene == 45) {
+                    v.st = (LanywhereStatus){.state=StateInRoom,.my_index=0,.game_id=UINT64_MAX,.code="ABC456"};
+                    v.host_regions = RELAY_REGION_COMMUNITY_ACTIVE;
+                    v.direct_host = (DirectRoomHost){.epoch=1,.node_id=7,.host_ip=v.node_rows[0].locator.host_ip,
+                        .flags=DirectRoomHostActive | DirectRoomHostCanEdit};
+                    memcpy(v.direct_host.network_id,v.node_rows[0].locator.network_id,sizeof(v.direct_host.network_id));
+                    memcpy(v.direct_host.bssid,v.node_rows[0].locator.bssid,sizeof(v.direct_host.bssid));
+                    snprintf(v.direct_host.title_en,sizeof(v.direct_host.title_en),"%s",game);
+                } else {
+                    v.external_confirm = true;
+                    v.pinned_group = v.groups[0];
+                    v.pinned_group.metadata_flags = LOBBY_META_HOST;
+                    v.pinned_group.room_access = RoomAccessShared;
+                    snprintf(v.pinned_group.title_en,sizeof(v.pinned_group.title_en),"%s",game);
+                    v.pinned = lobby_room_id_on(&v.pinned_group,v.sources[0]);
+                    v.pinned_node = (LobbyNodeSelection){.game_id=UINT64_MAX,.node_id=7,.locator=v.node_rows[0].locator};
+                    v.password = (RoomPasswordView){.room=v.pinned,.direct=v.pinned_node,.value="SAMPLE-42"};
+                    snprintf(v.message,sizeof(v.message),"%s",ui_text("Open the game from HOME, then search in Local Wireless."));
+                }
+            }
             char path[1024];
             snprintf(path, sizeof(path), "%s/main-%s-%s.png", argv[1], zh ? "zh" : "en", scenes[scene]);
             output_path = path;
@@ -194,7 +230,7 @@ int main(int argc, char **argv)
             else {
                 draw(&v);
                 // Real debug captures intentionally skip the password view.
-                if (scene == 30 && !gfx_save_png(path)) failures++;
+                if ((scene == 30 || scene == 46) && !gfx_save_png(path)) failures++;
                 if (scene == 43) {
                     if (!g_board_title_animates) {
                         fprintf(stderr, "Focused long title did not enable scrolling in %s\n", path);
@@ -238,7 +274,12 @@ int main(int argc, char **argv)
             if ((scene == 37 || scene == 39) && touch_action_at(SIDE_X + 20, 153) != HidNpadButton_Y) {
                 fprintf(stderr, "Hosting line button is missing in %s\n", path); failures++;
             }
-            if (scene >= 41 &&
+            if (scene == 45 &&
+                (!owns_direct_room(&v, &v.node_rows[0]) || owns_direct_room(&v, &v.node_rows[1]) ||
+                 touch_action_at(700,124) != HidNpadButton_Y)) {
+                fprintf(stderr,"Hosted direct room controls failed in %s\n",path); failures++;
+            }
+            if (scene >= 41 && scene <= 44 &&
                 (touch_action_at(720, 42) != HidNpadButton_Minus || touch_action_at(900, 42) != HidNpadButton_Y ||
                  touch_action_at(59, 228) != TOUCH_GAME_RAIL ||
                  (v.count && (touch_action_at(510, 271) != TOUCH_CARD || g_rendered_games[1]!=100)))) {

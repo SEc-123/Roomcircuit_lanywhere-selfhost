@@ -1837,6 +1837,36 @@ Snapshot State() {
     std::memcpy(result.error, impl->error, sizeof(result.error));
     return result;
 }
+bool GetHostedRoom(HostedRoom *out) {
+    if (!out)
+        return false;
+    *out = {};
+    // Keep the instance alive while capturing fields protected by the transport lock.
+    std::scoped_lock instance_lock(instance_mutex);
+    auto *impl = instance;
+    if (!impl)
+        return false;
+    std::scoped_lock lock(impl->mutex);
+    if (!impl->active || !impl->hosting || !impl->published || !impl->joined || impl->collision)
+        return false;
+
+    const auto *info = impl->network_info;
+    const uint64_t game = uint64_t(Le32(info)) | (uint64_t(Le32(info + 4)) << 32);
+    if (!game || game != impl->game || Le32(info + 0x68) != impl->self ||
+        !std::any_of(info + 16, info + 32, [](uint8_t byte) { return byte != 0; }) ||
+        !std::any_of(info + 0x20, info + 0x26, [](uint8_t byte) { return byte != 0; }))
+        return false;
+
+    out->epoch = impl->epoch;
+    out->game = game;
+    out->node = impl->node;
+    out->host_ip = impl->self;
+    std::memcpy(out->network_id, info, sizeof(out->network_id));
+    std::memcpy(out->bssid, info + 0x20, sizeof(out->bssid));
+    if (impl->HostAllows(false)) out->flavors |= 1u << NodeFlavorStandard;
+    if (impl->HostAllows(true)) out->flavors |= 1u << NodeFlavorFork;
+    return true;
+}
 void Publish(const void *info, size_t size) {
     auto *impl = Peek();
     if (!impl)

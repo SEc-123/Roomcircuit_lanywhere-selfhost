@@ -11,6 +11,7 @@ spec=importlib.util.spec_from_file_location('routes',root/'app/tests/input_routi
 source=(root/'app/source/main.c').read_text()
 code=r'''
 #include "lobby_model.h"
+#include "../../common/direct_room_metadata.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,8 +25,12 @@ typedef struct {unsigned buffer_attrs[1];struct{void *pointer;size_t size;}buffe
 static UnifiedPage reply;
 static LobbyNodeRoom rows[6];
 static Result result;
+static bool legacy_api;
+static unsigned last_command;
 static Result dispatch(unsigned command, NodeRoomsRequest request, UnifiedPage *out, Io io){
- assert(command==37 && !request.reserved && io.buffers[0].size==sizeof(rows));
+ assert((command==DIRECT_ROOM_LIST_IPC || command==37) && !request.reserved && io.buffers[0].size==sizeof(rows));
+ last_command=command;
+ if(legacy_api && command==DIRECT_ROOM_LIST_IPC) return MAKERESULT(10,221);
  memcpy(io.buffers[0].pointer,rows,sizeof(rows));*out=reply;return result;
 }
 #define serviceDispatchInOut(service,command,request,response,...) dispatch(command,request,&(response),(Io){__VA_ARGS__})
@@ -45,6 +50,17 @@ int main(void){
  rows[0].locator.reserved[0]=1;assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol);rows[0].locator.reserved[0]=0;
  rows[0].flags=0;assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol);rows[0].flags=NodeRoomGateway;
  assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).count==1);
+ rows[0].group.room_access=RoomAccessShared;
+ assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol);
+ rows[0].flags=NodeRoomDirect;
+ assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).count==1 && groups[0].room_access==RoomAccessShared);
+ legacy_api=true;
+ assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol && last_command==37);
+ rows[0].group.room_access=RoomAccessNone;
+ assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).count==1 && last_command==37);
+ legacy_api=false; rows[0].group.room_access=RoomAccessShared;
+ rows[0].node_id=1;
+ assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol);
  result=MAKERESULT(10,221);assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusUpdate&&!supported);
  puts("PASS node directory parser: identity, filter, stale snapshot, counts and explicit legacy fallback");
 }

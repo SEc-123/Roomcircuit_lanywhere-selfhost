@@ -122,6 +122,26 @@ namespace ams::mitm::lanywhere {
         sockaddr_in g_node_endpoints[NODE_CATALOG_COUNT]{};
         std::atomic<bool> g_direct_session{false};
         GameRoute g_direct_room{};
+        struct DirectRegistration {
+            u64 epoch;
+            u64 program;
+            u8 proof[32];
+            GameIdentity identity;
+            RoomAccessMode mode;
+            u8 length;
+            char password[ROOM_PASSCODE_MAX];
+            u64 verified_at;
+        };
+        constinit os::SdkMutex g_direct_metadata_lock;
+        constinit os::SdkMutex g_direct_exchange_lock;
+        DirectRegistration g_direct_registration{};
+        alignas(os::ThreadStackAlignment) u8 g_direct_metadata_stack[0x4000];
+        os::ThreadType g_direct_metadata_thread;
+        bool g_direct_metadata_started;
+        void DirectMetadataWorker(void *);
+        bool DirectMetadataReady(const DirectRegistration &room);
+        u32 SetDirectRoomAccess(const RoomAccessChange &, size_t);
+
         constinit os::SdkMutex g_node_resolve_lock;
         os::Tick g_last_keepalive;
         bool g_public = true;  // The saved visibility preference applies to external networks.
@@ -1221,6 +1241,10 @@ namespace ams::mitm::lanywhere {
                 const auto previous = lanplay::State();
                 lanplay::Leave();
                 tcpstream::ResetTransport(previous.epoch);
+                {
+                    std::scoped_lock lock(g_direct_metadata_lock);
+                    g_direct_registration = {};
+                }
                 std::scoped_lock lock(g_lock);
                 g_direct_room = {};
             }
@@ -1772,7 +1796,16 @@ namespace ams::mitm::lanywhere {
     }
 
     void Publish(const void *network_info, size_t size, u64 host_program_id) {
-        if (g_direct_session.load()) { lanplay::Publish(network_info, size); return; }
+        if (g_direct_session.load()) {
+            lanplay::Publish(network_info, size);
+            lanplay::HostedRoom host{};
+            if (size && host_program_id && lanplay::GetHostedRoom(&host)) {
+                std::scoped_lock lock(g_direct_metadata_lock);
+                if (g_direct_registration.epoch == host.epoch)
+                    g_direct_registration.program = host_program_id;
+            }
+            return;
+        }
         if (size && (size != NetworkInfoSize || !network_info)) return;
         // The notifier may own its watch lock. Never call it while owning any
         // relay/lifecycle lock: notifier reads can themselves query room state.
@@ -2760,6 +2793,144 @@ namespace ams::mitm::lanywhere {
             return CaptureAppointmentRoute(&current) && current.ipv4 == route.ipv4 && current.port == route.port;
         }
 
+        constexpr u64 DirectMetadataRefreshMs = 10000;
+        constexpr u64 DirectMetadataLeaseMs = 30000;
+
+        u64 DirectMetadataNow() {
+            return static_cast<u64>(os::GetSystemTick().ToTimeSpan().GetMilliSeconds());
+        }
+
+        bool DirectMetadataReady(const DirectRegistration &room) {
+            return room.verified_at && DirectMetadataNow() - room.verified_at < DirectMetadataLeaseMs;
+        }
+
+        DirectRoomMetadataReply ExchangeDirectMetadata(const DirectRoomMetadata &request) {
+            DirectRoomMetadataReply unavailable{};
+            unavailable.status = RoomPasscodeUnavailable;
+            DiscoveryRoute route{};
+            sockaddr_in endpoint{};
+            char provider[33]{};
+            if (!CaptureAppointmentRoute(&route) || !ResolveDiscoveryRoute(route, &endpoint, provider)) return unavailable;
+
+            const char *error = nullptr;
+            const u64 deadline = DirectMetadataNow() + 2500;
+            const int fd = ConnectServer(endpoint, &error, 1000, "self", nullptr, deadline);
+            if (fd < 0) return unavailable;
+            u32 caps = 0, status = ListStatusNetwork;
+            u8 type = 0;
+            DirectRoomMetadataReply reply{};
+            const size_t size = request.operation == DirectRoomRead ? offsetof(DirectRoomMetadata, password) : sizeof(request);
+            const bool ok = QueryCapabilities(fd, &caps, 700) && (caps & DIRECT_ROOM_CAPABILITY) &&
+                SendFrameTo(fd, DIRECT_ROOM_METADATA_REQUEST, &request, size, nullptr, 0) &&
+                ReadListFrame(fd, &type, reinterpret_cast<u8 *>(&reply), sizeof(reply), 1000, &status) == static_cast<ssize_t>(sizeof(reply));
+            ::close(fd);
+            if (!ok || type != DIRECT_ROOM_METADATA_RESPONSE || !AppointmentBackendCurrent(route) ||
+                reply.status > RoomPasscodeBusy || reply.reserved[0] || reply.reserved[1] ||
+                reply.mode > RoomAccessHidden || reply.length > sizeof(reply.password) ||
+                ((request.operation == DirectRoomPublish || reply.status != RoomPasscodeOk) && reply.mode) ||
+                (reply.mode != RoomAccessShared && reply.length) ||
+                !std::all_of(reply.password + reply.length, reply.password + sizeof(reply.password),
+                             [](char c) { return c == 0; }) ||
+                !std::all_of(reply.password, reply.password + reply.length,
+                             [](unsigned char c) { return c >= 0x20 && c <= 0x7e; }))
+                return unavailable;
+            return reply;
+        }
+
+        DirectRoomMetadata NewDirectMetadata(const lanplay::HostedRoom &host, u32 operation) {
+            DirectRoomMetadata request{};
+            request.operation = operation;
+            request.node_id = host.node;
+            request.host_ip = host.host_ip;
+            std::memcpy(request.network_id, host.network_id, sizeof(request.network_id));
+            std::memcpy(request.bssid, host.bssid, sizeof(request.bssid));
+            return request;
+        }
+
+        DirectRoomMetadataReply PublishDirectMetadata(const lanplay::HostedRoom &host, const DirectRegistration &room) {
+            auto request = NewDirectMetadata(host, DirectRoomPublish);
+            request.mode = room.mode;
+            if (room.mode == RoomAccessShared) {
+                request.length = room.length;
+                std::memcpy(request.password, room.password, room.length);
+            }
+            std::memcpy(request.proof, room.proof, sizeof(request.proof));
+            request.application_id = room.identity.application_id;
+            request.program_id = room.identity.program_id;
+            std::memcpy(request.title_en, room.identity.english, sizeof(request.title_en));
+            std::memcpy(request.title_zh, room.identity.chinese, sizeof(request.title_zh));
+            return ExchangeDirectMetadata(request);
+        }
+
+        void RefreshDirectIdentity(DirectRegistration &room, u64 wire_id) {
+            if (!room.program) return;
+            if (wire_id == UINT64_MAX) {
+                GameCacheRecord exact{};
+                if (GameIdentityCacheExactRecord(room.program, &exact) != GameCacheFound) return;
+                wire_id = exact.local_communication_ids[0];
+            }
+            GameIdentity identity{};
+            if (wire_id && wire_id != UINT64_MAX &&
+                GameIdentityCacheLookup(room.program, wire_id, &identity) == GameCacheFound)
+                room.identity = identity;
+        }
+
+        void DirectMetadataWorker(void *) {
+            u64 last_epoch = 0, retry_at = 0;
+            for (;;) {
+                os::SleepThread(TimeSpan::FromSeconds(1));
+                lanplay::HostedRoom host{};
+                if (!g_direct_session.load() || !lanplay::GetHostedRoom(&host)) continue;
+                if (host.epoch == last_epoch && DirectMetadataNow() < retry_at) continue;
+                std::scoped_lock exchange(g_direct_exchange_lock);
+                DirectRegistration room{};
+                {
+                    std::scoped_lock lock(g_direct_metadata_lock);
+                    if (g_direct_registration.epoch != host.epoch || !g_direct_registration.program) continue;
+                    room = g_direct_registration;
+                }
+                RefreshDirectIdentity(room, host.game);
+                const auto reply = PublishDirectMetadata(host, room);
+                last_epoch = host.epoch;
+                retry_at = DirectMetadataNow() + (reply.status == RoomPasscodeOk ? DirectMetadataRefreshMs :
+                                                   reply.status == RoomPasscodeRoomUnavailable ? 3000 : 10000);
+                std::scoped_lock lock(g_direct_metadata_lock);
+                if (g_direct_registration.epoch != host.epoch) continue;
+                g_direct_registration.identity = room.identity;
+                if (reply.status == RoomPasscodeOk) g_direct_registration.verified_at = DirectMetadataNow();
+            }
+        }
+
+        u32 SetDirectRoomAccess(const RoomAccessChange &access, size_t length) {
+            std::scoped_lock exchange(g_direct_exchange_lock);
+            lanplay::HostedRoom host{};
+            if (!lanplay::GetHostedRoom(&host)) return RoomPasscodeNotHost;
+            {
+                std::scoped_lock lock(g_lock);
+                if (!g_direct_session.load() || g_direct_room.room_epoch != host.epoch ||
+                    std::memcmp(access.change.room, g_direct_room.room_code, sizeof(access.change.room)))
+                    return RoomPasscodeRoomUnavailable;
+            }
+            DirectRegistration room{};
+            {
+                std::scoped_lock lock(g_direct_metadata_lock);
+                if (g_direct_registration.epoch != host.epoch || !DirectMetadataReady(g_direct_registration))
+                    return RoomPasscodeUnavailable;
+                room = g_direct_registration;
+            }
+            room.mode = !length ? RoomAccessNone : access.hidden ? RoomAccessHidden : RoomAccessShared;
+            room.length = room.mode == RoomAccessShared ? static_cast<u8>(length) : 0;
+            std::memset(room.password, 0, sizeof(room.password));
+            if (room.length) std::memcpy(room.password, access.change.passcode, room.length);
+            const auto reply = PublishDirectMetadata(host, room);
+            if (reply.status != RoomPasscodeOk) return reply.status;
+            std::scoped_lock lock(g_direct_metadata_lock);
+            if (g_direct_registration.epoch != host.epoch) return RoomPasscodeRoomUnavailable;
+            room.verified_at = DirectMetadataNow();
+            g_direct_registration = room;
+            return RoomPasscodeOk;
+        }
+
         bool CaptureRegionalRoute(u32 region, DiscoveryRoute *out) {
             std::scoped_lock lock(g_lock);
             sockaddr_in endpoint{};
@@ -3008,6 +3179,20 @@ namespace ams::mitm::lanywhere {
         GameRoute route{};
         u64 game_id = 0;
         RoomPasscodeHost host{};
+        if (g_direct_session.load()) {
+            const auto direct = DescribeDirectHost();
+            if (!(direct.flags & DirectRoomHostCanEdit)) {
+                host.status = RoomPasscodeUnavailable;
+                return host;
+            }
+            std::scoped_lock lock(g_lock);
+            if (!g_direct_session.load() || g_direct_room.room_epoch != direct.epoch) {
+                host.status = RoomPasscodeRoomUnavailable;
+                return host;
+            }
+            std::memcpy(host.room, g_direct_room.room_code, sizeof(host.room));
+            return host;
+        }
         host.status = CapturePasscodeHost(&route, &game_id);
         if (host.status == RoomPasscodeOk) std::memcpy(host.room, route.room_code, CodeLength);
         return host;
@@ -3023,6 +3208,7 @@ namespace ams::mitm::lanywhere {
         const char *end = static_cast<const char *>(std::memchr(change.passcode, 0, ROOM_PASSCODE_MAX));
         const size_t length = end ? static_cast<size_t>(end - change.passcode) : ROOM_PASSCODE_MAX;
         if ((access.hidden && !length) || !ValidRoomPasscodeText(change.passcode, length)) return RoomPasscodeInvalid;
+        if (g_direct_session.load()) return SetDirectRoomAccess(access, length);
         GameRoute host{};
         RoomPasscodeRequest request{};
         const u32 status = CapturePasscodeHost(&host, &request.game_id, access.hidden != 0);
@@ -3411,7 +3597,78 @@ namespace ams::mitm::lanywhere {
         R_SUCCEED();
     }
 
-    void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity) {
+    bool PrepareDirectHostIdentity(const GameRoute &route, void *session_id, size_t size) {
+        if (!session_id || size != 16 || !route.room_epoch ||
+            route.discovery.node_id < 2 || route.discovery.node_id >= NODE_CATALOG_COUNT) return false;
+        const auto transport = lanplay::State();
+        if (!transport.active || !transport.hosting || transport.epoch != route.room_epoch || !transport.address)
+            return false;
+        std::scoped_lock route_lock(g_lock);
+        if (!g_direct_session.load() || g_direct_room.room_epoch != route.room_epoch) return false;
+        std::scoped_lock metadata_lock(g_direct_metadata_lock);
+        if (!g_direct_metadata_started) {
+            if (R_FAILED(os::CreateThread(&g_direct_metadata_thread, DirectMetadataWorker, nullptr,
+                                         g_direct_metadata_stack, sizeof(g_direct_metadata_stack), 16)))
+                return false;
+            g_direct_metadata_started = true;
+            os::StartThread(&g_direct_metadata_thread);
+        }
+        g_direct_registration = {};
+        g_direct_registration.epoch = route.room_epoch;
+        os::GenerateRandomBytes(g_direct_registration.proof, sizeof(g_direct_registration.proof));
+        // LAN Play still sees the usual 16-byte session ID and unchanged game ID.
+        // The directory can verify the publisher knows its random preimage.
+        u8 binding[40]{}, digest[32];
+        std::memcpy(binding, g_direct_registration.proof, sizeof(g_direct_registration.proof));
+        put32(binding + 32, route.discovery.node_id);
+        put32(binding + 36, transport.address);
+        crypto::GenerateSha256(digest, sizeof(digest), binding, sizeof(binding));
+        std::memcpy(session_id, digest, size);
+        return true;
+    }
+
+    DirectRoomHost DescribeDirectHost() {
+        DirectRoomHost result{};
+        lanplay::HostedRoom host{};
+        if (!g_direct_session.load() || !lanplay::GetHostedRoom(&host)) return result;
+        std::scoped_lock lock(g_direct_metadata_lock);
+        result.epoch = host.epoch;
+        result.node_id = host.node;
+        result.host_ip = host.host_ip;
+        result.flags = DirectRoomHostActive;
+        std::memcpy(result.network_id, host.network_id, sizeof(result.network_id));
+        std::memcpy(result.bssid, host.bssid, sizeof(result.bssid));
+        if (g_direct_registration.epoch == host.epoch) {
+            if (DirectMetadataReady(g_direct_registration)) result.flags |= DirectRoomHostCanEdit;
+            const auto &identity = g_direct_registration.identity;
+            result.application_id = identity.application_id;
+            result.program_id = identity.program_id;
+            std::memcpy(result.title_en, identity.english, sizeof(result.title_en));
+            std::memcpy(result.title_zh, identity.chinese, sizeof(result.title_zh));
+        }
+        return result;
+    }
+
+    RoomPasscodeReply LookupDirectRoomPasscode(const NodeRoomSelection &room) {
+        RoomPasscodeReply result{};
+        result.status = RoomPasscodeInvalid;
+        if (room.reserved || room.node_id < 2 || room.node_id >= NODE_CATALOG_COUNT || !room.game_id ||
+            room.game_id != le64(room.locator.network_id) ||
+            (room.locator.flavor != NodeFlavorStandard && room.locator.flavor != NodeFlavorFork)) return result;
+        DirectRoomMetadata request{};
+        request.operation = DirectRoomRead;
+        request.node_id = room.node_id;
+        request.host_ip = room.locator.host_ip;
+        std::memcpy(request.network_id, room.locator.network_id, sizeof(request.network_id));
+        std::memcpy(request.bssid, room.locator.bssid, sizeof(request.bssid));
+        const auto reply = ExchangeDirectMetadata(request);
+        result.status = reply.mode == RoomAccessHidden && reply.status == RoomPasscodeOk ? static_cast<u32>(RoomPasscodeLocked) : reply.status;
+        result.length = reply.length;
+        if (result.length) std::memcpy(result.passcode, reply.password, result.length);
+        return result;
+    }
+
+    void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity, bool annotate) {
         *page = {-1, NODE_LOBBY_END, 0, 0, 0, ListStatusProtocol};
         if (!groups || capacity < NODE_LOBBY_PAGE_SIZE || request.reserved ||
             (request.node_mask >> NODE_CATALOG_COUNT) || (request.offset && !request.snapshot)) return;
@@ -3449,14 +3706,15 @@ namespace ams::mitm::lanywhere {
         put64(body + 8, request.game_id); put32(body + 16, request.node_mask);
         u8 reply[16 + NODE_LOBBY_PAGE_SIZE * NODE_LOBBY_ROW_SIZE]{};
         count = -1;
-        if (SendFrameTo(fd, NODE_LOBBY_REQUEST, body, sizeof(body), nullptr, 0))
+        const bool annotations = annotate && (caps & DIRECT_ROOM_CAPABILITY) != 0;
+        if (SendFrameTo(fd, annotations ? DIRECT_ROOM_LIST_REQUEST : NODE_LOBBY_REQUEST, body, sizeof(body), nullptr, 0))
             count = ReadListFrame(fd, &type, reply, sizeof(reply), 3000, &page->status);
         ::close(fd);
         if (!AppointmentBackendCurrent(route)) { page->status = ListStatusUnavailable; return; }
         if (count < 0) return;
         if (type == T_Error && count >= 1) { page->status = lanywhere_list_error_status(reply[0]); return; }
         page->status = ListStatusProtocol;
-        if (type != NODE_LOBBY_RESPONSE || count < 16 || reply[8] > NODE_LOBBY_PAGE_SIZE ||
+        if (type != (annotations ? DIRECT_ROOM_LIST_RESPONSE : NODE_LOBBY_RESPONSE) || count < 16 || reply[8] > NODE_LOBBY_PAGE_SIZE ||
             count != 16 + static_cast<ssize_t>(reply[8] * sizeof(NodeRoomWire)) || reply[9] > reply[10] ||
             reply[10] > NODE_CATALOG_COUNT || le32(reply + 12)) return;
         if (reply[11] == 1 && !reply[8] && le32(reply + 4) == NODE_LOBBY_END) {
@@ -3483,7 +3741,8 @@ namespace ams::mitm::lanywhere {
                 ((row.locator.flavor != NodeFlavorStandard && row.locator.flavor != NodeFlavorFork) ||
                  le64(row.locator.network_id) != summary.game_id ||
                  (row.locator.host_ip & 0xffff0000u) != LanPlayNet)) return;
-            if (row.node_id && summary.room_access) return;
+            if (row.node_id && summary.room_access &&
+                !(annotations && row.node_id >= 2 && row.flags == NodeRoomDirect)) return;
             if (!CleanDisplayField(summary.host, sizeof(summary.host), true))
                 util::Strlcpy(summary.host, "Player", sizeof(summary.host));
             AddCachedIdentity(summary);

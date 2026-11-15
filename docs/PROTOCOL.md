@@ -393,3 +393,11 @@ participant received at least four of five probes. Ranking considers the weakest
 response count, then worst median and jitter, and returns at most three distinct
 hosts. Recommendations remain advisory; the actual host uses IPC 36 and the
 ordinary in-game hosting flow.
+
+## Direct LAN Play room details
+
+RoomCircuit keeps the original wire game ID when publishing a room on a third-party LAN Play node. The frame also carries the usual 16-byte opaque session ID. A new RoomCircuit host generates a random 32-byte proof and derives the session ID from the first 16 bytes of SHA-256 over that proof followed by the little-endian node ID and the host's virtual IP.
+
+A host publishes title and password visibility to Main server after choosing a direct node. The directory verifies that the proof matches the same live node, virtual host IP, network ID and BSSID. This auxiliary record expires without renewal. It does not alter discovery identity or route gameplay through Main server. The annotated TCP and Switch IPC requests are separate from the original room list. An older frontend or relay can still use the original rows.
+
+RoomCircuit sends the password only when the host explicitly shares it. Hidden mode sends no password and shows that the guest needs to get it from the host. The game checks the actual password on third-party nodes.

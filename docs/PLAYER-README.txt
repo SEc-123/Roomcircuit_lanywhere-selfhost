@@ -1,4 +1,4 @@
-RoomCircuit 0.8.6 Beta
+RoomCircuit 0.8.7 Beta
 
 中文
 
@@ -16,12 +16,12 @@ RoomCircuit 0.8.6 Beta
 安装中断时，从自制软件菜单打开 RoomCircuit Recovery。
 
 建房与加入
-• 单人建房。打开应用就是房间大厅。按 Y 选节点，R 筛地区，X 重新测速。选好后回游戏，在「本地无线」里建房。
+• 单人建房。大厅按 Y 选节点，按 A 确认。看一眼底部「建房线路」，再按 + 回游戏，在「本地无线」里建房。新房间会用这条线路，选了第三方节点就用该节点建房。节点页按 R 筛地区，X 重新测速。
 • 推荐。最多三个，根据你这台 Switch 的网络产生。TCP/UDP 是测速方式，不是游戏内延迟，也不代表其他玩家的网络。地区未核实会明确标注。
 • 加入。左键浏览游戏，A 筛选，右键回房间。ZL+ZR 可筛游戏和地区。A 选房，查看你到房间节点的连接，再打开游戏搜索。连接较差时可选择继续或返回。
 • 一起测速。节点页按 L 创建或输入临时码。好友留在节点页查看共同推荐；建房者选好节点后照常回游戏建房。这一步可跳过。
 • 对局线路。直连房走房间实际公共节点；旧版「社区 · LANywhere」等房间可能经主服务器兼容转发，连接检查会明确标注。断线只尝试原节点，恢复失败需重新加入。
-• 密码与提醒。主服务器可分享或隐藏游戏密码并发送约局提醒；隐藏密码不会隐藏房间。公共节点的密码在游戏里输入。
+• 密码与提醒。在游戏内设密码。自己的房间显示「我的房间」后，可在大厅分享或隐藏游戏密码。第三方直连时仍在游戏里验密码。约局提醒使用主服务器。
 • 兼容范围。标准和 fork 协议不能混房；首个被游戏接受的访客确定协议，重建房间可更换。建议同版 RoomCircuit、同版游戏。节点可达不代表每款游戏已实测，详见项目的节点说明与验证记录。
 
 约局与双人配对
@@ -47,12 +47,12 @@ Open the app to check for updates. Select Update, close the game and install. Re
 If installation is interrupted, open RoomCircuit Recovery from the Homebrew Menu.
 
 Host or join
-• Host on your own. The app opens in the room lobby. Press Y to choose a node, R to filter by region or X to test again. Return to the game and host in Local Wireless.
+• Host on your own. Press Y in the lobby, choose a node, then confirm with A. Check Hosting line and press + to return to the game. New Local Wireless rooms use that node, including third-party nodes. In the node picker, press R to filter by region or X to test again.
 • Recommendations. Up to three, based on this Switch's network. TCP/UDP identifies the probe, not in-game latency or other players' connections. Unverified regions are labeled.
 • Join. Press Left to browse games, A to filter, and Right to return to rooms. ZL+ZR opens filters. A selects a room and checks your connection to its node. Continue or go back if it is weak, then search in the game.
 • Test with friends. L in the node picker creates or joins a temporary code. Stay on the node screen for shared recommendations; the host chooses a node and hosts normally. This is optional.
 • Game route. Direct rooms use their public node. Legacy Community · LANywhere rooms may use Main server gateway; the connection check labels this. Recovery retries the same node. Rejoin if it fails.
-• Passwords and alerts. Main server supports sharing or hiding game passwords and appointment alerts. Hiding a password keeps the room visible. On public nodes, enter passwords in the game.
+• Passwords and alerts. Set the password in the game. Once your room appears as My room, you can share or hide its password in the lobby. Games check passwords on direct nodes. Appointment alerts use Main server.
 • Compatibility. Standard and fork clients cannot mix in one room. The first accepted guest fixes the protocol until the host recreates the room. Use matching RoomCircuit and game versions. Node reachability does not prove every game works; see Nodes and compatibility and Validation.
 
 Appointments and pairing

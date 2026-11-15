@@ -327,9 +327,14 @@ static LobbyPage lanywhere_list_nodes(NodeRoomsRequest request, LobbyGroup *grou
 {
     *page = (UnifiedPage){.count=-1,.next=NODE_LOBBY_END,.status=ListStatusNetwork};
     memset(rows,0,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE);
-    const Result result=serviceDispatchInOut(&g_lanywhere_list,37,request,*page,
+    Result result=serviceDispatchInOut(&g_lanywhere_list,DIRECT_ROOM_LIST_IPC,request,*page,
         .buffer_attrs={SfBufferAttr_HipcMapAlias|SfBufferAttr_Out},
         .buffers={{rows,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE}});
+    const bool annotated = !unified_ipc_missing(result);
+    if (!annotated)
+        result=serviceDispatchInOut(&g_lanywhere_list,37,request,*page,
+            .buffer_attrs={SfBufferAttr_HipcMapAlias|SfBufferAttr_Out},
+            .buffers={{rows,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE}});
     if(unified_ipc_missing(result) || (R_SUCCEEDED(result)&&page->count==-1&&page->status==ListStatusUpdate)){
         *supported=false;
         return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusUpdate};
@@ -347,7 +352,9 @@ static LobbyPage lanywhere_list_nodes(NodeRoomsRequest request, LobbyGroup *grou
            (request.game_id && rows[i].group.game_id!=request.game_id) ||
            !rows[i].group.game_id || rows[i].group.code[6] || rows[i].group.code[7] ||
            !rows[i].group.max_players || rows[i].group.max_players>8 || rows[i].group.players>rows[i].group.max_players ||
-           rows[i].group.room_access>RoomAccessHidden || (rows[i].node_id && rows[i].group.room_access!=RoomAccessNone) ||
+           rows[i].group.room_access>RoomAccessHidden ||
+           (rows[i].node_id && rows[i].group.room_access!=RoomAccessNone &&
+            (!annotated || rows[i].node_id<2 || rows[i].flags!=NodeRoomDirect)) ||
            rows[i].locator.code[6] || rows[i].locator.code[7] || memcmp(rows[i].locator.code,rows[i].group.code,6) ||
            rows[i].locator.reserved0 || memcmp(rows[i].locator.reserved,(uint8_t[12]){0},12))
             return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusProtocol};
@@ -805,6 +812,7 @@ typedef struct {
     LobbyGroup groups[LOBBY_PAGE_SIZE];
     LobbyNodeRoom node_rows[LOBBY_PAGE_SIZE];
     LobbyNodeSelection pinned_node;
+    DirectRoomHost direct_host;
     bool node_picker_available, node_directory;
     uint32_t host_node;
     uint64_t game_filter, game_focus_id;
@@ -875,13 +883,37 @@ static bool is_self_room_context(const View *v)
     return v->discovery == LobbyDiscoveryUnified || v->appointment_game_id || is_self_network(v);
 }
 
+static bool has_direct_host(const View *v)
+{
+    return v->status_valid && v->st.state == StateInRoom && v->st.my_index == 0 && v->direct_host.epoch &&
+        v->direct_host.node_id >= 2 && v->direct_host.node_id < NODE_CATALOG_COUNT &&
+        (v->direct_host.flags & DirectRoomHostActive);
+}
+
+static bool owns_direct_room(const View *v, const LobbyNodeRoom *row)
+{
+    return has_direct_host(v) && row->flags == NodeRoomDirect && row->node_id == v->direct_host.node_id &&
+        row->locator.host_ip == v->direct_host.host_ip &&
+        memcmp(row->locator.network_id, v->direct_host.network_id, sizeof(row->locator.network_id)) == 0 &&
+        memcmp(row->locator.bssid, v->direct_host.bssid, sizeof(row->locator.bssid)) == 0;
+}
+
+static bool has_pinned_direct_room(const View *v)
+{
+    return v->external_confirm && v->pinned_node.node_id >= 2 && v->pinned_node.node_id < NODE_CATALOG_COUNT &&
+        v->pinned.game_id && v->pinned.game_id == v->pinned_node.game_id &&
+        strcmp(v->pinned.provider, LanywhereNodes[v->pinned_node.node_id].provider) == 0 &&
+        memcmp(v->pinned.code, v->pinned_node.locator.code, sizeof(v->pinned.code)) == 0;
+}
+
 static bool can_share_game_password(const View *v)
 {
-    return v->status_valid && v->config_state == RelayConfigReady && is_self_room_context(v) &&
-        !(v->host_regions & RELAY_REGION_COMMUNITY_ACTIVE) &&
-        (v->capabilities & (ROOM_PASSCODE_CAPABILITY | ROOM_ACCESS_CAPABILITY)) &&
-        !v->provider_panel && !v->private_panel && !v->private_room && !show_matching(v) &&
-        v->st.state == StateInRoom && v->st.my_index == 0 && v->st.game_id && v->st.code[0];
+    if (!v->status_valid || v->config_state != RelayConfigReady || v->provider_panel || v->private_panel ||
+        v->private_room || show_matching(v) || v->st.state != StateInRoom || v->st.my_index != 0 ||
+        !v->st.game_id || !v->st.code[0]) return false;
+    if (v->host_regions & RELAY_REGION_COMMUNITY_ACTIVE)
+        return has_direct_host(v) && (v->direct_host.flags & DirectRoomHostCanEdit);
+    return is_self_room_context(v) && (v->capabilities & (ROOM_PASSCODE_CAPABILITY | ROOM_ACCESS_CAPABILITY));
 }
 
 static LobbyRoomId room_password_target(const View *v)
@@ -908,6 +940,10 @@ static LobbyRoomId room_password_target(const View *v)
 
 static bool update_room_password(View *v, u64 now)
 {
+    if (has_pinned_direct_room(v) && !external_room_expired(v) &&
+        (v->pinned_group.room_access == RoomAccessShared || v->pinned_group.room_access == RoomAccessHidden))
+        return room_password_tick_direct(&v->password, v->pinned, &v->pinned_node,
+                                         v->pinned_group.room_access == RoomAccessHidden, now);
     const bool stale = v->match.state == MatchExpired || v->match.state == MatchError;
     const bool was_unlocked = v->password.unlocked;
     if (stale) v->password.unlocked = false;
@@ -925,6 +961,8 @@ static bool can_enter_game_password(const View *v)
 
 static bool room_password_allows_launch(const View *v)
 {
+    /* A direct room's password is checked by the game. The lobby only displays it. */
+    if (has_pinned_direct_room(v)) return true;
     if (v->password.pending || (v->password.locked && !v->password.unlocked)) return false;
     if (v->pinned_group.room_access != RoomAccessHidden) return true;
     return v->pinned.game_id && lobby_room_equal(v->pinned, v->password.room);
@@ -1066,9 +1104,19 @@ static const char *room_title(const LobbyGroup *group, char *fallback, size_t ca
     const char *catalog_name = game_catalog_name(&catalog, g_zh);
     if (catalog_name) return catalog_name;
     if (!group || !group->game_id || group->game_id == UINT64_MAX)
-        return TR("Sin nombre de juego", "Game name not shared");
+        return TR("Juego no identificado", "Game not identified");
     snprintf(fallback, capacity, TR("ID del juego %016lX", "Game ID %016lX"), (unsigned long)group->game_id);
     return fallback;
+}
+
+static const char *direct_host_title(const View *v)
+{
+    const char *preferred = g_zh ? v->direct_host.title_zh : v->direct_host.title_en;
+    const char *alternate = g_zh ? v->direct_host.title_en : v->direct_host.title_zh;
+    if (preferred[0]) return preferred;
+    if (alternate[0]) return alternate;
+    const GameInfo *installed = v->direct_host.application_id ? game_info(v->direct_host.application_id) : NULL;
+    return installed && installed->installed && installed->name[0] ? installed->name : NULL;
 }
 
 /* A host-declared ApplicationID is a display hint only, never a launch check. */
@@ -1182,6 +1230,42 @@ static void group_card(int x, int y, int w, const LobbyGroup *g, const char *sou
     seats(right - 8 * 22 + 6, y + 36, g->players, g->max_players);
 }
 
+static void draw_room_password_panel(const View *v, int x, int panel_y)
+{
+    const bool has_password = v->password.value[0] != '\0';
+    const bool password_panel = has_password || v->password.locked || v->password.pending || v->password.failed;
+    if (password_panel) {
+        const int panel_h = has_password ? 132 : v->password.locked ? 94 : 64;
+        gfx_round_rect(x, panel_y, LIST_W, panel_h, 18, C_PANEL);
+        if (has_password) {
+            char code[2 * ROOM_PASSCODE_MAX + 1] = {0};
+            char *out = code;
+            bool spaces = false;
+            for (const char *c = v->password.value; *c; ++c) {
+                if (*c == ' ') {
+                    memcpy(out, "·", 2);
+                    out += 2;
+                    spaces = true;
+                } else {
+                    *out++ = *c;
+                }
+            }
+            gfx_text(x + 28, panel_y + 12, 23, C_TEXT, ui_text("Game password"));
+            gfx_text_fit(x + 28, panel_y + 45, 28, C_CODE, code, LIST_W - 56);
+            gfx_text(x + 28, panel_y + 96, 20, C_DIM,
+                spaces ? ui_text("Enter it in the game. · means space.") : ui_text("Enter it in the game."));
+        } else if (v->password.locked) {
+            gfx_text(x + 28, panel_y + 13, 24, C_WARN, v->password.unlocked ? ui_text("Room unlocked") : ui_text("Password required"));
+            const char *hint = v->password.unlocked ? ui_text("Enter the same password in the game if asked.") :
+                v->password.pending ? ui_text("Checking game password…") : ui_text("Ask the host for the password.");
+            gfx_text_fit(x + 28, panel_y + 53, 20, C_DIM, hint, LIST_W - 56);
+        } else {
+            const char *message = v->password.pending ? ui_text("Checking game password…") : ui_text("Game password unavailable.");
+            gfx_text_fit(x + 28, panel_y + 18, 21, C_DIM, message, LIST_W - 56);
+        }
+    }
+}
+
 static void matching_column(const View *v)
 {
     const int x = MARGIN, y = 174;
@@ -1229,39 +1313,7 @@ static void matching_column(const View *v)
         gfx_text_fit(x + 28, y + 212, 20, C_DIM,
             TR("Abre el juego, entra en inalámbrico local y elige Buscar grupo.", "Open the game, enter Local Wireless and choose Search for groups."), LIST_W - 56);
     }
-    const bool has_password = v->password.value[0] != '\0';
-    const bool password_panel = has_password || v->password.locked || v->password.pending || v->password.failed;
-    if (password_panel) {
-        const int panel_y = y + 276;
-        const int panel_h = has_password ? 132 : v->password.locked ? 94 : 64;
-        gfx_round_rect(x, panel_y, LIST_W, panel_h, 18, C_PANEL);
-        if (has_password) {
-            char code[2 * ROOM_PASSCODE_MAX + 1] = {0};
-            char *out = code;
-            bool spaces = false;
-            for (const char *c = v->password.value; *c; ++c) {
-                if (*c == ' ') {
-                    memcpy(out, "·", 2);
-                    out += 2;
-                    spaces = true;
-                } else {
-                    *out++ = *c;
-                }
-            }
-            gfx_text(x + 28, panel_y + 12, 23, C_TEXT, ui_text("Game password"));
-            gfx_text_fit(x + 28, panel_y + 45, 28, C_CODE, code, LIST_W - 56);
-            gfx_text(x + 28, panel_y + 96, 20, C_DIM,
-                spaces ? ui_text("Enter it in the game. · means space.") : ui_text("Enter it in the game."));
-        } else if (v->password.locked) {
-            gfx_text(x + 28, panel_y + 13, 24, C_WARN, v->password.unlocked ? ui_text("Room unlocked") : ui_text("Password required"));
-            const char *hint = v->password.unlocked ? ui_text("Enter the same password in the game if asked.") :
-                v->password.pending ? ui_text("Checking game password…") : ui_text("Ask the host for the password.");
-            gfx_text_fit(x + 28, panel_y + 53, 20, C_DIM, hint, LIST_W - 56);
-        } else {
-            const char *message = v->password.pending ? ui_text("Checking game password…") : ui_text("Game password unavailable.");
-            gfx_text_fit(x + 28, panel_y + 18, 21, C_DIM, message, LIST_W - 56);
-        }
-    }
+    draw_room_password_panel(v, x, y + 276);
 }
 
 static const char *network_offline_hint(const char *provider)
@@ -1297,9 +1349,10 @@ static const char *list_error_hint(u32 status, const char *provider)
 static void groups_column(const View *v)
 {
     int x = MARGIN, y = 128;
-    if (v->external_confirm && strcmp(v->pinned.provider, REGION_PROVIDER_COMMUNITY) == 0) {
+    if (v->external_confirm && (has_pinned_direct_room(v) || strcmp(v->pinned.provider, REGION_PROVIDER_COMMUNITY) == 0)) {
         gfx_text(x, y, 28, C_TEXT, ui_text("Selected room"));
         group_card(x, y + 52, LIST_W, &v->pinned_group, v->pinned.provider, false);
+        if (has_pinned_direct_room(v)) draw_room_password_panel(v, x, y + 130);
         return;
     }
     if (show_matching(v)) {
@@ -1760,6 +1813,8 @@ static void draw_room_board(const View *v)
     if (can_share_game_password(v)) {
         width = gfx_button(690, 100, "Y", ui_text("Edit game password"));
         add_zone(680, 92, width + 18, 51, HidNpadButton_Y);
+    } else if (has_direct_host(v)) {
+        gfx_text_fit(648, 109, 19, C_DIM, ui_text("Syncing room details…"), 314);
     }
     if (v->page_index > 0) {
         width = gfx_button(405, 100, "ZL", ui_text("Prev"));
@@ -1838,6 +1893,7 @@ static void draw_room_board(const View *v)
     }
     for (int i = 0; i < v->count && i < LOBBY_PAGE_SIZE; ++i, y += ROW) {
         const LobbyGroup *g = &v->groups[i];
+        const bool own = owns_direct_room(v, &v->node_rows[i]);
         const bool selected = v->sel == i;
         const bool focused = selected && !v->game_rail_focused;
         if (selected) {
@@ -1850,17 +1906,21 @@ static void draw_room_board(const View *v)
         } else {
             gfx_rect(RAIL + 1, y + ROW - 1, RIGHT - RAIL - 2, 1, C_LINE);
         }
-        const char *title = single_game ? board_room_node(v, i) : room_title(g, buffer, sizeof(buffer));
+        const char *own_title = own && !single_game ? direct_host_title(v) : NULL;
+        const char *title = single_game ? board_room_node(v, i) : own_title ? own_title : room_title(g, buffer, sizeof(buffer));
+        const int title_y = y + (own ? 7 : 17);
         if (focused && !single_game)
-            g_board_title_animates |= gfx_text_marquee(table_x, y + 17, 23, C_TEXT, title, col_second - table_x - 16, title_elapsed);
+            g_board_title_animates |= gfx_text_marquee(table_x, title_y, 23, C_TEXT, title, col_second - table_x - 16, title_elapsed);
         else
-            gfx_text_fit(table_x, y + 17, 23, C_TEXT, title, col_second - table_x - 16);
+            gfx_text_fit(table_x, title_y, 23, C_TEXT, title, col_second - table_x - 16);
+        if (own) gfx_text_fit(table_x, y + 33, 17, C_OK, ui_text("My room"), col_second - table_x - 16);
         const char *second = single_game ? board_room_region(v, i) : board_room_node(v, i);
         gfx_text_fit(col_second, y + (single_game ? 17 : 7), 20, C_DIM, second, col_access - col_second - 14);
         if (!single_game)
             gfx_text_fit(col_second, y + 33, 16, C_DIM, board_room_region(v, i), col_access - col_second - 14);
         const char *access = g->room_access == RoomAccessHidden ? ui_text("Required") :
-            g->room_access == RoomAccessShared ? ui_text("Shared") : "—";
+            g->room_access == RoomAccessShared ? ui_text("Shared") :
+            (v->node_rows[i].flags == NodeRoomDirect && v->node_rows[i].node_id >= 2) ? ui_text("In game") : "—";
         gfx_text_fit(col_access, y + 18, 19, g->room_access == RoomAccessHidden ? C_WARN : C_DIM,
                      access, col_players - col_access - 18);
         char number[20];
@@ -1968,7 +2028,7 @@ static void draw(const View *v)
         if (v->provider_panel) provider_column(v);
         else if (v->private_panel || v->private_room) private_column(v);
         else groups_column(v);
-        if (!v->provider_panel) side_column(v);
+        if (!v->provider_panel && !has_pinned_direct_room(v)) side_column(v);
         draw_update_entry(!can_change_provider(v));
         draw_language_control();
     }
@@ -1984,8 +2044,11 @@ static void draw(const View *v)
     gfx_rect(0, FOOTER_Y, GFX_W, GFX_H - FOOTER_Y, C_CARD);
     gfx_rect(0, FOOTER_Y, GFX_W, 1, C_LINE);
     if (board) {
-        char route[128];
-        snprintf(route, sizeof(route), "%s · %s", ui_text("Hosting line"), nodes_ui_name(v->host_node));
+        char route[192];
+        const bool hosting = has_direct_host(v);
+        const char *title = hosting ? direct_host_title(v) : NULL;
+        snprintf(route, sizeof(route), "%s · %s", ui_text(hosting ? "My room" : "Hosting line"),
+                 title ? title : nodes_ui_name(hosting ? v->direct_host.node_id : v->host_node));
         gfx_round_rect(MARGIN, FOOTER_Y + 31, 8, 8, 4, C_OK);
         gfx_text_fit(MARGIN + 16, FOOTER_Y + 22, 19, C_OK, route, 352);
     }
@@ -2168,6 +2231,29 @@ static bool edit_server(View *v)
 #endif
 
 
+static void read_direct_host(View *v)
+{
+    v->direct_host = (DirectRoomHost){0};
+    if (!v->status_valid || v->st.state != StateInRoom || v->st.my_index != 0 ||
+        !(v->host_regions & RELAY_REGION_COMMUNITY_ACTIVE)) return;
+    DirectRoomHost host = {0};
+    if (R_FAILED(serviceDispatch(&g_lanywhere, DIRECT_ROOM_HOST_IPC,
+        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
+        .buffers = { { &host, sizeof(host) } })) ||
+        !host.epoch || host.node_id < 2 || host.node_id >= NODE_CATALOG_COUNT || !host.host_ip || host.reserved_ip ||
+        !(host.flags & DirectRoomHostActive) || (host.flags & ~(DirectRoomHostActive | DirectRoomHostCanEdit)) ||
+        host.reserved[0] || host.reserved[1] || !memcmp(host.bssid, (uint8_t[6]){0}, 6) ||
+        !memcmp(host.network_id + 16, (uint8_t[16]){0}, 16) ||
+        memcmp(host.network_id, &v->st.game_id, sizeof(v->st.game_id))) return;
+    LobbyGroup title = { .metadata_flags = LOBBY_META_LOCAL };
+    memcpy(title.title_en, host.title_en, sizeof(title.title_en));
+    memcpy(title.title_zh, host.title_zh, sizeof(title.title_zh));
+    lobby_sanitize_group(&title);
+    memcpy(host.title_en, title.title_en, sizeof(host.title_en));
+    memcpy(host.title_zh, title.title_zh, sizeof(host.title_zh));
+    v->direct_host = host;
+}
+
 static void poll_lanywhere(View *v)
 {
     LanywhereStatus status = {0};
@@ -2187,6 +2273,7 @@ static void poll_lanywhere(View *v)
     }
     if (v->host_region_available && v->status_valid)
         v->host_regions = lanywhere_host_regions(v->capabilities);
+    read_direct_host(v);
     LobbyMatch match = {0};
     v->match_available = R_SUCCEEDED(lanywhere_match_status(&match)) && match.mode <= LobbyExact && match.state <= MatchError;
     if (v->match_available) {
@@ -2248,7 +2335,7 @@ static void start_quick(View *v)
 
 static const char *external_join_hint(const char *provider, bool installed)
 {
-    if (strcmp(provider, REGION_PROVIDER_COMMUNITY) == 0)
+    if (strcmp(provider, REGION_PROVIDER_COMMUNITY) == 0 || lobby_provider_is_lanplay(provider))
         return installed ? ui_text("Press A to open the game, then search in Local Wireless.") :
             ui_text("Open the game from HOME, then search in Local Wireless.");
     return installed ? TR("Sala no reservada. Pulsa A para abrir el juego y buscar.", "Room not reserved. Press A to open the game and search.") :
@@ -2258,6 +2345,7 @@ static const char *external_join_hint(const char *provider, bool installed)
 static void select_room(View *v)
 {
     LobbyRoomId selection = v->selection;
+    LobbyNodeSelection selected_node = {0};
     const bool legacy_external = !selection.provider[0] &&
         v->discovery == LobbyDiscoveryLegacy && !is_self_network(v);
     if (legacy_external)
@@ -2274,7 +2362,7 @@ static void select_room(View *v)
             const LobbyNodeRoom *room=&v->node_rows[node_index];
             const LobbyNodeSelection request={.game_id=room->group.game_id,.node_id=room->node_id,.locator=room->locator};
             result=lanywhere_select_node(request);
-            if(R_SUCCEEDED(result))v->pinned_node=request;
+            if(R_SUCCEEDED(result))selected_node=request;
         } else result = routed ? lanywhere_select_unified(selection) : lanywhere_select(selection.code);
         if (routed && unified_ipc_missing(result)) {
             if (legacy_external) {
@@ -2294,6 +2382,7 @@ static void select_room(View *v)
         }
     }
     v->pinned = selection;
+    v->pinned_node = selected_node;
     if (v->sel >= 0 && v->sel < v->count) v->pinned_group = v->groups[v->sel];
     v->selection = (LobbyRoomId){0};
     v->sel = -1;
@@ -2539,7 +2628,14 @@ int main(int argc, char **argv)
         v.room_notice_visible = show_room_notice(&v, now);
         if (v.pinned.code[0] && v.count > 0) {
             const int pinned_index = lobby_room_index_on(v.pinned, v.groups, v.sources, (size_t)v.count);
-            if (pinned_index >= 0) v.pinned_group = v.groups[pinned_index];
+            if (pinned_index >= 0) {
+                const LobbyNodeRoom *row = &v.node_rows[pinned_index];
+                if (!has_pinned_direct_room(&v) || (row->flags == NodeRoomDirect && row->node_id == v.pinned_node.node_id &&
+                    !memcmp(&row->locator, &v.pinned_node.locator, sizeof(row->locator))))
+                    v.pinned_group = v.groups[pinned_index];
+                else
+                    v.pinned_group.room_access = RoomAccessNone;
+            }
         }
         if (thread_ok && update_room_password(&v, now)) dirty = true;
         if (v.password_edit.active) {
@@ -2599,7 +2695,7 @@ int main(int argc, char **argv)
             svcSleepThread(33000000ULL);
             continue;
         }
-        if(v.node_directory && !v.appointment_game_id && !show_matching(&v) && !v.private_room &&
+        if(v.node_directory && !v.appointment_game_id && !v.external_confirm && !show_matching(&v) && !v.private_room &&
            ((down&TOUCH_NODE_FILTER) || ((padGetButtons(&pad)&HidNpadButton_ZL)&&(down&HidNpadButton_ZR)))){
             if(nodes_ui_filters(&pad,&g_catalog,&v.game_filter,&v.region_filter)){
                 mutexLock(&g_list_lock);g_node_game_filter=v.game_filter;g_node_mask=nodes_ui_region_mask(v.region_filter);mutexUnlock(&g_list_lock);
@@ -2802,7 +2898,7 @@ int main(int argc, char **argv)
             }
         } else if ((down & HidNpadButton_Y) && can_share_game_password(&v)) {
             const char *message = room_password_edit(&g_lanywhere, v.st.code,
-                (v.capabilities & ROOM_ACCESS_CAPABILITY) != 0, &v.password_edit);
+                has_direct_host(&v) || (v.capabilities & ROOM_ACCESS_CAPABILITY) != 0, &v.password_edit);
             if (message) snprintf(v.message, sizeof(v.message), "%s", message);
         } else if (!v.appointment_game_id && v.status_valid && v.config_state == RelayConfigReady && !show_matching(&v) && (down & HidNpadButton_Y) && v.discovery == LobbyDiscoveryLegacy && !is_self_network(&v) && !lobby_provider_is_lanplay(v.config.provider) && !v.private_room && v.st.state != StateInRoom && v.st.state != StateConnecting) {
             v.private_panel = true;
@@ -2902,7 +2998,8 @@ int main(int argc, char **argv)
                               v.host_region != last.host_region || v.host_regions != last.host_regions ||
                               v.st.state != last.st.state || v.st.member_count != last.st.member_count ||
                               strcmp(v.st.code, last.st.code) != 0 || strcmp(v.st.error, last.st.error) != 0 ||
-                              v.match_available != last.match_available || memcmp(&v.match, &last.match, sizeof(v.match)) != 0;
+                              v.match_available != last.match_available || memcmp(&v.match, &last.match, sizeof(v.match)) != 0 ||
+                              memcmp(&v.direct_host, &last.direct_host, sizeof(v.direct_host)) != 0;
         if (down || status_changed || strcmp(v.message, last.message) != 0)
             dirty = true;
         if (dirty || now - last_draw >= 5000 || (g_board_title_animates && now - last_draw >= 66)) {

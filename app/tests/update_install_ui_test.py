@@ -29,7 +29,7 @@ harness=r'''
 #include <string.h>
 #include <sys/stat.h>
 #define LANYWHERE_APP_VERSION "0.7.0"
-#define UpdateRoot "sdmc:"
+/* UPDATE_ROOT */
 #define UpdateDownload "sdmc:/lanywhere/update-download.bin"
 #define RELAY_PROFILE_IPV4 "49.233.147.207"
 #define RELAY_PROFILE_PORT 11460
@@ -61,7 +61,9 @@ UpdateNetworkResult update_network_download(const char *host,uint16_t port,const
 }
 UpdateResult update_install(const char *root,const UpdateManifest *manifest,const char *path,UpdateProgress progress,void *context){
  assert(!strcmp(root,UpdateRoot)&&!strcmp(path,UpdateDownload)&&manifest->bundle_sha256[0]==0x42);
- assert(state.screen==UpdateInstalling&&!atomic_load(&cancel_requested));install_calls++;progress(23,23,context);return install_result;
+ assert(state.screen==UpdateInstalling&&!atomic_load(&cancel_requested));
+ assert(state.completed==0 && state.total==UPDATE_FILE_COUNT);
+ install_calls++;progress(UPDATE_FILE_COUNT,UPDATE_FILE_COUNT,context);return install_result;
 }
 UpdateResult update_recover(const char *root){assert(!strcmp(root,UpdateRoot));return recovery_result;}
 #define mkdir fake_mkdir
@@ -91,6 +93,12 @@ int main(void){
  assert(state.screen==UpdateRecoveryBlocked&&install_calls==1);
  reset("0.7.1");network_result=UpdateNetworkUnavailable;install_worker(NULL);
  assert(state.screen==UpdateFailed&&download_calls==1&&!install_calls);
+ reset("0.7.1");network_result=UpdateNetworkIo;install_worker(NULL);
+ assert(state.screen==UpdateFailed&&state.error&&download_calls==1&&!install_calls&&!must_exit);
+ assert(!strcmp(state.error,"Could not save the download to the SD card."));
+ reset("0.7.1");install_result=UPDATE_IO;install_worker(NULL);
+ assert(state.screen==UpdateFailed&&state.error&&install_calls==1&&!must_exit);
+ assert(!strcmp(state.error,"Could not prepare the installation files on the SD card."));
  reset("0.7.1");install_result=UPDATE_SIGNATURE;install_worker(NULL);
  assert(state.screen==UpdateFailed&&install_calls==1&&!must_exit);
  reset("0.7.1");install_result=UPDATE_RECOVERY_CONFLICT;install_worker(NULL);
@@ -102,9 +110,9 @@ int main(void){
  assert(state.screen==UpdateCurrent&&!install_calls&&unlinks==1);
  reset("0.7.1");cancel_at_commit=true;install_worker(NULL);
  assert(state.screen==UpdateOffered&&!install_calls&&unlinks==1&&lock_calls==1);
- puts("PASS: 12 actual install-worker transitions, including recovery-file conflict and cancellation");
+ puts("PASS: 14 actual install-worker transitions, including separate download/install errors, fresh install progress and cancellation");
 }
-'''.replace('/* TYPES */',types).replace('/* FUNCTIONS */','\n'.join(function(signature) for signature in ['static const char *network_error(', 'static const char *core_error(', 'static void install_worker(']))
+'''.replace('/* UPDATE_ROOT */',re.search(r'^#define UpdateRoot .+$',source,re.M).group()).replace('/* TYPES */',types).replace('/* FUNCTIONS */','\n'.join(function(signature) for signature in ['static const char *network_error(', 'static const char *core_error(', 'static void install_worker(']))
 with tempfile.TemporaryDirectory(prefix='update-install-ui-') as temporary:
     directory=Path(temporary);(directory/'test.c').write_text(harness)
     subprocess.run([os.environ.get('CC','cc'),'-std=c11','-D_DEFAULT_SOURCE','-Wall','-Wextra','-Werror','-I'+str(ROOT/'source'),str(directory/'test.c'),'-o',str(directory/'test')],check=True)

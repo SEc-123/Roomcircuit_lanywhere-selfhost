@@ -1,6 +1,7 @@
 /* Game password sharing in the LANywhere lobby. SPDX-License-Identifier: GPL-2.0-only */
 #include "room_password.h"
 #include "ui_text.h"
+#include "../../common/direct_room_metadata.h"
 #include <string.h>
 
 #define PASSWORD_REFRESH_MS 5000
@@ -10,6 +11,7 @@ static UEvent *g_wake;
 static unsigned g_generation;
 static bool g_queued, g_ready;
 static RegionalPasscodeLookup g_lookup;
+static NodeRoomSelection g_direct_lookup;
 static RoomPasscodeReply g_reply;
 
 void room_password_init(UEvent *wake)
@@ -26,14 +28,19 @@ bool room_password_worker_exchange(Service *service)
         return false;
     }
     const RegionalPasscodeLookup lookup = g_lookup;
+    const NodeRoomSelection direct = g_direct_lookup;
     const unsigned generation = g_generation;
     g_queued = false;
     mutexUnlock(&g_lock);
 
     RoomPasscodeReply reply = {.status = RoomPasscodeUnavailable};
-    const Result result = lookup.region == RelayRegionEurope ?
-        serviceDispatchInOut(service, REGIONAL_PASSCODE_IPC_GET, lookup, reply) :
-        serviceDispatchInOut(service, ROOM_PASSCODE_IPC_GET, lookup.lookup, reply);
+    Result result;
+    if (direct.node_id)
+        result = serviceDispatchInOut(service, DIRECT_ROOM_PASSCODE_IPC, direct, reply);
+    else if (lookup.region == RelayRegionEurope)
+        result = serviceDispatchInOut(service, REGIONAL_PASSCODE_IPC_GET, lookup, reply);
+    else
+        result = serviceDispatchInOut(service, ROOM_PASSCODE_IPC_GET, lookup.lookup, reply);
     if (R_FAILED(result))
         reply = (RoomPasscodeReply){.status = RoomPasscodeUnavailable};
 
@@ -68,15 +75,35 @@ static bool readable_reply(const RoomPasscodeReply *reply)
 
 bool room_password_tick(RoomPasswordView *view, LobbyRoomId target, bool known_locked, u64 now)
 {
+    return room_password_tick_direct(view, target, NULL, known_locked, now);
+}
+
+bool room_password_tick_direct(RoomPasswordView *view, LobbyRoomId target, const NodeRoomSelection *selection,
+                               bool known_locked, u64 now)
+{
+    if (selection && (selection->node_id < 2 || selection->node_id >= NODE_CATALOG_COUNT ||
+        selection->game_id != target.game_id || strcmp(target.provider, LanywhereNodes[selection->node_id].provider) ||
+        memcmp(target.code, selection->locator.code, sizeof(target.code)))) {
+        target = (LobbyRoomId){0};
+        selection = NULL;
+    }
     if (!target.game_id && !view->room.game_id) return false;
-    const bool changed = !lobby_room_equal(view->room, target);
+    const NodeRoomSelection direct = selection ? *selection : (NodeRoomSelection){0};
+    const bool hide_direct = direct.node_id && known_locked;
+    const bool changed = !lobby_room_equal(view->room, target) || memcmp(&view->direct, &direct, sizeof(direct)) ||
+        (hide_direct && (!view->locked || view->value[0] || view->pending));
     bool dirty = changed, wake = false;
     mutexLock(&g_lock);
     if (changed) {
-        *view = (RoomPasswordView){.room = target, .locked = target.game_id && known_locked};
+        *view = (RoomPasswordView){.room = target, .direct = direct, .locked = target.game_id && known_locked};
         ++g_generation;
         g_queued = g_ready = false;
         g_reply = (RoomPasscodeReply){0};
+    }
+    if (hide_direct) {
+        /* Hide immediately even if a previously shared password was cached. */
+        mutexUnlock(&g_lock);
+        return dirty;
     }
     if (g_ready) {
         view->failed = !readable_reply(&g_reply);
@@ -98,6 +125,7 @@ bool room_password_tick(RoomPasswordView *view, LobbyRoomId target, bool known_l
             .region = strcmp(target.provider, REGION_PROVIDER_EU) == 0 ? RelayRegionEurope : RelayRegionDefault,
         };
         memcpy(g_lookup.lookup.room, target.code, sizeof(g_lookup.lookup.room));
+        g_direct_lookup = direct;
         g_queued = view->pending = true;
         wake = dirty = true;
     }

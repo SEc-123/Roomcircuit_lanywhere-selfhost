@@ -56,6 +56,8 @@ bool CaptureHostGameRoute(GameRoute*out){
     }
     return true;
 }
+// This fixture's CreateRoom stub hosts on self. Direct hosting has its own transport fixture.
+bool PrepareDirectHostIdentity(const GameRoute &, void *, size_t) { return false; }
 bool GameRouteStillCurrent(const GameRoute&r){
     return r.room_epoch==current.room_epoch&&r.discovery.ipv4==current.discovery.ipv4&&
         r.discovery.port==current.discovery.port&&

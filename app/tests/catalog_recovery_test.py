@@ -52,6 +52,7 @@ static const GameInfo *game_info(u64 id) { queried=id; return have_local && id==
 static int lanywhere_status(LanywhereStatus *out) { *out=observed;return !ipc_ok; }
 static int lanywhere_match_status(LobbyMatch *out) { *out=(LobbyMatch){0};return 0; }
 static u32 lanywhere_host_regions(u32 caps) { (void)caps; return 0; }
+static void read_direct_host(View *v) { (void)v; }
 ''' + code + r'''
 int main(int argc, char **argv)
 {
@@ -108,7 +109,7 @@ int main(int argc, char **argv)
     assert(strstr(room_title(&room,fallback,sizeof(fallback)),"宝可梦 紫"));
     assert(!strcmp(room_title_note(&room),"共用游戏 ID"));
     room.game_id=UINT64_MAX;
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"房主未提供游戏名"));
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"游戏未识别"));
     room.game_id=UINT64_C(0xDEADBEEFDEADBEEF);
     assert(strstr(room_title(&room,fallback,sizeof(fallback)),"DEADBEEFDEADBEEF"));
 

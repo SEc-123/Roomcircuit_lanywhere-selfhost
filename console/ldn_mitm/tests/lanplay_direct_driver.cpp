@@ -129,6 +129,35 @@ int main(int argc, char **argv) {
     if (argc == 4)
         assert(inet_pton(AF_INET, argv[3], &endpoint.ipv4) == 1);
     assert(lanplay::Configure(2, endpoint));
+    if (!std::strcmp(argv[1], "hostidentity")) {
+        lanplay::HostedRoom snapshot;
+        assert(!lanplay::GetHostedRoom(&snapshot));
+        assert(lanplay::Host(Game));
+        assert(!lanplay::GetHostedRoom(&snapshot));
+        const auto state = lanplay::State();
+        auto info = Network(state.address);
+        lanplay::Publish(info.data(), info.size());
+        assert(lanplay::GetHostedRoom(&snapshot));
+        assert(snapshot.epoch == state.epoch && snapshot.node == state.node &&
+               snapshot.game == Game && snapshot.host_ip == state.address);
+        assert(!std::memcmp(snapshot.network_id, info.data(), sizeof(snapshot.network_id)));
+        assert(!std::memcmp(snapshot.bssid, info.data() + 0x20, sizeof(snapshot.bssid)));
+        assert(snapshot.flavors == ((1u << NodeFlavorStandard) | (1u << NodeFlavorFork)));
+        lanplay::Publish(nullptr, 0);
+        assert(!lanplay::GetHostedRoom(&snapshot) && !snapshot.epoch);
+        lanplay::Leave();
+        assert(lanplay::Host(Game));
+        info[0x10]++;
+        lanplay::Publish(info.data(), info.size());
+        assert(lanplay::GetHostedRoom(&snapshot) && snapshot.epoch != state.epoch);
+        assert(!std::memcmp(snapshot.network_id, info.data(), sizeof(snapshot.network_id)));
+        lanplay::Leave();
+        assert(!lanplay::GetHostedRoom(&snapshot) && !snapshot.epoch);
+        lanplay::Shutdown();
+        assert(!lanplay::GetHostedRoom(&snapshot));
+        std::puts("PASS host identity follows publication and exact transport session");
+        return 0;
+    }
     if (!std::strncmp(argv[1], "scan", 4)) {
         const auto target = Network(0x0a0d7733);
         NodeRoomLocator locator{};
@@ -216,6 +245,11 @@ int main(int argc, char **argv) {
                 std::memcpy(info.data() + 0x68 + slot * 64, data, 64);
                 info[0x68 + slot * 64 + 10] = slot;
                 lanplay::Publish(info.data(), info.size());
+                lanplay::HostedRoom hosted;
+                assert(lanplay::GetHostedRoom(&hosted));
+                assert(hosted.flavors == (1u << (!std::strcmp(argv[1], "forkhost") ?
+                                                NodeFlavorFork : NodeFlavorStandard)));
+                assert(!std::memcmp(hosted.network_id, info.data(), sizeof(hosted.network_id)));
                 assert(lanplay::SendControl(from, 4, info.data(), info.size()));
                 controls++;
             } else if (!hosting && kind == 4 && bytes == 0x480) {

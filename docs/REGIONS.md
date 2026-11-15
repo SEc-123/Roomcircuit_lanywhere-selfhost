@@ -2,7 +2,7 @@
 
 ## Choose and join
 
-- **Host alone:** lobby **Y** → choose a node → create a Local Wireless room in the game. **R** filters regions; **X** refreshes measurements. Main server is the initial choice.
+- **Host alone.** Press **Y** in the lobby, choose a node, and confirm with **A**. Check **Hosting line** before creating a Local Wireless room in the game. The new room uses that node, including a third-party node if selected. **R** filters regions, and **X** refreshes measurements. Main server is the initial choice.
 - **Recommended:** up to three nodes, based on this Switch's reply success, latency and variation. Regions limit the recommendations. An empty region has no recommendation. Your future guests may have different results.
 - **Join:** the unified lobby lists rooms from available sources. **ZL+ZR** filters game and region. **A** checks your connection before selecting that room's actual node. A weak result offers Continue or Back. Unknown game IDs remain visible under All games.
 - **Friends, optional:** **L** in the picker creates or joins a six-character test code. Keep the node screen open; the comparison considers every participant's current measurements. The host chooses a node, then hosts normally. The code lasts ten minutes and does not create a game room.
@@ -11,7 +11,7 @@ Measurements run on the Switch. TCP and UDP are labeled separately; successful p
 
 A direct room's gameplay uses its public node. Main server still supplies the unified directory and shared tests. Older rooms without usable direct session identity keep compatibility forwarding. The check then says **Your connection to Main server gateway**: it measures only that leg, not the onward relay. Original LANywhere legacy rooms can use this path.
 
-An active room keeps its node. Recovery retries that node; it does not move players to another server. Longer outages, a departed host or an expired room can require joining again. Appointment alerts and lobby password sharing use **Main server**; public nodes use the game's own password.
+An active room keeps its node. Recovery retries that node; it does not move players to another server. Longer outages, a departed host or an expired room can require joining again. Appointment alerts use **Main server**. The lobby shows the game name, ownership and password choices once it has matched a RoomCircuit host to its current direct room. Set and enter the actual password in the game.
 
 ## Directory
 
@@ -45,7 +45,7 @@ See [validation and unfinished hardware checks](distribution/VALIDATION.md). Pub
 
 ## 中文
 
-- **单人建房：** 大厅 **Y** 选节点，**R** 筛地区，**X** 重测，选好后回游戏在「本地无线」里建房。初始线路是主服务器。
+- **单人建房。** 大厅按 **Y** 选节点，按 **A** 确认。确认底部的「建房线路」后，再回游戏在「本地无线」里建房。新房间使用当前线路，选了第三方节点就用该节点建房。**R** 筛地区，**X** 重测。初始线路是主服务器。
 - **推荐依据：** 按你这台 Switch 的回应成功率、延迟和波动，最多推荐三个；选地区后只在该地区推荐。没有节点的地区不推荐。后来加入者的网络可能不同。
 - **加入：** 统一大厅汇总可用来源的房间，**ZL+ZR** 筛游戏和地区，**A** 检查你到房间节点的连接。连接较差可继续或返回。未识别游戏仍在「所有游戏」里显示。
 - **一起测速可选：** 节点页 **L** 创建或输入六位临时码，留在节点页查看全体参与者的结果；建房者选线路后照常建房。码十分钟有效，不会替你创建游戏房间。
@@ -54,7 +54,7 @@ See [validation and unfinished hardware checks](distribution/VALIDATION.md). Pub
 
 直连房间的对局走实际公共节点，主服务器提供目录与一起测速。缺少可用直连会话信息的旧房间保留兼容转发，包括部分原版 LANywhere 房间。检查页会显示「你到主服务器转接的延迟」，不包括后续转发耗时。
 
-房间创建后固定节点，断线只重试原节点，不会自动换服。断网较久、房主离开或房间过期时需重新加入。约局提醒和大厅密码分享用「主服务器」；公共节点的密码在游戏里输入。
+房间创建后固定节点，断线只重试原节点，不会自动换服。断网较久、房主离开或房间过期时需重新加入。约局提醒用「主服务器」。大厅确认当前第三方直连房间的房主后，会同步游戏名、标出「我的房间」，并提供密码分享或隐藏。实际密码在游戏里设置和输入。
 
 本版 Servegame 探测有响应但建房/加入失败，已停用。其余 10 个 LAN Play 节点通过公网协议测试。
 

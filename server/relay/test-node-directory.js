@@ -83,3 +83,127 @@ test('group recommendations respect configured node availability',()=>{
  assert.equal(result[32+17],1);assert.equal(result[32+20+17],0);
  service.shutdown();
 });
+
+test('direct room annotations require the preimage and an exact live locator, preserve legacy pages and never expose a hidden password', () => {
+    const { createHash } = require('node:crypto');
+    const { STATUS } = require('./direct-room-metadata');
+    const proof = Buffer.alloc(32, 7), rawGame = 0xffffffffffffffffn;
+    const hostIp = 0x0a0d1234, commitment = Buffer.alloc(8);
+    commitment.writeUInt32LE(2);
+    commitment.writeUInt32LE(hostIp, 4);
+    const info = Buffer.alloc(0x480);
+    info.writeBigUInt64LE(rawGame);
+    createHash('sha256').update(proof).update(commitment).digest().copy(info, 16, 0, 16);
+    Buffer.from('d00dabad2233', 'hex').copy(info, 32);
+    const location = locator.create(info, hostIp, 1, 'ABC234');
+    const item = { summary: summary('ABC234', rawGame), locator: location };
+    const sources = new Map([[catalog.nodes[2].provider, []], [catalog.nodes[3].provider, [item]]]);
+    let time = 0;
+    const service = directory.create({
+        source: () => sources, providerIds: [catalog.nodes[2].provider, catalog.nodes[3].provider],
+        communityDirect: false, now: () => time,
+    });
+    const head = (op, node, bytes) => {
+        const request = Buffer.alloc(bytes);
+        request.writeUInt32LE(op);
+        request.writeUInt32LE(node, 4);
+        request.writeUInt32LE(hostIp, 8);
+        location.copy(request, 12, 0, 38);
+        return request;
+    };
+    const write = (mode = 0, pass = '', claim = proof) => {
+        const request = head(1, 2, 384);
+        request[50] = mode;
+        request[51] = Buffer.byteLength(pass);
+        request.write(pass, 52);
+        claim.copy(request, 76);
+        request.writeBigUInt64LE(0x0100000000001000n, 112);
+        request.writeBigUInt64LE(0x0100000000001001n, 120);
+        request.write('Test Game', 128, 'utf8');
+        request.write('测试游戏', 256, 'utf8');
+        return request;
+    };
+    const exchange = request => service.exchangeMetadata(request, 'fixture-source');
+    const status = request => exchange(request).readUInt32LE();
+    assert.equal(status(write(1, '1234')), STATUS.ROOM_UNAVAILABLE, 'password must not be staged before the room is seen');
+    assert.equal(status(write()), STATUS.ROOM_UNAVAILABLE, 'valid title registration before discovery is pending');
+    assert.equal(status(head(2, 2, 52)), STATUS.ROOM_UNAVAILABLE);
+    sources.get(catalog.nodes[2].provider).push(item);
+    const browse = query(0, 0, 0n, 1 << 2);
+    const old = service.page(browse);
+    assert.equal(old[8], 1);
+    assert.equal(old[16 + 34], 0);
+    assert.equal(old[16 + 35], 0);
+    const annotated = service.page(browse, true), row = annotated.subarray(16);
+    assert.equal(row.readBigUInt64LE(8), rawGame, 'legacy matching identity stays on wire');
+    assert.equal(row.readBigUInt64LE(16), 0x0100000000001000n);
+    assert.equal(row.toString('utf8', 80, 89), 'Test Game');
+    assert.equal(row.toString('utf8', 208, 220), '测试游戏');
+    assert.equal(row[34], 1);
+    assert.equal(row.readUInt32LE(340), directory.DIRECT);
+    assert.deepEqual(row.subarray(344), location);
+    assert.equal(service.page(query(0, 0, 0n, 1 << 3), true)[16 + 34], 0, 'another node does not inherit the title');
+    assert.equal(status(head(2, 3, 52)), STATUS.ROOM_UNAVAILABLE);
+    assert.equal(status(write(1, 'test-pass', Buffer.alloc(32, 8))), STATUS.NOT_HOST);
+    const accepted = exchange(write(1, 'test-pass'));
+    assert.equal(accepted.readUInt32LE(), STATUS.OK);
+    assert(accepted.subarray(4).every(byte => byte === 0), 'writes never echo secrets');
+    let got = exchange(head(2, 2, 52));
+    assert.equal(got.readUInt32LE(), STATUS.OK);
+    assert.equal(got[4], 1);
+    assert.equal(got.toString('ascii', 8, 8 + got[5]), 'test-pass');
+    const oldSnapshot = query(0, old.readUInt32LE(), 0n, 1 << 2);
+    assert.equal(service.page(oldSnapshot, true)[16 + 35], 1);
+    assert.equal(service.page(oldSnapshot)[16 + 35], 0, 'old clients are isolated from new password flags');
+    assert.equal(status(write(2, 'test-pass')), STATUS.INVALID);
+    assert.equal(status(write(2)), STATUS.OK);
+    got = exchange(head(2, 2, 52));
+    assert.equal(got[4], 2);
+    assert(got.subarray(5).every(byte => byte === 0), 'hidden mode never stores or returns password bytes');
+    assert.equal(service.page(oldSnapshot, true)[16 + 35], 2, 'cached pages use current access state');
+    const cloned = head(2, 2, 52);
+    cloned[44] ^= 1;
+    assert.equal(status(cloned), STATUS.ROOM_UNAVAILABLE);
+    const wrongHost = head(2, 2, 52);
+    wrongHost.writeUInt32LE(hostIp + 1, 8);
+    assert.equal(status(wrongHost), STATUS.ROOM_UNAVAILABLE);
+    const forgedNode = write();
+    forgedNode.writeUInt32LE(3, 4);
+    assert.equal(status(forgedNode), STATUS.NOT_HOST);
+    const forgedAddress = write();
+    forgedAddress.writeUInt32LE(hostIp + 1, 8);
+    assert.equal(status(forgedAddress), STATUS.NOT_HOST);
+    const duplicateLocation = locator.create(info, hostIp, 1, 'ABC235');
+    sources.get(catalog.nodes[2].provider).push({ summary: summary('ABC235', rawGame), locator: duplicateLocation });
+    assert.equal(status(head(2, 2, 52)), STATUS.ROOM_UNAVAILABLE, 'duplicate live identity fails closed');
+    sources.get(catalog.nodes[2].provider).length = 0;
+    assert.equal(service.page(oldSnapshot, true)[16 + 34], 0, 'persistent snapshot cannot attest a closed room');
+    assert.equal(status(head(2, 2, 52)), STATUS.ROOM_UNAVAILABLE);
+    sources.get(catalog.nodes[2].provider).push(item);
+    time = 45_001;
+    assert.equal(service.page(browse, true)[16 + 34], 0);
+    assert.equal(status(head(2, 2, 52)), STATUS.ROOM_UNAVAILABLE);
+    service.shutdown();
+});
+
+test('valid pending direct room declarations have a per-source bound', () => {
+    const { createHash } = require('node:crypto');
+    const { STATUS } = require('./direct-room-metadata');
+    const service = directory.create({
+        source: () => new Map(), providerIds: [catalog.nodes[2].provider], communityDirect: false,
+    });
+    for (let i = 1; i <= 17; i++) {
+        const body = Buffer.alloc(384);
+        body.writeUInt32LE(1);
+        body.writeUInt32LE(2, 4);
+        body.writeUInt32LE(0x0a0d1234, 8);
+        body.writeBigUInt64LE(10n, 12);
+        body[44] = 6;
+        const proof = Buffer.alloc(32, i);
+        createHash('sha256').update(proof).update(body.subarray(4, 12)).digest().copy(body, 28, 0, 16);
+        proof.copy(body, 76);
+        assert.equal(service.exchangeMetadata(body, 'single-source').readUInt32LE(),
+            i === 17 ? STATUS.BUSY : STATUS.ROOM_UNAVAILABLE);
+    }
+    service.shutdown();
+});

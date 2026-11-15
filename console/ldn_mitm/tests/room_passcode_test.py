@@ -54,18 +54,31 @@ def main():
         'Result SelectUnifiedRoom(', 'void PollMatch(',
     ])
     start = source.index('    namespace {\n        constexpr int RoomPasscodeTimeoutMs')
-    native += '\n' + source[start:source.index('    int FindGroupSummaries(', start)]
+    passcode = source[start:source.index('    int FindGroupSummaries(', start)]
+    direct_state = function(source, 'struct DirectRegistration {') + ';\n'
+    direct_state += '\n'.join(
+        line.strip() for line in source.splitlines() if 'DirectMetadataLeaseMs =' in line
+    )
+    direct_state += '\nstatic os::SdkMutex g_direct_metadata_lock, g_direct_exchange_lock;\n'
+    direct_state += 'static DirectRegistration g_direct_registration{};\n'
+    direct_state += '\n' + '\n'.join(function(source, sig) for sig in [
+        'u64 DirectMetadataNow() {', 'bool DirectMetadataReady(const DirectRegistration &room) {',
+        'DirectRoomMetadataReply ExchangeDirectMetadata(', 'DirectRoomMetadata NewDirectMetadata(',
+        'DirectRoomMetadataReply PublishDirectMetadata(', 'u32 SetDirectRoomAccess(const RoomAccessChange &access, size_t length) {',
+        'DirectRoomHost DescribeDirectHost(', 'RoomPasscodeReply LookupDirectRoomPasscode(',
+    ])
     service = (SOURCE.parent / 'lanywhere_service.cpp').read_text()
     service_header = (SOURCE.parent / 'lanywhere_service.hpp').read_text()
     names = [(17, 'SetRoomPasscode'), (18, 'GetRoomPasscode'), (19, 'GetRoomPasscodeHost'),
              (20, 'SetGameRoomAccess'), (21, 'UnlockGameRoom'), (25, 'SelectUnifiedLobbyRoom'),
              (28, 'GetRelayRegion'), (29, 'SetRelayRegion'), (30, 'GetRegionalRoomPasscode'), (31, 'UnlockRegionalGameRoom'),
-             (32, 'GetRelayRegions')]
+             (32, 'GetRelayRegions'), (40, 'GetDirectRoomPasscode')]
     for number, name in names:
         assert re.search(rf'AMS_SF_METHOD_INFO\(C, H, {number}, Result, {name}\b', service_header)
     ipc = '\n'.join(function(service, f'Result LanywhereService::{name}(') for _, name in names)
     harness = (here / 'room_passcode_harness.cpp.in').read_text()
-    native += '\n' + function(source, 'void Publish(')
+    native += '\n' + direct_state
+    native += '\n' + passcode + '\n' + function(source, 'void Publish(')
     template += harness.replace('/* ACTUAL_PASSCODE */', native).replace('/* ACTUAL_IPC */', ipc)
 
     template = '#define RELAY_PROFILE_EU_IPV4 \"127.0.0.1\"\n#define RELAY_PROFILE_EU_PORT g_test_eu_port\nstatic unsigned short g_test_eu_port=0;\n' + template

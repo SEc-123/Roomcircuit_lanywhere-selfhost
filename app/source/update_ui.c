@@ -17,7 +17,7 @@
 #ifndef LANYWHERE_APP_VERSION
 #define LANYWHERE_APP_VERSION "0.7.0"
 #endif
-#define UpdateRoot "sdmc:"
+#define UpdateRoot "sdmc:/"
 #define UpdateDownload "sdmc:/lanywhere/update-download.bin"
 #define UpdateBuildVersionIpc 34
 
@@ -82,7 +82,7 @@ static const char *network_error(UpdateNetworkResult result)
 {
     if (result == UpdateNetworkCancelled) return "Download cancelled.";
     if (result == UpdateNetworkBusy) return "Update server is busy. Try again.";
-    if (result == UpdateNetworkIo) return "Could not write the update to SD.";
+    if (result == UpdateNetworkIo) return "Could not save the download to the SD card.";
     if (result == UpdateNetworkInvalid) return "Update response is invalid. Try again.";
     return "Update server is unavailable. Try again.";
 }
@@ -90,7 +90,7 @@ static const char *network_error(UpdateNetworkResult result)
 static const char *core_error(UpdateResult result)
 {
     if (result == UPDATE_SPACE) return "Free some SD space and try again.";
-    if (result == UPDATE_IO) return "Could not write the update to SD.";
+    if (result == UPDATE_IO) return "Could not prepare the installation files on the SD card.";
     if (result == UPDATE_RECOVERY_CONFLICT) return "Move switch/lanywhere-recovery.nro off the SD card, then retry.";
     if (result == UPDATE_SIGNATURE || result == UPDATE_INVALID) return "Update verification failed. Try again.";
     return "Update cannot be installed. Use the complete SD package.";
@@ -182,6 +182,8 @@ static void install_worker(void *unused)
         return;
     }
     state.screen = UpdateInstalling;
+    state.completed = 0;
+    state.total = UPDATE_FILE_COUNT;
     state.error = NULL;
     state.changed = true;
     mutexUnlock(&lock);

@@ -522,6 +522,30 @@ int main(void) {
     v.node_rows[0]=(LobbyNodeRoom){.group=v.groups[0],.node_id=2,.flags=NodeRoomDirect};
     memcpy(v.node_rows[0].locator.code,"ABC234",7);v.node_rows[0].locator.flavor=1;v.node_rows[0].locator.host_ip=0x0a0d0101;
     step(&v,HidNpadButton_A);assert(node_probes==1&&measured_node==2&&!measured_gateway&&node_selection.node_id==2&&node_selection.locator.host_ip==0x0a0d0101);checked();
+    assert(has_pinned_direct_room(&v));checked();
+    v.pinned_node.locator.code[0]='Z';
+    assert(!has_pinned_direct_room(&v));checked();
+    v=lobby();v.st.state=StateInRoom;v.st.my_index=0;v.st.game_id=UINT64_MAX;
+    memcpy(v.st.code,"ABC234",7);v.host_regions=RELAY_REGION_COMMUNITY_ACTIVE;
+    v.direct_host=(DirectRoomHost){.epoch=77,.node_id=2,.host_ip=0x0a0d0101,.flags=DirectRoomHostActive,
+        .network_id={0xff,0xfe},.bssid={1,2,3}};
+    LobbyNodeRoom owner={.node_id=2,.flags=NodeRoomDirect,
+        .locator={.network_id={0xff,0xfe},.bssid={1,2,3},.host_ip=0x0a0d0101}};
+    assert(owns_direct_room(&v,&owner)&&!can_share_game_password(&v));checked();
+    owner.locator.network_id[18]=4;
+    assert(!owns_direct_room(&v,&owner));checked();
+    owner.locator.network_id[18]=0;owner.locator.bssid[5]=1;
+    assert(!owns_direct_room(&v,&owner));checked();
+    owner.locator.bssid[5]=0;owner.locator.host_ip++;
+    assert(!owns_direct_room(&v,&owner));checked();
+    owner.locator.host_ip--;owner.node_id=3;
+    assert(!owns_direct_room(&v,&owner));checked();
+    owner.node_id=2;owner.flags=NodeRoomGateway;
+    assert(!owns_direct_room(&v,&owner));checked();
+    v.direct_host.flags|=DirectRoomHostCanEdit;
+    assert(can_share_game_password(&v));checked();
+    v.st.my_index=1;
+    assert(!can_share_game_password(&v));checked();
     v=lobby();v.node_directory=true;v.discovery=LobbyDiscoveryUnified;choose(&v);
     strcpy(v.sources[0],"lanywhere-public");v.selection=lobby_room_id_on(&v.groups[0],v.sources[0]);
     v.node_rows[0]=(LobbyNodeRoom){.group=v.groups[0],.node_id=1,.flags=NodeRoomGateway};

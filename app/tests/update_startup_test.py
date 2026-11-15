@@ -2,6 +2,7 @@
 """Actual updater boot acknowledgement and game-running guards with service boundaries mocked."""
 from pathlib import Path
 import os
+import re
 import subprocess
 import tempfile
 
@@ -35,7 +36,7 @@ typedef int Mutex;
 #define R_SUCCEEDED(x) ((x)==0)
 #define MAKERESULT(m,d) ((m)|((d)<<9))
 #define CUR_PROCESS_HANDLE 1
-#define UpdateRoot "sdmc:"
+'''+re.search(r'^#define UpdateRoot .+$',source,re.M).group()+r'''
 #define LANYWHERE_APP_VERSION "0.7.0"
 #define UpdateBuildVersionIpc 34
 #define RELAY_PROFILE_FIXED 1
@@ -91,6 +92,7 @@ static void reset(void){
  pending_result=UPDATE_INSTALLED;ack_result=UPDATE_OK;pending_version=module_version="0.7.0";svc_result=0;malformed=false;
 }
 int main(void){
+ assert(!strcmp(UpdateRoot,"sdmc:/"));
  reset();assert(!update_ui_initialize("sdmc:/switch/lanywhere.nro")&&canonical_path&&start_calls==1&&!ack_calls);
  reset();recover_result=UPDATE_INSTALLED;assert(!update_ui_initialize("sdmc:/switch/lanywhere.nro")&&ack_calls==1&&start_calls==1);
  reset();recover_result=pending_result=UPDATE_RECOVERED;assert(!update_ui_initialize("sdmc:/switch/lanywhere.nro")&&ack_calls==1);

@@ -55,7 +55,10 @@
     AMS_SF_METHOD_INFO(C, H, 35, Result, GetHostNode, (ams::sf::Out<u32> node), (node)) \
     AMS_SF_METHOD_INFO(C, H, 36, Result, SetHostNode, (u32 node), (node)) \
     AMS_SF_METHOD_INFO(C, H, 37, Result, ListNodeRooms, (NodeRoomsRequest request, ams::sf::Out<UnifiedPage> page, const ams::sf::OutBuffer &out), (request, page, out)) \
-    AMS_SF_METHOD_INFO(C, H, 38, Result, SelectNodeRoom, (NodeRoomSelection request), (request))
+    AMS_SF_METHOD_INFO(C, H, 38, Result, SelectNodeRoom, (NodeRoomSelection request), (request)) \
+    AMS_SF_METHOD_INFO(C, H, 39, Result, GetDirectHostRoom, (const ams::sf::OutBuffer &out), (out)) \
+    AMS_SF_METHOD_INFO(C, H, 40, Result, GetDirectRoomPasscode, (NodeRoomSelection request, ams::sf::Out<RoomPasscodeReply> reply), (request, reply)) \
+    AMS_SF_METHOD_INFO(C, H, 41, Result, ListAnnotatedNodeRooms, (NodeRoomsRequest request, ams::sf::Out<UnifiedPage> page, const ams::sf::OutBuffer &out), (request, page, out))
 
 AMS_SF_DEFINE_INTERFACE(ams::mitm::lanywhere, ILanywhereService, AMS_ILANYWHERE_SERVICE, 0x594E414C)
 
@@ -77,6 +80,9 @@ namespace ams::mitm::lanywhere {
             Result SetHostNode(u32 node);
             Result ListNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out);
             Result SelectNodeRoom(NodeRoomSelection request);
+            Result GetDirectHostRoom(const sf::OutBuffer &out);
+            Result GetDirectRoomPasscode(NodeRoomSelection request, sf::Out<RoomPasscodeReply> reply);
+            Result ListAnnotatedNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out);
             Result GetBuildVersion(const sf::OutBuffer &out);
             Result GetProtocolCapabilities(sf::Out<u32> out);
             Result ListGroupsV2(u32 offset, sf::Out<GroupPageV2> page, const sf::OutBuffer &out);

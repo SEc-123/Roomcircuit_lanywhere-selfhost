@@ -170,11 +170,12 @@ UpdateNetworkResult update_network_download(const char *host, uint16_t port, con
         if (received != expected + 4 || memcmp(response, request + 32, 4)) { result = UpdateNetworkInvalid; break; }
         if (fwrite(response + 4, 1, expected, file) != expected) { result = UpdateNetworkIo; break; }
         offset += (uint32_t)expected;
-        if (progress) progress(offset, size, context);
+        if (progress && offset < size) progress(offset, size, context);
     }
     if (result == UpdateNetworkOk && (fflush(file) != 0 || fsync(fileno(file)) != 0)) result = UpdateNetworkIo;
     if (fclose(file) != 0 && result == UpdateNetworkOk) result = UpdateNetworkIo;
     close(socket_fd);
     if (result != UpdateNetworkOk) unlink(destination);
+    else if (progress) progress(size, size, context);
     return result;
 }

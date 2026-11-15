@@ -3,8 +3,10 @@
 const { performance } = require('node:perf_hooks');
 const catalog = require('./node-catalog');
 const locator = require('./node-locator');
+const directRoomMetadata = require('./direct-room-metadata');
 const CAPABILITY = 32768, CATALOG_REQUEST = 0x32, CATALOG_RESPONSE = 0xb2;
 const REQUEST = 0x33, RESPONSE = 0xb3, REALM_REQUEST = 0x35, REALM_RESPONSE = 0xb5;
+const ANNOTATED_REQUEST = 0x37, ANNOTATED_RESPONSE = 0xb7;
 const PAGE_SIZE = 6, HEADER_BYTES = 16, ROW_BYTES = 408, END = 0xffffffff;
 const DIRECT = 1, GATEWAY = 2;
 
@@ -14,6 +16,8 @@ function create({ source, providerIds, communityDirect, nodes = catalog.nodes, h
     const allowedMask = (1 << nodes.length) - 1;
     const hostMask = nodes.reduce((mask, node) => mask | ((enabled.has(node.provider) &&
         (node.protocol !== 1 || communityDirect)) ? 1 << node.id : 0), 0);
+    const directMask = nodes.reduce((mask, node) => mask | (node.protocol === 2 ? (1 << node.id) : 0), 0) & hostMask;
+    const metadata = directRoomMetadata.create({ now });
     const snapshots = new Map();
     let generation = 0;
 
@@ -41,7 +45,27 @@ function create({ source, providerIds, communityDirect, nodes = catalog.nodes, h
         return data;
     }
 
-    function page(request) {
+    function isLive(sources, nodeId, hostIp, identity) {
+        if (!(directMask & (1 << nodeId))) return false;
+        const provider = nodes.find(node => node.id === nodeId)?.provider;
+        if (!provider) return false;
+        let matches = 0;
+        for (const { summary, locator: candidate } of sources.get(provider) || []) {
+            if (locator.valid(candidate, summary.readBigUInt64LE(8), summary.toString('ascii', 0, 6), true) &&
+                candidate.readUInt32LE(40) === hostIp && candidate.subarray(0, 38).equals(identity)) {
+                if (++matches > 1) return false;
+            }
+        }
+        return matches === 1;
+    }
+
+    function exchangeMetadata(request, sourceAddress) {
+        const sources = source();
+        return metadata.exchange(request, sourceAddress, directMask,
+            (id, hostIp, identity) => isLive(sources, id, hostIp, identity));
+    }
+
+    function page(request, annotated = false) {
         if (!Buffer.isBuffer(request) || request.length !== 20) return null;
         const offset = request.readUInt32LE(), id = request.readUInt32LE(4), game = request.readBigUInt64LE(8);
         const mask = request.readUInt32LE(16);
@@ -87,9 +111,19 @@ function create({ source, providerIds, communityDirect, nodes = catalog.nodes, h
         header[9] = snapshot.available;
         header[10] = snapshot.total;
         if (offset + rows.length < snapshot.rows.length) header.writeUInt32LE(offset + rows.length, 4);
-        return Buffer.concat([header, ...rows]);
+        if (!annotated) return Buffer.concat([header, ...rows]);
+        const annotatedRows = rows.map(row => {
+            if (row.readUInt32LE(340) !== DIRECT) return row;
+            const node = row.readUInt32LE(336), hostIp = row.readUInt32LE(384);
+            const identity = row.subarray(344, 382);
+            return isLive(sources, node, hostIp, identity) ? metadata.decorate(row, node, hostIp, identity) : row;
+        });
+        return Buffer.concat([header, ...annotatedRows]);
     }
-    return { status, page, enabledMask: hostMask, shutdown: () => snapshots.clear() };
+    return { status, page, exchangeMetadata, enabledMask: hostMask, shutdown: () => {
+        snapshots.clear();
+        metadata.shutdown();
+    } };
 }
 module.exports = { create, CAPABILITY, CATALOG_REQUEST, CATALOG_RESPONSE, REQUEST, RESPONSE,
-    REALM_REQUEST, REALM_RESPONSE, ROW_BYTES, HEADER_BYTES, DIRECT, GATEWAY };
+    REALM_REQUEST, REALM_RESPONSE, ANNOTATED_REQUEST, ANNOTATED_RESPONSE, ROW_BYTES, HEADER_BYTES, DIRECT, GATEWAY };

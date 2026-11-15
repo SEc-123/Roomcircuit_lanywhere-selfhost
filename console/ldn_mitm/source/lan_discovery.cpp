@@ -976,7 +976,8 @@ namespace ams::mitm::ldn {
             this->networkInfo.common.channel = networkConfig->channel;
         }
 
-        ams::os::GenerateRandomBytes(&this->networkInfo.networkId.sessionId, sizeof(SessionId));
+        if (!lanywhere::PrepareDirectHostIdentity(gameRoute, &this->networkInfo.networkId.sessionId, sizeof(SessionId)))
+            ams::os::GenerateRandomBytes(&this->networkInfo.networkId.sessionId, sizeof(SessionId));
         this->networkInfo.networkId.intentId = networkConfig->intentId;
 
         NodeInfo *node0 = &this->networkInfo.ldn.nodes[0];

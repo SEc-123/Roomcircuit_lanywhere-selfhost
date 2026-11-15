@@ -35,7 +35,7 @@ typedef void (*UpdateProgress)(unsigned completed, unsigned total, void *context
 
 UpdateResult update_manifest_parse(const uint8_t raw[UPDATE_MANIFEST_SIZE],
                                    const char *current_version, UpdateManifest *out);
-/* root is "sdmc:" on Switch, or an isolated directory in host tests. */
+/* root is the absolute "sdmc:/" on Switch, or an isolated directory in host tests. */
 UpdateResult update_install(const char *root, const UpdateManifest *manifest,
                             const char *compressed_file, UpdateProgress progress, void *context);
 /* Call before starting the relay-facing UI. Recovery may require a reboot. */
