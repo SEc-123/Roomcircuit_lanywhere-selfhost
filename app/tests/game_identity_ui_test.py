@@ -74,12 +74,12 @@ int main(void) {
     room.metadata_flags=LOBBY_META_LOCAL;strcpy(room.title_en,"Pokémon Scarlet");strcpy(room.title_zh,"宝可梦 朱");
     fake.lcids[0]=0x222;strcpy(fake.name,"Pokémon Scarlet");installed=true;
     g_zh=false;ui_set_language(false,false);
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Local match: Pokémon Scarlet"));
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Pokémon Scarlet"));
     installed=false;
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Local match: Pokémon Scarlet"));
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Pokémon Scarlet"));
     room.metadata_flags=LOBBY_META_HOST|LOBBY_META_LOCAL;
     g_zh=true;ui_set_language(true,false);
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"本机可匹配：宝可梦 朱"));
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"宝可梦 朱"));
     room.metadata_flags=0;room.application_id=0;room.title_en[0]=room.title_zh[0]=0;last_query=0;
     assert(strstr(room_title(&room,fallback,sizeof(fallback)),"0000000000000222") && last_query==0);
     puts("Actual UI identity: local verification, host fallback, unknown LCID and launch gate passed");

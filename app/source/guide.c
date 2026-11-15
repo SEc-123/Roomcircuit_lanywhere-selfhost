@@ -5,17 +5,17 @@
 typedef struct { const char *title, *steps[3], *key; } GuidePage;
 static const GuidePage pages_zh[] = {
     { "创建房间", {
-        "大厅按 Y 选节点，按 R 筛选地区。",
+        "大厅按 Y 选节点，按 R 切换地区。",
         "回到游戏，在“本地无线”里创建房间。",
         "参考主机实测延迟，或直接选择推荐节点。"
-    }, "选好后在游戏里建房。约局提醒请用主服务器。" },
+    }, "跨节点找房、测速选线路，或提前约局。" },
     { "加入房间", {
         "在大厅按 A 选房，线路按房间来源自动切换。",
         "按提示打开游戏，或从 HOME 回游戏。",
         "在“本地无线”里搜索房间并加入。"
     }, "选房后可查看你到节点的延迟。ZL+ZR 筛选游戏和地区。" },
     { "游戏内配对", {
-        "两台都开启 LANywhere 的本地无线接管。",
+        "两台都开启 RoomCircuit 的本地无线接管。",
         "在游戏里选本地通信，输入相同连接码。",
         "两台都在游戏里开始寻找。"
     }, "适用于宝可梦连接交换等游戏内双人搜索。" },
@@ -25,7 +25,7 @@ static const GuidePage pages_zh[] = {
         "留空并确认可清除大厅中的密码设置。"
     }, "大厅密码用于主服务器。社区线路的密码在游戏里输入。" },
     { "约局", {
-        "大厅按十字键左或点「约局」。按 B 回到房间列表。",
+        "大厅按 − 或点「约局」。按 B 回大厅。",
         "选中约局按 A 加入或退出。按 L 发起新约局。",
         "开场前 30 分钟起按 Y 准备，临近开场按 X 找房。"
     }, "加入可收开房提醒。房主按 Y 准备后开房可关联约局。" },
@@ -50,14 +50,14 @@ static const GuidePage pages_en[] = {
         "Press Y in the lobby to choose a node. R filters regions.",
         "Return to the game and create a room in Local Wireless.",
         "Use measured latency or select a recommended node."
-    }, "Then host in-game. Use Main server for appointment alerts." },
+    }, "Find rooms across nodes, test your connection, or schedule a session." },
     { "Join a room", {
         "Select with A. The lobby uses that room's source.",
         "Open the game when prompted, or return to it from HOME.",
         "Search in Local Wireless and join the room."
     }, "Check your latency before joining. ZL+ZR filters game and region." },
     { "Pair in game", {
-        "Enable LANywhere interception on both consoles.",
+        "Enable RoomCircuit on both consoles.",
         "Choose local communication and enter the same link code.",
         "Start searching from the game on both consoles."
     }, "For in-game pairing such as Pokémon Link Trade." },
@@ -67,7 +67,7 @@ static const GuidePage pages_en[] = {
         "Leave it blank to clear the lobby password setting."
     }, "Lobby passwords are for Main server. On Community, enter the password in the game." },
     { "Appointments", {
-        "Press Left or tap Appointments in the lobby. B returns to rooms.",
+        "Press − or tap Appointments. B returns to the lobby.",
         "A to join or leave a selected appointment. L to create.",
         "Y for Ready from 30 min before. X to find rooms."
     }, "Join for room alerts. Hosts can mark Ready before opening a room to link it." },
@@ -94,7 +94,7 @@ int guide_page_count(void) { return PageCount; }
 
 void guide_draw_language(bool chinese)
 {
-    gfx_round_rect(1056, 40, 168, 44, 18, RGBA(0xFF, 0xFF, 0xFF, 0x0A));
+    gfx_round_rect(1056, 40, 168, 44, 18, RGBA(0xFC, 0xFC, 0xF7, 0xFF));
     gfx_button(1068, 47, "RS", chinese ? "English" : "中文");
 }
 
@@ -103,10 +103,10 @@ void guide_draw(int page, bool chinese, bool spanish)
     (void)spanish;
     page = page_index(page);
     const GuidePage *p = &(chinese ? pages_zh : pages_en)[page];
-    const u32 text = RGBA(0xF2, 0xF3, 0xF7, 0xFF), dim = RGBA(0x9A, 0xA0, 0xB0, 0xFF);
-    const u32 accent = RGBA(0x8B, 0x5C, 0xF6, 0xFF), panel = RGBA(0xFF, 0xFF, 0xFF, 0x0A);
-    gfx_clear_gradient(RGBA(0x1B, 0x22, 0x36, 0xFF), RGBA(0x0F, 0x12, 0x1C, 0xFF));
-    gfx_text(Margin, 42, 24, dim, chinese ? "LANywhere · 使用教程" : "LANywhere · How to play");
+    const u32 text = RGBA(0x17, 0x2D, 0x26, 0xFF), dim = RGBA(0x50, 0x62, 0x59, 0xFF);
+    const u32 accent = RGBA(0x19, 0x5A, 0x46, 0xFF), panel = RGBA(0xFC, 0xFC, 0xF7, 0xFF);
+    gfx_clear_gradient(RGBA(0xEE, 0xEE, 0xE8, 0xFF), RGBA(0xEE, 0xEE, 0xE8, 0xFF));
+    gfx_text(Margin, 42, 24, dim, "RoomCircuit");
     guide_draw_language(chinese);
     char position[20];
     snprintf(position, sizeof(position), "%d / %d", page + 1, PageCount);
@@ -116,12 +116,12 @@ void guide_draw(int page, bool chinese, bool spanish)
         const int y = 228 + i * 92;
         char number[2] = { (char)('1' + i), 0 };
         gfx_round_rect(Margin, y - 4, 48, 48, 24, accent);
-        gfx_text(Margin + (48 - gfx_text_width(26, number)) / 2, y + 6, 26, text, number);
+        gfx_text(Margin + (48 - gfx_text_width(26, number)) / 2, y + 6, 26, panel, number);
         gfx_text(Margin + 72, y + 5, 28, text, p->steps[i]);
     }
     gfx_round_rect(Margin, 532, GFX_W - Margin * 2, 68, 18, panel);
     gfx_text(Margin + 24, 553, 23, dim, p->key);
-    gfx_rect(0, Footer, GFX_W, 1, RGBA(0xFF, 0xFF, 0xFF, 0x1C));
+    gfx_rect(0, Footer, GFX_W, 1, RGBA(0xD9, 0xDE, 0xD4, 0xFF));
     if (page > 0) gfx_button(Margin, Footer + 20, "ZL", chinese ? "上一页" : "Previous");
     if (page + 1 < PageCount) gfx_button(856, Footer + 20, "ZR", chinese ? "下一页" : "Next");
     gfx_button(1090, Footer + 20, "B", chinese ? "返回" : "Back");

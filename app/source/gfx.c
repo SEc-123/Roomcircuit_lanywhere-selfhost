@@ -228,7 +228,7 @@ bool gfx_text_has_glyphs(const char *utf8)
 }
 
 // Dibuja (si draw) o mide el texto; y es la línea base superior aproximada (arriba del texto).
-static int render_text(int x, int y, int size, u32 color, const char *s, bool draw)
+static int render_text(int x, int y, int size, u32 color, const char *s, bool draw, int clip_left, int clip_right)
 {
     int pen = x;
     for (unsigned i = 0; i < PlSharedFontType_Total; i++)
@@ -249,7 +249,7 @@ static int render_text(int x, int y, int size, u32 color, const char *s, bool dr
                 for (unsigned col = 0; col < bm->width; col++) {
                     int px = pen + g->bitmap_left + (int)col;
                     u8 cover = bm->buffer[row * bm->pitch + col];
-                    if (cover && px >= 0 && px < GFX_W)
+                    if (cover && px >= clip_left && px < clip_right)
                         blend(&g_px[(size_t)py * g_stride + px], color, cover);
                 }
             }
@@ -261,12 +261,12 @@ static int render_text(int x, int y, int size, u32 color, const char *s, bool dr
 
 int gfx_text(int x, int y, int size, u32 color, const char *utf8)
 {
-    return render_text(x, y, size, color, utf8, true);
+    return render_text(x, y, size, color, utf8, true, 0, GFX_W);
 }
 
 int gfx_text_width(int size, const char *utf8)
 {
-    return render_text(0, 0, size, 0, utf8, false);
+    return render_text(0, 0, size, 0, utf8, false, 0, GFX_W);
 }
 
 void gfx_text_fit(int x, int y, int size, u32 color, const char *utf8, int max_w)
@@ -292,13 +292,31 @@ void gfx_text_fit(int x, int y, int size, u32 color, const char *utf8, int max_w
     gfx_text(x, y, size, color, buf);
 }
 
+bool gfx_text_marquee(int x, int y, int size, u32 color, const char *utf8, int max_w, u64 elapsed_ms)
+{
+    if (x < 0 || x >= GFX_W || max_w <= 0) return false;
+    if (max_w > GFX_W - x) max_w = GFX_W - x;
+    const int overflow = gfx_text_width(size, utf8) - max_w;
+    u64 scroll_ms = 0;
+    if (overflow > 0) {
+        const u64 travel = ((u64)overflow * 1000 + 47) / 48;
+        const u64 phase = elapsed_ms % (travel + 2000);
+        if (phase > 1000) scroll_ms = phase - 1000;
+        if (scroll_ms > travel) scroll_ms = travel;
+    }
+    int shift = (int)(scroll_ms * 48 / 1000);
+    if (overflow > 0 && shift > overflow) shift = overflow;
+    render_text(x - shift, y, size, color, utf8, true, x, x + max_w);
+    return overflow > 0;
+}
+
 int gfx_button(int x, int y, const char *button, const char *label)
 {
     const int d = 30;
     int bw = gfx_text_width(18, button);
     int pill = bw + 14 > d ? bw + 14 : d;  // "+" y letras caben en un círculo; textos largos, en una píldora
-    gfx_round_rect(x, y, pill, d, d / 2, RGBA(0xEE, 0xEE, 0xF2, 0xFF));
-    gfx_text(x + (pill - bw) / 2, y + 5, 18, RGBA(0x1B, 0x1D, 0x24, 0xFF), button);
-    int w = gfx_text(x + pill + 10, y + 3, 22, RGBA(0xEE, 0xEE, 0xF2, 0xFF), label);
+    gfx_round_rect(x, y, pill, d, d / 2, RGBA(0x19, 0x5A, 0x46, 0xFF));
+    gfx_text(x + (pill - bw) / 2, y + 5, 18, RGBA(0xFC, 0xFC, 0xF7, 0xFF), button);
+    int w = gfx_text(x + pill + 10, y + 3, 22, RGBA(0x17, 0x2D, 0x26, 0xFF), label);
     return pill + 10 + w;
 }

@@ -21,12 +21,12 @@
 #define UpdateDownload "sdmc:/lanywhere/update-download.bin"
 #define UpdateBuildVersionIpc 34
 
-static const u32 BackgroundTop = RGBA(0x1b, 0x22, 0x36, 255);
-static const u32 BackgroundBottom = RGBA(0x0f, 0x12, 0x1c, 255);
-static const u32 Text = RGBA(0xf2, 0xf3, 0xf7, 255);
-static const u32 Dim = RGBA(0x9a, 0xa0, 0xb0, 255);
-static const u32 Accent = RGBA(0x8b, 0x5c, 0xf6, 255);
-static const u32 Error = RGBA(0xf0, 0x4a, 0x4a, 255);
+static const u32 BackgroundTop = RGBA(0xEE, 0xEE, 0xE8, 255);
+static const u32 BackgroundBottom = RGBA(0xEE, 0xEE, 0xE8, 255);
+static const u32 Text = RGBA(0x17, 0x2D, 0x26, 255);
+static const u32 Dim = RGBA(0x50, 0x62, 0x59, 0xFF);
+static const u32 Accent = RGBA(0x19, 0x5A, 0x46, 255);
+static const u32 Error = RGBA(0x85, 0x2E, 0x2A, 255);
 
 typedef enum {
     UpdateChecking, UpdateCurrent, UpdateOffered, UpdateDownloading,
@@ -222,7 +222,7 @@ static bool start_worker(bool install)
     if (thread_created) return false;
     if (!socket_ready) socket_ready = app_socket_acquire();
     if (!socket_ready) {
-        set_state(UpdateFailed, "Network services are unavailable. Reopen LANywhere.");
+        set_state(UpdateFailed, "Network services are unavailable. Reopen RoomCircuit.");
         return false;
     }
     atomic_store(&cancel_requested, false);
@@ -230,14 +230,14 @@ static bool start_worker(bool install)
     state.completed = state.total = 0;
     set_state(install ? UpdateDownloading : UpdateChecking, NULL);
     if (R_FAILED(threadCreate(&worker, install ? install_worker : check_worker, NULL, NULL, 0x20000, 0x2c, -2))) {
-        set_state(UpdateFailed, "Could not start the update. Reopen LANywhere.");
+        set_state(UpdateFailed, "Could not start the update. Reopen RoomCircuit.");
         return false;
     }
     thread_created = true;
     if (R_FAILED(threadStart(&worker))) {
         threadClose(&worker);
         thread_created = false;
-        set_state(UpdateFailed, "Could not start the update. Reopen LANywhere.");
+        set_state(UpdateFailed, "Could not start the update. Reopen RoomCircuit.");
         return false;
     }
     return true;
@@ -356,7 +356,7 @@ static void draw_update(const UpdateView *view)
 {
     gfx_begin();
     gfx_clear_gradient(BackgroundTop, BackgroundBottom);
-    gfx_text(56, 40, 36, Text, "LANywhere");
+    gfx_text(56, 40, 36, Text, "RoomCircuit");
     gfx_button(1068, 47, "RS", ui_chinese() ? "English" : "中文");
     if (language_save_failed) gfx_text(1068, 92, 18, Error, ui_text("Not saved"));
     gfx_text(56, 142, 34, Text, ui_text(screen_title(view->screen)));
@@ -375,13 +375,13 @@ static void draw_update(const UpdateView *view)
         const unsigned percentage = view->total ? (unsigned)((uint64_t)view->completed * 100 / view->total) : 0;
         snprintf(version, sizeof(version), "%u%%", percentage);
         gfx_text(56, 326, 28, Text, version);
-        gfx_round_rect(56, 380, 1168, 16, 8, RGBA(255,255,255,30));
+        gfx_round_rect(56, 380, 1168, 16, 8, RGBA(0xD9, 0xDE, 0xD4, 255));
         if (percentage) gfx_round_rect(56, 380, (int)(1168 * percentage / 100), 16, 8, Accent);
         if (view->screen == UpdateInstalling) gfx_text(56, 440, 23, Dim, ui_text("Keep the console on until installation finishes."));
     }
     if (view->screen == UpdateRestart) gfx_text(56, 330, 26, Text, ui_text("Exit and restart into your virtual system."));
     if (view->error) gfx_text_fit(56, 500, 23, Error, ui_text(view->error), 1168);
-    gfx_rect(0, 648, 1280, 1, RGBA(255,255,255,28));
+    gfx_rect(0, 648, 1280, 1, RGBA(0xD9, 0xDE, 0xD4, 255));
     if (view->screen == UpdateOffered) gfx_button(56, 670, "A", ui_text("Download and install"));
     else if (view->screen == UpdateCurrent) gfx_button(56, 670, "A", ui_text("Repair installation"));
     else if (view->screen == UpdateRestart && rollback_pending) gfx_button(56, 670, "A", ui_text("Repair installation"));

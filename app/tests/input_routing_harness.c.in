@@ -6,17 +6,19 @@
 #include "lobby_model.h"
 #include "relay_config.h"
 #define TR(es,en) (en)
+#define RGBA(r, g, b, a) ((u32)(a) << 24 | (u32)(r) << 16 | (u32)(g) << 8 | (u32)(b))
 #define ui_text(s) (s)
 #define MAKERESULT(module, description) ((module) | ((description) << 9))
 #define ListConnecting (-1)
 #define ListUnavailable (-2)
 #define HidNpadButton_AnyDown (1ULL << 15)
 #define HidNpadButton_AnyUp (1ULL << 14)
-#define HidNpadButton_AnyLeft (1ULL << 16)
+#define HidNpadButton_AnyLeft (HidNpadButton_Left | (1ULL << 16))
 #define HidNpadButton_AnyRight (HidNpadButton_Right | (1ULL << 17))
 #define TOUCH_UPDATE (1ULL << 59)
 #define TOUCH_CARD (1ULL << 62)
 #define TOUCH_NETWORK_CHOICE (1ULL << 61)
+#define TOUCH_GAME_RAIL (1ULL << 54)
 /* SOURCE_PAGE_LIMIT */
 /* SOURCE_STATUS */
 /* SOURCE_VIEW */
@@ -28,6 +30,7 @@ static Calls calls;
 static int g_lanywhere;
 static int g_list_lock;
 static bool g_nodes_directory;
+static u64 g_node_game_filter, g_touched_game;
 static void mutexLock(int *p){(void)p;}
 static void mutexUnlock(int *p){(void)p;}
 static const char *room_password_edit(int *service, const char room[8], bool supports_hidden, RoomPasswordEdit *edit)
@@ -113,6 +116,12 @@ static void restart_group_query(u32 offset, u32 snapshot, bool available, const 
 }
 /* SOURCE_FIND_APPOINTMENT_ROOMS */
 static void restart_group_list(u32 offset, u32 snapshot, bool available) { (void)offset; (void)available; requested_snapshot=snapshot; calls.page++; }
+static const char *room_title(const LobbyGroup *group,char *buffer,size_t size)
+{
+    snprintf(buffer,size,"Game %llu",(unsigned long long)group->game_id);
+    return buffer;
+}
+/* SOURCE_ROOM_BOARD_INPUT */
 static void restart_group_list_on_network(u32 offset, bool available, const char *provider) { (void)offset; (void)available; (void)provider; calls.page++; }
 static Result leave_result;
 static Result lanywhere_leave(void) { calls.leave++; return leave_result; }
@@ -176,9 +185,9 @@ static bool update_ui_open(PadState *pad, bool (*allowed)(void *), void *context
 static bool update_ui_changed(void) { return false; }
 static bool ui_chinese(void) { return g_zh; }
 typedef struct { int x,y,w,h; u64 button; } TouchZone;
-static TouchZone g_zones[24];
+static TouchZone g_zones[48];
 static int g_zone_count, applet_ticks;
-enum { MARGIN=56, SIDE_X=848, FOOTER_Y=648, GFX_W=1280, C_BG_TOP=0, C_BG_BOTTOM=0, C_TEXT=0, C_PANEL=0, C_DIM=0, C_LINE=0, C_WARN=0 };
+enum { MARGIN=56, SIDE_X=848, FOOTER_Y=648, GFX_W=1280, C_OK=0, C_BG_TOP=0, C_BG_BOTTOM=0, C_TEXT=0, C_PANEL=0, C_DIM=0, C_LINE=0, C_WARN=0 };
 static u64 guide_touch_action(int x,int y,int page) { (void)x;(void)y;(void)page;return HidNpadButton_B; }
 /* SOURCE_TOUCH */
 static void gfx_begin(void) {}
@@ -191,6 +200,7 @@ static void guide_draw_language(bool chinese) {(void)chinese;}
 static void gfx_round_rect(int x,int y,int w,int h,int r,u32 color) {(void)x;(void)y;(void)w;(void)h;(void)r;(void)color;}
 static void gfx_rect(int x,int y,int w,int h,u32 color) {(void)x;(void)y;(void)w;(void)h;(void)color;}
 static int gfx_button(int x,int y,const char *key,const char *label) {(void)x;(void)y;(void)key;(void)label;return 120;}
+/* SOURCE_BRAND */
 /* SOURCE_APPOINTMENTS_LINK */
 static bool appletMainLoop(void) { return applet_ticks-- > 0; }
 static void padUpdate(PadState *pad) {(void)pad;}
@@ -481,6 +491,27 @@ int main(void) {
     const int before_minus=effects();
     step(&v,HidNpadButton_Minus);
     assert(effects()==before_minus&&!v.message[0]);checked();
+    // The unified board uses real raw game IDs; duplicate or anonymous rows
+    // never introduce extra filters. Opening appointments cannot launch a room.
+    v=lobby();v.node_directory=true;v.discovery=LobbyDiscoveryUnified;choose(&v);
+    v.count=3;
+    v.groups[1]=v.groups[0];
+    v.groups[2].game_id=UINT64_MAX;
+    u64 game_choices[LOBBY_PAGE_SIZE+1];
+    assert(room_board_games(&v,game_choices)==2&&game_choices[0]==0&&game_choices[1]==1);checked();
+    step(&v,HidNpadButton_Left);assert(v.game_rail_focused&&!appointment_screen);checked();
+    step(&v,HidNpadButton_AnyDown);assert(v.game_focus_id==1);checked();
+    step(&v,HidNpadButton_A);
+    assert(!v.game_rail_focused&&v.game_filter==1&&g_node_game_filter==1&&v.sel==-1&&
+           v.count==ListConnecting&&!v.selection.code[0]&&calls.page==1&&!effects());checked();
+    assert(room_board_games(&v,game_choices)==2&&game_choices[1]==1);checked();
+    step(&v,HidNpadButton_Left);step(&v,HidNpadButton_Right);
+    assert(!v.game_rail_focused&&!g_guide_open);checked();
+    g_touched_game=7;
+    step(&v,TOUCH_GAME_RAIL|1);assert(v.game_filter==1&&calls.page==1);checked();
+    g_touched_game=0;
+    step(&v,TOUCH_GAME_RAIL);assert(!v.game_filter&&!g_node_game_filter&&calls.page==2);checked();
+    step(&v,HidNpadButton_Minus);assert(calls.appointment_open==1&&!effects());checked();
     (void)g_zh;(void)g_es;
     v=lobby();v.node_picker_available=true;v.host_node=0;
     step(&v,HidNpadButton_Y);assert(node_picks==1&&v.host_node==2&&v.host_region==RelayRegionCommunity);checked();

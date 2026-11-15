@@ -85,6 +85,7 @@ with tempfile.TemporaryDirectory(prefix='switch-error-i18n-') as directory:
     lib.test_language(False, False)
     assert translated('tipo 42 desconocido') == 'unknown server message type'
     assert translated('tipo unexpected desconocido') == 'tipo unexpected desconocido'
+    assert translated('Reopen LANywhere to read game information.') == 'Reopen RoomCircuit to read game information.'
     assert translated('An unknown English error') == 'An unknown English error'
 
 print(f'Localized {len(static_server)} server errors, {len(native_errors)} native errors and {len(fixed_english)} fixed English messages in English and Chinese')

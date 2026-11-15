@@ -12,11 +12,30 @@
 
 #define NODE_ROWS 6
 #define NODE_ALL_REGIONS 255u
-#define NODE_COLOR_TEXT RGBA(242, 243, 247, 255)
-#define NODE_COLOR_DIM RGBA(154, 160, 176, 255)
-#define NODE_COLOR_ACCENT RGBA(139, 92, 246, 255)
-#define NODE_COLOR_WARN RGBA(245, 165, 36, 255)
-#define NODE_COLOR_PANEL RGBA(255, 255, 255, 16)
+#define NODE_COLOR_BG RGBA(238, 238, 232, 255)
+#define NODE_COLOR_PANEL RGBA(252, 252, 247, 255)
+#define NODE_COLOR_RAIL RGBA(246, 247, 240, 255)
+#define NODE_COLOR_TEXT RGBA(23, 45, 38, 255)
+#define NODE_COLOR_DIM RGBA(80, 98, 89, 255)
+#define NODE_COLOR_LINE RGBA(217, 222, 212, 255)
+#define NODE_COLOR_ACCENT RGBA(25, 90, 70, 255)
+#define NODE_COLOR_SELECT RGBA(229, 237, 228, 255)
+#define NODE_COLOR_WARN RGBA(120, 83, 21, 255)
+#define NODE_COLOR_FOOT RGBA(232, 236, 227, 255)
+#define NODE_PANEL_X 40
+#define NODE_PANEL_Y 195
+#define NODE_PANEL_W 1200
+#define NODE_PANEL_H 412
+#define NODE_TABLE_X 360
+#define NODE_LIST_Y 275
+#define NODE_ROW_HEIGHT 54
+#define NODE_REGION_Y 244
+#define NODE_REGION_HEIGHT 49
+#define NODE_REGION_COUNT 7
+#define NODE_NO_REGION_TOUCHED 254u
+#define NODE_FOOTER_Y 650
+#define NODE_FILTER_LIST_Y 291
+#define NODE_FILTER_ROW_HEIGHT 50
 
 typedef struct {
     NodeMeasurement measurements[NODE_CATALOG_COUNT];
@@ -70,7 +89,7 @@ const char *nodes_ui_region(uint8_t region)
     static const char *labels[] = {"Region unverified", "Asia", "Europe", "Americas", "Oceania", "Africa"};
     return ui_text(region < 6 ? labels[region] : "All regions");
 }
-static const char *country_name(const char *country)
+const char *nodes_ui_country(const char *country)
 {
     if (!strcmp(country, "CN"))
         return ui_text("China");
@@ -559,88 +578,199 @@ static void measurement_label(const NodeMeasurement *m, char text[80])
     else
         snprintf(text, 80, "%u ms · %s", m->median_ms, m->kind == NodeProbeUdp ? "UDP" : "TCP");
 }
+static uint8_t region_for_row(unsigned row)
+{
+    return row ? (uint8_t)(row - 1) : NODE_ALL_REGIONS;
+}
+
+static unsigned region_row(uint8_t region)
+{
+    return region < NODE_REGION_COUNT - 1 ? (unsigned)region + 1 : 0;
+}
+
 static void begin_screen(const char *title)
 {
     gfx_begin();
-    gfx_clear_gradient(RGBA(27, 34, 54, 255), RGBA(15, 18, 28, 255));
-    gfx_text(56, 36, 40, NODE_COLOR_TEXT, "LANywhere");
-    gfx_button(1068, 47, "RS", ui_chinese() ? "English" : "中文");
-    if (language_save_failed) gfx_text(1068, 92, 18, NODE_COLOR_WARN, ui_text("Not saved"));
-    gfx_text(56, 125, 30, NODE_COLOR_TEXT, ui_text(title));
+    gfx_clear_gradient(NODE_COLOR_BG, NODE_COLOR_BG);
+    gfx_rect(0, 0, GFX_W, 83, NODE_COLOR_PANEL);
+    gfx_rect(0, 82, GFX_W, 1, NODE_COLOR_LINE);
+    gfx_round_rect(40, 30, 22, 18, 5, NODE_COLOR_ACCENT);
+    gfx_round_rect(45, 34, 12, 10, 3, NODE_COLOR_PANEL);
+    gfx_round_rect(54, 39, 22, 18, 5, NODE_COLOR_ACCENT);
+    gfx_round_rect(59, 43, 12, 10, 3, NODE_COLOR_PANEL);
+    gfx_text(90, 24, 36, NODE_COLOR_TEXT, "RoomCircuit");
+    const char *language = ui_chinese() ? "English" : "中文";
+    const int language_width = gfx_text_width(18, language) + 50;
+    gfx_round_rect(1240 - language_width, 22, language_width, 38, 8, NODE_COLOR_SELECT);
+    gfx_text(1250 - language_width, 32, 16, NODE_COLOR_ACCENT, "RS");
+    gfx_text(1275 - language_width, 31, 18, NODE_COLOR_TEXT, language);
+    if (language_save_failed)
+        gfx_text(1068, 91, 18, NODE_COLOR_WARN, ui_text("Not saved"));
+    gfx_text(40, 109, 35, NODE_COLOR_TEXT, ui_text(title));
 }
+
+static void node_footer(void)
+{
+    gfx_rect(0, NODE_FOOTER_Y, GFX_W, GFX_H - NODE_FOOTER_Y, NODE_COLOR_FOOT);
+    gfx_rect(0, NODE_FOOTER_Y, GFX_W, 1, NODE_COLOR_LINE);
+}
+
+static void node_panel(void)
+{
+    gfx_round_rect(NODE_PANEL_X, NODE_PANEL_Y, NODE_PANEL_W, NODE_PANEL_H, 11, NODE_COLOR_LINE);
+    gfx_round_rect(NODE_PANEL_X + 1, NODE_PANEL_Y + 1, NODE_PANEL_W - 2, NODE_PANEL_H - 2, 10,
+                   NODE_COLOR_PANEL);
+}
+
+static void draw_regions(uint8_t region, bool focus, bool draw_counts)
+{
+    gfx_round_rect(41, 196, NODE_TABLE_X - 40, NODE_PANEL_H - 2, 10, NODE_COLOR_RAIL);
+    gfx_rect(NODE_TABLE_X - 1, 196, 1, NODE_PANEL_H - 2, NODE_COLOR_LINE);
+    gfx_text(58, 207, 21, NODE_COLOR_TEXT, ui_text("Regions"));
+    gfx_rect(41, 241, NODE_TABLE_X - 41, 1, NODE_COLOR_LINE);
+    for (unsigned i = 0; i < NODE_REGION_COUNT; i++) {
+        const uint8_t id = region_for_row(i);
+        const bool current = id == region;
+        const int y = NODE_REGION_Y + (int)i * NODE_REGION_HEIGHT;
+        if (current) {
+            gfx_round_rect(48, y + 4, 301, 42, 6, NODE_COLOR_SELECT);
+            if (focus)
+                gfx_round_rect(48, y + 9, 4, 32, 2, NODE_COLOR_ACCENT);
+        }
+        gfx_round_rect(62, y + 20, 9, 9, 5, current ? NODE_COLOR_ACCENT : NODE_COLOR_LINE);
+        gfx_text_fit(84, y + 12, 20, current ? NODE_COLOR_ACCENT : NODE_COLOR_TEXT, nodes_ui_region(id), 214);
+        if (draw_counts) {
+            unsigned total = 0;
+            for (unsigned j = 0; j < NODE_CATALOG_COUNT; j++)
+                if (id == NODE_ALL_REGIONS || LanywhereNodes[j].region == id)
+                    total++;
+            char label[8];
+            snprintf(label, sizeof(label), "%u", total);
+            gfx_text(331 - gfx_text_width(18, label), y + 14, 18, NODE_COLOR_DIM, label);
+        }
+    }
+}
+
+static void node_location(const LanywhereNode *node, char location[96])
+{
+    const char *place = node->country[0] ? nodes_ui_country(node->country) :
+                        node->region == NodeRegionUnknown ? ui_text("Unverified") : nodes_ui_region(node->region);
+    snprintf(location, 96, "%s", place);
+}
+
 static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *order, unsigned count,
-                        unsigned selected, const bool *recommended)
+                        unsigned selected, uint32_t current, bool region_focus, const bool *recommended)
 {
     begin_screen("Choose hosting node");
     const unsigned first = selected / NODE_ROWS * NODE_ROWS;
     char text[180];
-    gfx_button(56, 175, "R", nodes_ui_region(region));
     if (group_code[0]) {
         snprintf(text, sizeof(text), ui_text("Code %s · %u players"), group_code, group.participants);
-        gfx_text(600, 181, 21, NODE_COLOR_TEXT, text);
+        gfx_text_fit(490, 119, 21, NODE_COLOR_TEXT, text, 490);
     }
+    if (first)
+        gfx_button(1000, 114, "ZL", ui_text("Prev"));
+    if (first + NODE_ROWS < count)
+        gfx_button(1120, 114, "ZR", ui_text("Next"));
+    node_panel();
+    draw_regions(region, region_focus, true);
+    gfx_text_fit(379, 207, 21, NODE_COLOR_TEXT, nodes_ui_region(region), 825);
+    gfx_rect(NODE_TABLE_X, 242, 879, 32, NODE_COLOR_RAIL);
+    gfx_rect(NODE_TABLE_X, 274, 879, 1, NODE_COLOR_LINE);
+    gfx_text(379, 249, 17, NODE_COLOR_DIM, ui_text("Node"));
+    gfx_text(704, 249, 17, NODE_COLOR_DIM, ui_text("Region"));
+    gfx_text(864, 249, 17, NODE_COLOR_DIM, ui_text("Latency"));
+    gfx_text(1090, 249, 17, NODE_COLOR_DIM, ui_text("Status"));
     for (unsigned i = first; i < count && i < first + NODE_ROWS; i++) {
         const uint32_t id = order[i];
         const LanywhereNode *node = &LanywhereNodes[id];
-        const int y = 225 + (int)(i - first) * 58;
+        const NodeMeasurement *m = &copy->measurements[id];
         const bool enabled = copy->catalog_ok && (copy->enabled & (1u << id));
-        gfx_round_rect(56, y, 1168, 52, 12, i == selected ? RGBA(139, 92, 246, 65) : NODE_COLOR_PANEL);
-        const char *recommendation = group_code[0] ? " (Recommended)" : " (Recommended for you)";
-        snprintf(text, sizeof(text), "%s%s", nodes_ui_name(id), recommended[id] ? ui_text(recommendation) : "");
-        gfx_text_fit(74, y + 4, 22, enabled ? NODE_COLOR_TEXT : NODE_COLOR_DIM, text, 700);
-        snprintf(text, sizeof(text), "%s%s%s · %s", nodes_ui_region(node->region),
-                 node->country[0] ? " · " : "", country_name(node->country),
-                 node->protocol == NodeProtocolLanPlay ? "UDP" : "TCP");
-        gfx_text(74, y + 30, 15, NODE_COLOR_DIM, text);
-        measurement_label(&copy->measurements[id], text);
-        if (group_code[0] && copy->measurements[id].state == NodeMeasureReady && group.participants &&
+        const bool available = copy->catalog_ok && (copy->available & (1u << id));
+        const int y = NODE_LIST_Y + (int)(i - first) * NODE_ROW_HEIGHT;
+        if (i == selected) {
+            gfx_rect(NODE_TABLE_X, y, 879, NODE_ROW_HEIGHT - 1, NODE_COLOR_SELECT);
+            if (!region_focus)
+                gfx_round_rect(360, y + 7, 4, NODE_ROW_HEIGHT - 15, 2, NODE_COLOR_ACCENT);
+        }
+        gfx_rect(NODE_TABLE_X, y + NODE_ROW_HEIGHT - 1, 879, 1, NODE_COLOR_LINE);
+        gfx_text_fit(379, y + (recommended[id] ? 7 : 16), 19, enabled ? NODE_COLOR_TEXT : NODE_COLOR_DIM,
+                     nodes_ui_name(id), 305);
+        if (recommended[id]) {
+            const char *recommendation = group_code[0] ? " (Recommended)" : " (Recommended for you)";
+            gfx_text_fit(379, y + 31, 15, NODE_COLOR_ACCENT, ui_text(recommendation), 305);
+        }
+        char location[96];
+        node_location(node, location);
+        gfx_text_fit(704, y + 16, 18, NODE_COLOR_DIM, location, 145);
+        const char *protocol = node->protocol == NodeProtocolLanPlay ? "UDP" : "TCP";
+        if (m->state == NodeMeasureReady && group_code[0] && group.participants &&
             group.nodes[id].measured_members == group.participants) {
             if (group.nodes[id].reachable_members < group.participants)
                 snprintf(text, sizeof(text), "%s", ui_text("Unstable for a player"));
             else
                 snprintf(text, sizeof(text), ui_text("You %u / worst %u ms"),
-                         copy->measurements[id].median_ms, group.nodes[id].worst_median_ms);
-        } else if (copy->measurements[id].state == NodeMeasureReady &&
-                   !node_measurement_recommended(&copy->measurements[id])) {
-            const NodeMeasurement *measurement = &copy->measurements[id];
-            snprintf(text, sizeof(text), "%u ms · %s · %u/%u", measurement->median_ms,
-                     measurement->kind == NodeProbeUdp ? "UDP" : "TCP", measurement->received,
-                     measurement->sent);
+                         m->median_ms, group.nodes[id].worst_median_ms);
+        } else if (m->state == NodeMeasureReady && !node_measurement_recommended(m)) {
+            snprintf(text, sizeof(text), "%u ms · %s · %u/%u", m->median_ms, protocol, m->received, m->sent);
+        } else if (m->state == NodeMeasureReady) {
+            measurement_label(m, text);
+        } else {
+            snprintf(text, sizeof(text), "%s", protocol);
         }
-        gfx_text_fit(910, y + 13, 21, enabled ? NODE_COLOR_TEXT : NODE_COLOR_DIM,
-                     enabled ? text : ui_text("Unavailable"), 290);
+        gfx_text_fit(864, y + 16, 18, NODE_COLOR_TEXT, text, 211);
+        const char *status = "Not measured";
+        u32 color = NODE_COLOR_DIM;
+        if (!copy->catalog_ok)
+            status = "Unavailable";
+        else if (!enabled)
+            status = "Disabled";
+        else if (m->state == NodeMeasurePending || m->state == NodeMeasureMeasuring)
+            status = "Testing…";
+        else if (m->state == NodeMeasureFailed && m->measured_at_ms) {
+            status = "Unreachable";
+            color = NODE_COLOR_WARN;
+        } else if (m->state == NodeMeasureReady) {
+            status = id == current ? "Current" : available ? "Online" : "Unlisted";
+            color = id == current ? NODE_COLOR_ACCENT : NODE_COLOR_DIM;
+        }
+        gfx_text_fit(1090, y + 16, 17, color, ui_text(status), 134);
     }
     if (!count)
-        gfx_text(56, 260, 24, NODE_COLOR_DIM, ui_text("No nodes in this region."));
+        gfx_text(379, 306, 23, NODE_COLOR_DIM, ui_text("No nodes in this region."));
     if (copy->probe_start_failed)
-        gfx_text_fit(56, 596, 21, NODE_COLOR_WARN, ui_text("Could not start node tests. Try again."), 1168);
+        gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text("Could not start node tests. Try again."), 1200);
     else if (notice)
-        gfx_text_fit(56, 596, 21, NODE_COLOR_WARN, ui_text(notice), 1168);
+        gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text(notice), 1200);
     else if (group_code[0] && group.reported_participants < group.participants)
-        gfx_text_fit(56, 596, 21, NODE_COLOR_DIM, ui_text("Waiting for other players' results."), 1168);
+        gfx_text_fit(40, 618, 20, NODE_COLOR_DIM, ui_text("Waiting for other players' results."), 1200);
     else if (!copy->catalog_ok)
-        gfx_text_fit(56, 596, 21, NODE_COLOR_WARN, ui_text("Could not load node availability. Refresh."),
-                     1168);
+        gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text("Could not load node availability. Refresh."), 1200);
     else {
         unsigned finished = 0;
-        for (unsigned id = 0; id < NODE_CATALOG_COUNT; id++) {
-            if (copy->measurements[id].state == NodeMeasureReady ||
-                copy->measurements[id].state == NodeMeasureFailed)
+        for (unsigned id = 0; id < NODE_CATALOG_COUNT; id++)
+            if (copy->measurements[id].state == NodeMeasureReady || copy->measurements[id].state == NodeMeasureFailed)
                 finished++;
-        }
         if (finished < NODE_CATALOG_COUNT) {
             snprintf(text, sizeof(text), ui_text("Testing nodes: %u/%u"), finished, NODE_CATALOG_COUNT);
-            gfx_text(56, 596, 21, NODE_COLOR_DIM, text);
+            gfx_text(40, 618, 20, NODE_COLOR_DIM, text);
         }
     }
-    gfx_rect(0, 648, 1280, 1, RGBA(255, 255, 255, 28));
-    gfx_button(56, 670, "A", ui_text("Select"));
-    gfx_button(240, 670, "X", ui_text("Refresh"));
-    gfx_button(465, 670, "L", ui_text("Test with friends"));
-    gfx_button(980, 670, "B", ui_text("Back"));
+    node_footer();
+    if (current < NODE_CATALOG_COUNT) {
+        snprintf(text, sizeof(text), "%s · %s", ui_text("Current"), nodes_ui_name(current));
+        gfx_text_fit(40, 673, 19, NODE_COLOR_ACCENT, text, 352);
+    }
+    gfx_button(430, 669, "A", ui_text("Select"));
+    gfx_button(570, 669, "R", ui_text("Region"));
+    gfx_button(730, 669, "X", ui_text("Refresh"));
+    gfx_button(885, 669, "L", ui_text("Test with friends"));
+    gfx_button(1140, 669, "B", ui_text("Back"));
     gfx_end();
 }
-static u64 picker_touch(const uint32_t rendered[NODE_ROWS], uint32_t *touched, bool *held)
+
+static u64 picker_touch(const uint32_t rendered[NODE_ROWS], uint32_t *touched, uint8_t *touched_region,
+                        bool *held, bool prev, bool next)
 {
     HidTouchScreenState touch = {0};
     const bool down = hidGetTouchScreenStates(&touch, 1) && touch.count;
@@ -652,25 +782,38 @@ static u64 picker_touch(const uint32_t rendered[NODE_ROWS], uint32_t *touched, b
         return 0;
     *held = true;
     const int x = touch.touches[0].x, y = touch.touches[0].y;
-    if (x >= 1056 && y >= 35 && y < 95)
+    if (x >= 1056 && y >= 15 && y < 76)
         return HidNpadButton_StickR;
-    if (y >= 165 && y < 210)
-        return HidNpadButton_R;
-    if (y >= 225 && y < 573) {
-        const unsigned index = (unsigned)(y - 225) / 58;
-        if (index < NODE_ROWS && rendered[index] != NODE_ID_INVALID) {
+    if (y >= 105 && y < 151) {
+        if (x >= 1000 && x < 1120 && prev)
+            return HidNpadButton_ZL;
+        if (x >= 1120 && x < 1240 && next)
+            return HidNpadButton_ZR;
+    }
+    if (x >= 40 && x < NODE_TABLE_X && y >= NODE_REGION_Y &&
+        y < NODE_REGION_Y + NODE_REGION_COUNT * NODE_REGION_HEIGHT) {
+        *touched_region = region_for_row((unsigned)(y - NODE_REGION_Y) / NODE_REGION_HEIGHT);
+        return 0;
+    }
+    if (x >= NODE_TABLE_X && x < 1240 && y >= NODE_LIST_Y &&
+        y < NODE_LIST_Y + NODE_ROWS * NODE_ROW_HEIGHT) {
+        const unsigned index = (unsigned)(y - NODE_LIST_Y) / NODE_ROW_HEIGHT;
+        if (rendered[index] != NODE_ID_INVALID) {
             *touched = rendered[index];
             return HidNpadButton_A;
         }
     }
-    if (y >= 650) {
-        if (x < 220)
+    if (y >= NODE_FOOTER_Y) {
+        if (x >= 430 && x < 570)
             return HidNpadButton_A;
-        if (x < 450)
+        if (x >= 570 && x < 730)
+            return HidNpadButton_R;
+        if (x >= 730 && x < 885)
             return HidNpadButton_X;
-        if (x < 900)
+        if (x >= 885 && x < 1140)
             return HidNpadButton_L;
-        return HidNpadButton_B;
+        if (x >= 1140)
+            return HidNpadButton_B;
     }
     return 0;
 }
@@ -702,7 +845,7 @@ static void draw_friend_panel(void)
         gfx_text_fit(56, 460, 21, NODE_COLOR_WARN, ui_text(keyboard_error), 1168);
     if (notice)
         gfx_text_fit(56, 420, 22, NODE_COLOR_WARN, ui_text(notice), 1168);
-    gfx_rect(0, 648, 1280, 1, RGBA(255, 255, 255, 28));
+    node_footer();
     if (!group_code[0]) {
         gfx_button(56, 670, "A", ui_text("Create code"));
         gfx_button(330, 670, "X", ui_text("Join code"));
@@ -721,7 +864,7 @@ static void friend_panel(PadState *pad)
         u64 down = padGetButtonsDown(pad);
         int touch_x, touch_y;
         if (modal_touch_start(&touch_held, &touch_x, &touch_y)) {
-            if (touch_x >= 1056 && touch_y >= 35 && touch_y < 95)
+            if (touch_x >= 1056 && touch_y >= 15 && touch_y < 76)
                 down |= HidNpadButton_StickR;
             else if (touch_y >= 650) {
                 if (touch_x < 300)
@@ -768,22 +911,33 @@ static void friend_panel(PadState *pad)
         svcSleepThread(33000000ULL);
     }
 }
+static unsigned picker_index(const uint32_t *order, unsigned count, uint32_t id)
+{
+    for (unsigned i = 0; i < count; i++)
+        if (order[i] == id)
+            return i;
+    return count;
+}
+
 bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *selected_node)
 {
     if (!initialized)
         return false;
-    start_probes((1u << NODE_CATALOG_COUNT) - 1, false);
+    const uint32_t all = (1u << NODE_CATALOG_COUNT) - 1;
+    start_probes(all, false);
     notice = NULL;
     unsigned selected = 0;
     uint8_t region = NODE_ALL_REGIONS;
+    bool region_focus = false;
     bool dirty = true, moved = false, touch_held = true;
+    bool rendered_prev = false, rendered_next = false;
     uint32_t selected_id = current, rendered_selected = NODE_ID_INVALID, rendered[NODE_ROWS];
     for (unsigned i = 0; i < NODE_ROWS; i++)
         rendered[i] = NODE_ID_INVALID;
     NodeProbeLoop probe_loop = probe_loop_start();
     while (appletMainLoop()) {
         collect_probes();
-        maintain_probes(&probe_loop, (1u << NODE_CATALOG_COUNT) - 1);
+        maintain_probes(&probe_loop, all);
         if (collect_friend())
             dirty = true;
         const uint64_t now = node_probe_now_ms();
@@ -798,81 +952,125 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
         unsigned count;
         bool recommended[NODE_CATALOG_COUNT];
         rank_nodes(&copy, region, order, &count, recommended);
-        for (unsigned i = 0; i < count; i++)
-            if (order[i] == selected_id) {
-                selected = i;
-                break;
-            }
-        if (selected >= count)
-            selected = count ? count - 1 : 0;
+
         uint32_t touched = NODE_ID_INVALID;
-        down |= picker_touch(rendered, &touched, &touch_held);
-        if (touched != NODE_ID_INVALID) {
-            selected_id = touched;
-            moved = true;
-        } else if ((down & HidNpadButton_A) && rendered_selected != NODE_ID_INVALID) {
-            selected_id = rendered_selected;
-            moved = true;
-        } else if (!moved && count && recommended[order[0]])
-            selected_id = order[0];
-        for (unsigned i = 0; i < count; i++)
-            if (order[i] == selected_id) {
-                selected = i;
-                break;
-            }
+        uint8_t touched_region = NODE_NO_REGION_TOUCHED;
+        down |= picker_touch(rendered, &touched, &touched_region, &touch_held, rendered_prev, rendered_next);
         language_input(down);
         if (down & HidNpadButton_B) {
             cancel_probes();
             return false;
         }
-        if ((down & HidNpadButton_AnyUp) && selected) {
-            selected--;
-            selected_id = order[selected];
-            moved = true;
-        }
-        if ((down & HidNpadButton_AnyDown) && selected + 1 < count) {
-            selected++;
-            selected_id = order[selected];
-            moved = true;
-        }
-        if (down & HidNpadButton_R) {
-            region = region == NODE_ALL_REGIONS ? 0 : region == 5 ? NODE_ALL_REGIONS : (uint8_t)(region + 1);
-            rank_nodes(&copy, region, order, &count, recommended);
-            selected = 0;
-            selected_id = count ? order[0] : NODE_ID_INVALID;
-            rendered_selected = NODE_ID_INVALID;
-            moved = false;
-            down &= ~HidNpadButton_A;
-        }
         if (down & HidNpadButton_X) {
             notice = NULL;
-            start_probes((1u << NODE_CATALOG_COUNT) - 1, true);
+            start_probes(all, true);
+            dirty = true;
             continue;
         }
         if (down & HidNpadButton_L) {
             friend_panel(pad);
             dirty = true;
+            touch_held = true;
+            continue;
         }
-        if ((down & HidNpadButton_A) && count) {
-            const uint32_t id = order[selected];
-            const NodeMeasurement *m = &copy.measurements[id];
-            if (!copy.catalog_ok || !(copy.enabled & (1u << id)) || m->state != NodeMeasureReady) {
-                notice = "This node is not ready. Refresh or choose another.";
-            } else if (R_SUCCEEDED(serviceDispatchIn(service, 36, id))) {
-                *selected_node = id;
-                cancel_probes();
-                return true;
-            } else
-                notice = "Could not select this node. Try another.";
+
+        if (down & HidNpadButton_AnyLeft) {
+            region_focus = true;
+            moved = true;
+        }
+        if (down & HidNpadButton_AnyRight) {
+            region_focus = false;
+            moved = true;
+        }
+        if (touched != NODE_ID_INVALID)
+            region_focus = false;
+        const unsigned old_region_row = region_row(region);
+        unsigned new_region_row = old_region_row;
+        if (touched_region != NODE_NO_REGION_TOUCHED) {
+            new_region_row = region_row(touched_region);
+            region_focus = true;
+            dirty = true;
+        } else if (down & HidNpadButton_R) {
+            new_region_row = (old_region_row + 1) % NODE_REGION_COUNT;
+        } else if (region_focus) {
+            if ((down & HidNpadButton_AnyUp) && new_region_row)
+                new_region_row--;
+            if ((down & HidNpadButton_AnyDown) && new_region_row + 1 < NODE_REGION_COUNT)
+                new_region_row++;
+        }
+        if (new_region_row != old_region_row) {
+            region = region_for_row(new_region_row);
+            rank_nodes(&copy, region, order, &count, recommended);
+            selected_id = count ? order[0] : NODE_ID_INVALID;
+            rendered_selected = NODE_ID_INVALID;
+            notice = NULL;
+            moved = true;
+            down &= ~HidNpadButton_A;
+        }
+
+        if (!moved && count && recommended[order[0]])
+            selected_id = order[0];
+        selected = picker_index(order, count, selected_id);
+        if (selected == count)
+            selected = 0;
+        if (!region_focus && count) {
+            if ((down & HidNpadButton_AnyUp) && selected) {
+                selected--;
+                moved = true;
+            }
+            if ((down & HidNpadButton_AnyDown) && selected + 1 < count) {
+                selected++;
+                moved = true;
+            }
+            if (down & HidNpadButton_ZL) {
+                const unsigned first = selected / NODE_ROWS * NODE_ROWS;
+                if (first) {
+                    selected = first - NODE_ROWS;
+                    moved = true;
+                }
+            }
+            if (down & HidNpadButton_ZR) {
+                const unsigned next = (selected / NODE_ROWS + 1) * NODE_ROWS;
+                if (next < count) {
+                    selected = next;
+                    moved = true;
+                }
+            }
+        }
+        selected_id = count ? order[selected] : NODE_ID_INVALID;
+        if (down & HidNpadButton_A) {
+            if (region_focus) {
+                region_focus = false;
+            } else {
+                const uint32_t id = touched != NODE_ID_INVALID ? touched : rendered_selected;
+                const unsigned confirmed = picker_index(order, count, id);
+                if (confirmed < count) {
+                    selected = confirmed;
+                    selected_id = id;
+                    moved = true;
+                    const NodeMeasurement *m = &copy.measurements[id];
+                    if (!copy.catalog_ok || !(copy.enabled & (1u << id)) || m->state != NodeMeasureReady) {
+                        notice = "This node is not ready. Refresh or choose another.";
+                    } else if (R_SUCCEEDED(serviceDispatchIn(service, 36, id))) {
+                        *selected_node = id;
+                        cancel_probes();
+                        return true;
+                    } else {
+                        notice = "Could not select this node. Try another.";
+                    }
+                }
+            }
         }
         mutexLock(&view_lock);
         dirty |= view.changed;
         view.changed = false;
         mutexUnlock(&view_lock);
         if (dirty || down) {
-            draw_picker(&copy, region, order, count, selected, recommended);
-            rendered_selected = count ? order[selected] : NODE_ID_INVALID;
+            draw_picker(&copy, region, order, count, selected, current, region_focus, recommended);
+            rendered_selected = selected_id;
             const unsigned first = selected / NODE_ROWS * NODE_ROWS;
+            rendered_prev = first != 0;
+            rendered_next = first + NODE_ROWS < count;
             for (unsigned i = 0; i < NODE_ROWS; i++)
                 rendered[i] = first + i < count ? order[first + i] : NODE_ID_INVALID;
             dirty = false;
@@ -903,7 +1101,7 @@ static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gat
     }
     if (probe_start_failed)
         gfx_text_fit(56, 550, 21, NODE_COLOR_WARN, ui_text("Could not start node tests. Try again."), 1168);
-    gfx_rect(0, 648, 1280, 1, RGBA(255, 255, 255, 28));
+    node_footer();
     if (m->state == NodeMeasureReady)
         gfx_button(56, 670, "A", ui_text("Continue"));
     if (probe_start_failed)
@@ -926,7 +1124,7 @@ bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway)
         const NodeView copy = snapshot();
         int touch_x, touch_y;
         if (modal_touch_start(&touch_held, &touch_x, &touch_y)) {
-            if (touch_x >= 1056 && touch_y >= 35 && touch_y < 95)
+            if (touch_x >= 1056 && touch_y >= 15 && touch_y < 76)
                 down |= HidNpadButton_StickR;
             else if (touch_y >= 650) {
                 if (copy.probe_start_failed && touch_x >= 340 && touch_x < 760)
@@ -980,31 +1178,39 @@ static bool ask_game_search(char query[64])
     return R_SUCCEEDED(result);
 }
 static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *choices, size_t count,
-                         int selected, uint64_t chosen, uint8_t chosen_region)
+                         int selected, uint64_t chosen, uint8_t chosen_region, bool region_focus)
 {
     begin_screen("Filter rooms");
-    gfx_button(56, 175, "R", nodes_ui_region(chosen_region));
+    node_panel();
+    draw_regions(chosen_region, region_focus, false);
+    gfx_text(379, 207, 21, NODE_COLOR_TEXT, ui_text("Game"));
+    gfx_rect(NODE_TABLE_X, 241, 879, 1, NODE_COLOR_LINE);
     const CatalogMatch selected_title = game_catalog_identify(catalog, 0, chosen);
-    gfx_text_fit(400, 181, 21, NODE_COLOR_DIM,
-                 (chosen && selected_title.kind) ? game_catalog_name(&selected_title, ui_chinese())
-                                                 : ui_text("All games"),
-                 810);
-    gfx_round_rect(56, 225, 1168, 45, 12, selected < 0 ? RGBA(139, 92, 246, 65) : NODE_COLOR_PANEL);
-    gfx_text(74, 234, 22, NODE_COLOR_TEXT, ui_text("Apply current filters"));
-    for (size_t i = 0; i < count; i++) {
-        const int y = 280 + (int)i * 48;
-        gfx_round_rect(56, y, 1168, 43, 10, selected == (int)i ? RGBA(139, 92, 246, 65) : NODE_COLOR_PANEL);
-        gfx_text_fit(74, y + 8, 22, NODE_COLOR_TEXT, game_catalog_name(&choices[i].title, ui_chinese()),
-                     1130);
+    const char *active = (chosen && selected_title.kind) ? game_catalog_name(&selected_title, ui_chinese())
+                                                          : ui_text("All games");
+    for (int i = -1; i < (int)count; i++) {
+        const int y = NODE_FILTER_LIST_Y + i * NODE_FILTER_ROW_HEIGHT;
+        const bool highlighted = i == selected;
+        if (highlighted) {
+            gfx_rect(NODE_TABLE_X, y, 879, NODE_FILTER_ROW_HEIGHT - 1, NODE_COLOR_SELECT);
+            if (!region_focus)
+                gfx_round_rect(NODE_TABLE_X, y + 7, 4, NODE_FILTER_ROW_HEIGHT - 15, 2, NODE_COLOR_ACCENT);
+        }
+        gfx_rect(NODE_TABLE_X, y + NODE_FILTER_ROW_HEIGHT - 1, 879, 1, NODE_COLOR_LINE);
+        const char *name = i < 0 ? active : game_catalog_name(&choices[i].title, ui_chinese());
+        gfx_text_fit(379, y + 14, 21, NODE_COLOR_TEXT, name, i < 0 ? 650 : 830);
+        if (i < 0)
+            gfx_text_fit(1090, y + 16, 17, NODE_COLOR_DIM, ui_text("Current"), 134);
     }
-    gfx_rect(0, 648, 1280, 1, RGBA(255, 255, 255, 28));
     if (keyboard_error)
-        gfx_text_fit(56, 595, 21, NODE_COLOR_WARN, ui_text(keyboard_error), 1168);
-    gfx_button(56, 670, "A", ui_text("Apply"));
-    gfx_button(250, 670, "X", ui_text("Search game"));
-    gfx_button(505, 670, "Y", ui_text("All games"));
-    gfx_button(740, 670, "ZR", ui_text("Next"));
-    gfx_button(1060, 670, "B", ui_text("Back"));
+        gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text(keyboard_error), 1200);
+    node_footer();
+    gfx_button(40, 669, "A", ui_text("Apply"));
+    gfx_button(216, 669, "R", ui_text("Region"));
+    gfx_button(390, 669, "X", ui_text("Search game"));
+    gfx_button(620, 669, "Y", ui_text("All games"));
+    gfx_button(880, 669, "ZR", ui_text("Next"));
+    gfx_button(1140, 669, "B", ui_text("Back"));
     gfx_end();
 }
 bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_id, uint8_t *region)
@@ -1014,7 +1220,7 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
     CatalogGameChoice choices[6];
     size_t offset = 0, next = SIZE_MAX;
     int selected = -1;
-    bool dirty = true, touch_held = true;
+    bool dirty = true, touch_held = true, region_focus = false;
     uint64_t chosen = *game_id;
     uint8_t chosen_region = *region;
     size_t count = game_catalog_choices(catalog, query, offset, choices, 6, &next);
@@ -1023,27 +1229,30 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
         u64 down = padGetButtonsDown(pad);
         int touch_x, touch_y;
         if (modal_touch_start(&touch_held, &touch_x, &touch_y)) {
-            if (touch_x >= 1056 && touch_y >= 35 && touch_y < 95)
+            if (touch_x >= 1056 && touch_y >= 15 && touch_y < 76)
                 down |= HidNpadButton_StickR;
-            else if (touch_y >= 165 && touch_y < 210 && touch_x < 350)
-                down |= HidNpadButton_R;
-            else if (touch_y >= 225 && touch_y < 270) {
-                selected = -1;
+            else if (touch_x >= NODE_PANEL_X && touch_x < NODE_TABLE_X && touch_y >= NODE_REGION_Y &&
+                     touch_y < NODE_REGION_Y + NODE_REGION_COUNT * NODE_REGION_HEIGHT) {
+                chosen_region = region_for_row((unsigned)(touch_y - NODE_REGION_Y) / NODE_REGION_HEIGHT);
+                region_focus = true;
+                dirty = true;
+                down &= ~HidNpadButton_A;
+            } else if (touch_x >= NODE_TABLE_X && touch_x < NODE_PANEL_X + NODE_PANEL_W &&
+                       touch_y >= NODE_FILTER_LIST_Y - NODE_FILTER_ROW_HEIGHT && touch_y <
+                       NODE_FILTER_LIST_Y + NODE_FILTER_ROW_HEIGHT * (int)count) {
+                selected = (touch_y - NODE_FILTER_LIST_Y + NODE_FILTER_ROW_HEIGHT) / NODE_FILTER_ROW_HEIGHT - 1;
+                region_focus = false;
                 down |= HidNpadButton_A;
-            } else if (touch_y >= 280 && touch_y < 568) {
-                int row = (touch_y - 280) / 48;
-                if (row < (int)count) {
-                    selected = row;
+            } else if (touch_y >= NODE_FOOTER_Y) {
+                if (touch_x < 216)
                     down |= HidNpadButton_A;
-                }
-            } else if (touch_y >= 650) {
-                if (touch_x < 230)
-                    down |= HidNpadButton_A;
-                else if (touch_x < 480)
+                else if (touch_x < 390)
+                    down |= HidNpadButton_R;
+                else if (touch_x < 620)
                     down |= HidNpadButton_X;
-                else if (touch_x < 720)
+                else if (touch_x < 880)
                     down |= HidNpadButton_Y;
-                else if (touch_x < 1020)
+                else if (touch_x < 1140)
                     down |= HidNpadButton_ZR;
                 else
                     down |= HidNpadButton_B;
@@ -1052,12 +1261,20 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
         language_input(down);
         if (down & HidNpadButton_B)
             return false;
-        if (down & HidNpadButton_R) {
-            chosen_region = chosen_region == NODE_ALL_REGIONS ? 0
-                            : chosen_region == 5              ? NODE_ALL_REGIONS
-                                                              : (uint8_t)(chosen_region + 1);
-            dirty = true;
+        if (down & HidNpadButton_AnyLeft)
+            region_focus = true;
+        if (down & HidNpadButton_AnyRight)
+            region_focus = false;
+        unsigned row = region_row(chosen_region);
+        if (down & HidNpadButton_R)
+            row = (row + 1) % NODE_REGION_COUNT;
+        else if (region_focus) {
+            if ((down & HidNpadButton_AnyUp) && row)
+                row--;
+            if ((down & HidNpadButton_AnyDown) && row + 1 < NODE_REGION_COUNT)
+                row++;
         }
+        chosen_region = region_for_row(row);
         if (down & HidNpadButton_X) {
             if (ask_game_search(query)) {
                 offset = 0;
@@ -1086,12 +1303,17 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
             count = game_catalog_choices(catalog, query, offset, choices, 6, &next);
             down &= ~HidNpadButton_A;
         }
-        if ((down & HidNpadButton_AnyDown) && selected + 1 < (int)count) {
+        if (!region_focus && (down & HidNpadButton_AnyDown) && selected + 1 < (int)count) {
             selected++;
             dirty = true;
         }
-        if ((down & HidNpadButton_AnyUp) && selected >= 0) {
+        if (!region_focus && (down & HidNpadButton_AnyUp) && selected >= 0) {
             selected--;
+            dirty = true;
+        }
+        if ((down & HidNpadButton_A) && region_focus) {
+            region_focus = false;
+            down &= ~HidNpadButton_A;
             dirty = true;
         }
         if (down & HidNpadButton_A) {
@@ -1102,7 +1324,7 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
             return true;
         }
         if (dirty || down) {
-            draw_filters(catalog, choices, count, selected, chosen, chosen_region);
+            draw_filters(catalog, choices, count, selected, chosen, chosen_region, region_focus);
             dirty = false;
         }
         svcSleepThread(33000000ULL);

@@ -481,7 +481,7 @@ static bool write_recovery_app(const char *root, const Entry *app) {
     memcpy(copy, app->data, app->size);
     for (unsigned language = 0; language < 16; language++) {
         char *title = (char *)copy + control + language * 0x300;
-        memset(title, 0, 0x200); memcpy(title, "LANywhere Recovery", sizeof("LANywhere Recovery"));
+        memset(title, 0, 0x200); memcpy(title, "RoomCircuit Recovery", sizeof("RoomCircuit Recovery"));
     }
     char staged[PATH_MAX], target[PATH_MAX], marker_path[PATH_MAX]; bool exists;
     uint8_t marker[40]; memcpy(marker, "LNR1", 4); write32(marker + 4, app->size);

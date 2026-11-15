@@ -15,7 +15,7 @@ bash scripts/toolchain/build-switch.sh
 export DEVKITPRO=/absolute/path/to/devkitpro
 bash scripts/toolchain/build-switch.sh
 python3 scripts/toolchain/verify_switch_build.py . \
-  --app-title 'LANywhere Self-host' \
+  --app-title 'RoomCircuit' \
   --app-version "$(node -p 'require("./package.json").version')" \
   --ipc-abi 5 \
   --report evidence/switch-build.json \

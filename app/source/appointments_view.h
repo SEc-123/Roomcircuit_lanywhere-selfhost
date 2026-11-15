@@ -15,6 +15,7 @@ void appointments_open(bool worker_available, bool resume);
 void appointments_close(void);
 bool appointments_active(void);
 bool appointments_list_active(void);
+bool appointments_title_animates(void);
 bool appointments_worker_exchange(Service *service);
 bool appointments_tick(u64 monotonic_ms);
 void appointments_capture_touch(u64 action);

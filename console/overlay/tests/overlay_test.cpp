@@ -166,7 +166,7 @@ int main(){
  reset();present=false;connectServices();assert(opens==0&&!g_snapshot.config_ok&&!g_snapshot.relay_ok);
  reset();protocol=999;connectServices();assert(g_protocol_mismatch&&!g_snapshot.relay_ok&&!serviceIsActive(&g_relay));
  reset();connectServices();status.state=2;status.member_count=2;std::memcpy(status.code,"ABCDEF",6);refresh();
- MainGui gui;std::unique_ptr<tsl::elm::Element>ui(gui.createUI());auto*frame=dynamic_cast<tsl::elm::OverlayFrame*>(ui.get());assert(frame&&frame->title=="LANywhere");
+ MainGui gui;std::unique_ptr<tsl::elm::Element>ui(gui.createUI());auto*frame=dynamic_cast<tsl::elm::OverlayFrame*>(ui.get());assert(frame&&frame->title=="RoomCircuit");
  auto*list=dynamic_cast<tsl::elm::List*>(frame->content);bool room=false,players=false;for(auto*p:list->items){auto*i=dynamic_cast<tsl::elm::ListItem*>(p);if(!i)continue;room|=i->text=="Room"&&i->value=="ABCDEF";players|=i->text=="Room members"&&i->value=="2 / 8";}assert(room&&players);
  auto requests=commands.size();gui.update();assert(commands.size()==requests);ticks+=1000;gui.update();assert(commands.size()>requests);
  Overlay overlay;before=sets;commands.clear();overlay.onHide();overlay.exitServices();assert(sets==before&&commands.empty());

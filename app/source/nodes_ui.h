@@ -11,6 +11,7 @@ void nodes_ui_shutdown(void);
 void nodes_ui_network_changed(void);
 const char *nodes_ui_name(uint32_t id);
 const char *nodes_ui_region(uint8_t region);
+const char *nodes_ui_country(const char *country);
 uint32_t nodes_ui_region_mask(uint8_t region);
 bool nodes_ui_supported(Service *service, uint32_t *selected);
 bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *selected);

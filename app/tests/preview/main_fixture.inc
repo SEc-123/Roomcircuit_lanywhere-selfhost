@@ -18,7 +18,7 @@ int main(int argc, char **argv)
                              "network-config-unreadable", "network-config-invalid", "local-match", "inventory-error", "external-offline",
                              "olunira-catalog-restored", "game-password", "share-password",
                               "protected-and-full-rooms", "protected-room", "unlocked-room", "password-visibility", "unified-mixed", "regional-lobby", "regional-locked",
-                              "community-lobby", "community-room" };
+                              "community-lobby", "community-room","roomcircuit-lobby","roomcircuit-filtered","roomcircuit-rail-focus","roomcircuit-empty" };
     for (int zh = 0; zh < 2; zh++) {
         g_zh = zh != 0; ui_set_language(g_zh, false);
         snprintf(sample_games[0].name, sizeof(sample_games[0].name), "%s", zh ? "示例游戏：多人冒险与合作挑战" : "Sample game: multiplayer adventure");
@@ -162,6 +162,25 @@ int main(int argc, char **argv)
                     v.match = (LobbyMatch){.mode=LobbyExact,.state=MatchWaitScan,.game_id=100,.room="ABC234"};
                 }
             }
+            if (scene >= 41) {
+                v.discovery = LobbyDiscoveryUnified;
+                v.node_directory = v.node_picker_available = true;
+                v.region_filter = 255;
+                v.count = scene == 44 ? 0 : scene == 42 ? 3 : 6;
+                v.game_filter = scene == 42 ? 100 : 0;
+                v.game_rail_focused = scene == 43;
+                v.game_focus_id = 100;
+                for (int i = 0; i < v.count; ++i) {
+                    v.groups[i] = (LobbyGroup){.game_id=i < 3 ? 100 : 101+i,.application_id=i < 3 ? 200 : 201+i,
+                        .metadata_flags=LOBBY_META_HOST,.players=(unsigned)i%4+1,.max_players=4};
+                    snprintf(v.groups[i].code,sizeof(v.groups[i].code),"ABCD%02d",i);
+                    unsigned node = i==0 ? 0 : i==1 ? 2 : i==2 ? 7 : (unsigned)i;
+                    snprintf(v.sources[i], sizeof(v.sources[i]), "%s", LanywhereNodes[node].provider);
+                    v.node_rows[i].node_id = node;
+                }
+                if (v.count > 2) { v.groups[1].room_access=RoomAccessHidden; v.groups[2].players=4; }
+                if (v.count) { v.sel=0; v.selection=lobby_room_id_on(&v.groups[0],v.sources[0]); }
+            }
             char path[1024];
             snprintf(path, sizeof(path), "%s/main-%s-%s.png", argv[1], zh ? "zh" : "en", scenes[scene]);
             output_path = path;
@@ -176,6 +195,17 @@ int main(int argc, char **argv)
                 draw(&v);
                 // Real debug captures intentionally skip the password view.
                 if (scene == 30 && !gfx_save_png(path)) failures++;
+                if (scene == 43) {
+                    if (!g_board_title_animates) {
+                        fprintf(stderr, "Focused long title did not enable scrolling in %s\n", path);
+                        failures++;
+                    }
+                    char moved[1024];
+                    snprintf(moved, sizeof(moved), "%s/main-%s-roomcircuit-title-scrolled.png", argv[1], zh ? "zh" : "en");
+                    output_path = moved;
+                    preview_now_ms += 1600;
+                    draw(&v);
+                }
             }
             if (scene == 19) {
                 const int col_width = (LIST_W - 60) / 2;
@@ -207,6 +237,12 @@ int main(int argc, char **argv)
             }
             if ((scene == 37 || scene == 39) && touch_action_at(SIDE_X + 20, 153) != HidNpadButton_Y) {
                 fprintf(stderr, "Hosting line button is missing in %s\n", path); failures++;
+            }
+            if (scene >= 41 &&
+                (touch_action_at(720, 42) != HidNpadButton_Minus || touch_action_at(900, 42) != HidNpadButton_Y ||
+                 touch_action_at(59, 228) != TOUCH_GAME_RAIL ||
+                 (v.count && (touch_action_at(510, 271) != TOUCH_CARD || g_rendered_games[1]!=100)))) {
+                fprintf(stderr,"RoomCircuit board controls not touchable in %s\n",path); failures++;
             }
             for (int i = 0; i < g_zone_count; i++) {
                 TouchZone z = g_zones[i];

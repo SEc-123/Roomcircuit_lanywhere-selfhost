@@ -35,5 +35,8 @@ bool gfx_text_has_glyphs(const char *utf8);
 // Recorta con "..." para que quepa en max_w.
 void gfx_text_fit(int x, int y, int size, u32 color, const char *utf8, int max_w);
 
+// Scrolls the selected title inside its column and returns whether it overflows.
+bool gfx_text_marquee(int x, int y, int size, u32 color, const char *utf8, int max_w, u64 elapsed_ms);
+
 // Botón del mando (círculo con la letra) seguido de su acción; devuelve el ancho total.
 int gfx_button(int x, int y, const char *button, const char *label);

@@ -18,7 +18,8 @@ HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent.parent / 'source'
 FUNCTIONS = ['tr_error', 'button_mask', 'add_zone', 'draw_language_control', 'touch_action_at', 'show_matching', 'external_room_expired', 'supports_reserved', 'is_self_network', 'can_enter_game_password', 'room_password_allows_launch', 'match_state_text', 'list_error_title', 'status_pill', 'seats',
              'local_game_info', 'room_catalog_match', 'game_info_has_lcid', 'room_title', 'display_game_icon', 'room_title_note', 'provider_label', 'region_label', 'group_card', 'matching_column', 'network_offline_hint', 'list_error_hint', 'groups_column', 'can_change_visibility', 'can_change_provider', 'can_change_host_region', 'current_host_line_available', 'is_self_room_context', 'can_share_game_password', 'provider_column', 'private_column',
-             'appointment_entry_available', 'lobby_guide_available', 'side_column', 'draw_password_visibility', 'draw_update_entry', 'draw_appointments_link', 'draw', 'draw_no_service']
+             'appointment_entry_available', 'lobby_guide_available', 'side_column', 'room_board_available', 'room_board_games',
+             'draw_brand', 'board_game_title', 'board_room_node', 'board_room_region', 'draw_room_board', 'draw_board_header', 'draw_password_visibility', 'draw_update_entry', 'draw_appointments_link', 'draw', 'draw_no_service']
 
 
 def block_end(source, start):
@@ -67,7 +68,7 @@ def main():
     defines = '\n'.join(line for line in main_source.splitlines()
                         if line.startswith('#define ') and line.split()[1].startswith(prefixes))
     extracted = '\n\n'.join(function(main_source, name) for name in FUNCTIONS)
-    node_labels = '\n\n'.join(function(node_source, name) for name in ('nodes_ui_name', 'nodes_ui_region'))
+    node_labels = '\n\n'.join(function(node_source, name) for name in ('nodes_ui_name', 'nodes_ui_region', 'nodes_ui_country'))
     source = '''#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,10 +86,16 @@ static int g_guide_page;
 enum { StateIdle, StateConnecting, StateInRoom, StateError };
 enum { ListUnavailable = -3, ListConnecting = -2, ListOffline = -1 };
 ''' + '\n'.join(typedef(main_source, name) for name in ['LanywhereStatus', 'GameInfo', 'TouchZone', 'View']) + '\n' + defines + '''
-static TouchZone g_zones[24];
+static TouchZone g_zones[48];
 static int g_zone_count;
 static LobbyRoomId g_rendered_rooms[LOBBY_PAGE_SIZE];
+static u64 g_rendered_games[LOBBY_PAGE_SIZE + 1];
 static LobbyNodeRoom g_rendered_node_rows[LOBBY_PAGE_SIZE];
+static bool g_board_title_animates, g_board_title_chinese;
+static unsigned g_board_title_pane;
+static u64 g_board_title_id, g_board_title_started;
+static u64 preview_now_ms;
+static u64 now_ms(void) { return preview_now_ms; }
 ''' + node_labels + '''
 static GameInfo sample_games[2];
 static const char *output_path;

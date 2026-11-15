@@ -1,4 +1,6 @@
-# Integrating LANywhere Self-host
+# Integrating RoomCircuit
+
+Play compatible Switch Local Wireless games online. Find rooms across nodes, test your connection, or schedule a session.
 
 Download the [latest integration ZIP](https://github.com/SEc-123/lanywhere-selfhost/releases/latest/download/switch-online-integration.zip). Copy `atmosphere/` and `switch/` to the SD root. Keep the help and license notices with the distributed archive.
 

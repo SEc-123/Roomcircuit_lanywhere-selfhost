@@ -41,7 +41,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 TARGET_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 VERSION_DEFINES	:= -DGITDESCVER="\"${TARGET_VERSION}\""
 
-APP_TITLE	:=	LANywhere
+APP_TITLE	:=	RoomCircuit
 APP_AUTHOR := LANywhere contributors
 APP_VERSION :=	${TARGET_VERSION}
 

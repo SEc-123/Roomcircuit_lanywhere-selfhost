@@ -323,7 +323,7 @@ namespace {
 
     public:
         tsl::elm::Element *createUI() override {
-            auto *frame = new tsl::elm::OverlayFrame("LANywhere", GITDESCVER);
+            auto *frame = new tsl::elm::OverlayFrame("RoomCircuit", GITDESCVER);
             auto *list = m_list = new tsl::elm::List();
             list->addItem(new tsl::elm::CategoryHeader(tr("Current session", "当前连接")));
             list->addItem(m_connection = new tsl::elm::ListItem(tr("Connection", "连接")));
@@ -341,8 +341,6 @@ namespace {
             });
             list->addItem(retry);
             list->addItem(m_notice = new tsl::elm::ListItem(""));
-            list->addItem(new tsl::elm::CategoryHeader(tr("Rooms and networks: use the LANywhere app", "建房、选网络：打开 LANywhere 主应用")));
-            list->addItem(new tsl::elm::ListItem(tr("Closing this overlay keeps your room connected.", "关闭浮层不会退出房间。")));
             frame->setContent(list);
             update();
             return frame;
@@ -367,7 +365,7 @@ namespace {
             const char *notice = g_protocol_mismatch ? tr("Install the module and overlay from the same release.", "请使用同一版本的插件和浮层。") :
                 !g_snapshot.config_ok ? tr("Module not loaded. Restart after installation.", "插件未加载，安装后请重启主机。") :
                 g_snapshot.relay_ok && g_snapshot.status.state == 1 ? tr("Waiting for the room connection.", "正在等待房间连接。") :
-                g_snapshot.relay_ok && g_snapshot.status.error[0] ? tr("Open LANywhere for connection details.", "请打开 LANywhere 查看连接详情。") :
+                g_snapshot.relay_ok && g_snapshot.status.error[0] ? tr("Open RoomCircuit for connection details.", "请打开 RoomCircuit 查看连接详情。") :
                 !g_notice.empty() ? g_notice.c_str() :
                 tr("Plugin changes apply on the next local-wireless session.", "插件开关在下次本地联机时生效。");
             m_notice->setText(notice);

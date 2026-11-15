@@ -212,7 +212,7 @@ def main():
     parser.add_argument('source', type=pathlib.Path)
     parser.add_argument('--app-title', help='expected NRO display title')
     parser.add_argument('--app-version', help='expected NRO display version')
-    parser.add_argument('--overlay-title', default='LANywhere', help='expected Tesla overlay display title')
+    parser.add_argument('--overlay-title', default='RoomCircuit', help='expected Tesla overlay display title')
     parser.add_argument('--require-capabilities', action='store_true',
                         help='require the linked sysmodule capability IPC function')
     parser.add_argument('--ipc-abi', type=int, help='expected app/sysmodule IPC capability major')

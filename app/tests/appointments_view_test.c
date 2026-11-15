@@ -23,6 +23,9 @@ static unsigned exchanges, subscription_updates;
 static bool disconnect, bad_subscriptions;
 static u32 subscription_result, alert_status;
 static const char *expected[8];
+static bool animation_overflow;
+static u64 animation_elapsed;
+static int animation_x;
 
 Result mock_appointment_dispatch_in_out(Service *service, unsigned command, const void *request, size_t size,
                                         void *output, size_t output_size)
@@ -154,16 +157,28 @@ void gfx_text_fit(int x, int y, int size, u32 color, const char *text, int width
     gfx_text(x, y, size, color, text);
 }
 
+bool gfx_text_marquee(int x, int y, int size, u32 color, const char *text, int width, u64 elapsed_ms)
+{
+    animation_elapsed = elapsed_ms;
+    animation_x = x;
+    gfx_text_fit(x, y, size, color, text, width);
+    return animation_overflow;
+}
+
 int gfx_text_width(int size, const char *label)
 {
-    return (int)strlen(label) * (size / 2);
+    int width = 0;
+    for (const unsigned char *p = (const unsigned char *)label; *p; ++p)
+        if ((*p & 0xc0) != 0x80) width += (*p & 0x80) ? size : size / 2;
+    return width;
 }
 
 int gfx_button(int x, int y, const char *button, const char *label)
 {
     assert(x >= 0 && y >= 0 && *button);
     capture(label);
-    return 140;
+    const int key_width = gfx_text_width(18, button) + 14;
+    return (key_width > 30 ? key_width : 30) + 10 + gfx_text_width(22, label);
 }
 
 void gfx_round_rect(int x, int y, int w, int h, int radius, u32 color)
@@ -178,17 +193,22 @@ void gfx_rect(int x, int y, int w, int h, u32 color)
 }
 
 static bool guide_tap, refresh_tap;
-static u64 rooms_tap;
+static u64 rooms_tap, game_taps[APPOINTMENT_PAGE_SIZE + 1];
 static u64 join_taps[APPOINTMENT_PAGE_SIZE];
 static void touch(int x, int y, int w, int h, u64 action)
 {
     assert(x >= 0 && y >= 0 && x + w <= GFX_W && y + h <= GFX_H && action);
     if (action == HidNpadButton_Right && x > 1000 && y > 648) guide_tap = true;
     if (action == HidNpadButton_R && x > 820 && y > 648) refresh_tap = true;
-    if (action == HidNpadButton_B && x >= 800 && y + h < 180) rooms_tap = action;
+    if (action == HidNpadButton_B && x >= 500 && x < 700 && y + h < 83) rooms_tap = action;
     if (action & APPOINTMENT_TOUCH_JOIN) {
-        assert((action & 0xff) < APPOINTMENT_PAGE_SIZE && x > 620 && x + w < 816);
+        assert((action & 0xff) < APPOINTMENT_PAGE_SIZE && x >= 1080 && x + w <= 1224);
         join_taps[action & 0xff] = action;
+    }
+    if ((action & APPOINTMENT_TOUCH_ROW) && (action & 0xff) >= 128) {
+        size_t index = (action & 0xff) - 128;
+        assert(index <= APPOINTMENT_PAGE_SIZE && x > 55 && x + w < 365);
+        game_taps[index] = action;
     }
 }
 
@@ -200,7 +220,9 @@ static void check_draw(const char *heading, const char *action, const char *row)
     expected[2] = row;
     rooms_tap = 0;
     memset(join_taps, 0, sizeof(join_taps));
+    memset(game_taps, 0, sizeof(game_taps));
     appointments_draw(&catalog, touch);
+    for (unsigned i = 0; i < 3; i++) if (expected[i]) fprintf(stderr, "Missing appointment text: %s\n", expected[i]);
     assert(!expected[0] && !expected[1] && !expected[2]);
 }
 
@@ -264,7 +286,7 @@ int main(void)
     assert(last_subscription.id == 2 && last_subscription.enabled && subscriptions.count == 2);
     check_draw("Appointments", "Leave appointment", "Room alerts connected.");
     assert(!page.rows[0].interested && !page.rows[1].interested);
-    check_draw("Appointments", "Leave appointment", "Ready opens 30 min before.");
+    check_draw("Appointments", "Leave appointment", "2026-11-09  21:50");
     assert(join_taps[0] & APPOINTMENT_TOUCH_JOINED);
     assert(join_taps[1] & APPOINTMENT_TOUCH_JOINED);
     assert(press(HidNpadButton_Y) == AppointmentStay); // Too early to get ready for row 2.
@@ -282,9 +304,9 @@ int main(void)
     exchange(AppointmentFollow);
     assert(last.id == 1 && subscriptions.count == 2 && page.rows[0].interested == 1);
     ui_set_language(true, false);
-    check_draw("约局", "全部房间", "1 人已准备");
+    check_draw("约局", "全部房间", "1");
     assert(rooms_tap);
-    check_draw("约局", "取消准备", "1 人已准备");
+    check_draw("约局", "取消准备", "1");
     check_draw("约局", "退出约局", "已加入");
     assert(press(HidNpadButton_Y) == AppointmentStay);
     exchange(AppointmentUnfollow);
@@ -304,7 +326,7 @@ int main(void)
 
     assert(press(HidNpadButton_L) == AppointmentStay);
     assert(appointments_active() && !appointments_list_active());
-    check_draw("约局", NULL, "宝可梦 紫");
+    check_draw("发起约局", NULL, "宝可梦 紫");
     assert(!rooms_tap);
     assert(press(HidNpadButton_A) == AppointmentStay);
     check_draw("设置本机时间", "确认约局", "38");
@@ -320,7 +342,10 @@ int main(void)
     exchange(AppointmentCreate);
     check_draw("Appointments", "Join appointment", "Appointment created.");
     assert(subscriptions.count == 1); // Creation and joining are distinct.
-    assert(press(HidNpadButton_A) == AppointmentStay);
+    // Third row's payload includes the B bit but is a touch, not Back.
+    assert(join_taps[2] & HidNpadButton_B);
+    appointments_capture_touch(join_taps[2]);
+    assert(press(join_taps[2]) == AppointmentStay);
     exchange(0);
     assert(last_subscription.id == 3 && last_subscription.app_id == violet);
 
@@ -396,6 +421,61 @@ int main(void)
     check_draw("Appointments", "Leave appointment", "2026-11-09  20:38");
     assert(join_taps[0] && !join_taps[1]);
 
-    puts("appointment UI: direct rooms link, local time, direct per-row join, independent ready, saved joins, stale touch, bilingual controls and retry");
+    appointments_close();
+    page = (AppointmentResponse){
+        .status = AppointmentOk, .count = 2, .next = 2, .now = now,
+        .rows = {{6, now + 60, lcid, scarlet, 0, 0, {0}},
+                 {7, now + 120, lcid, violet, 0, 0, {0}}}};
+    appointments_open(true, false);
+    assert(appointments_tick(++tick));
+    exchange(AppointmentList);
+    check_draw("Games on this page", "Games", "All games");
+    assert(game_taps[0] && game_taps[1] && game_taps[2] && !game_taps[3]);
+    assert(press(HidNpadButton_AnyLeft) == AppointmentStay);
+    assert(press(HidNpadButton_AnyDown) == AppointmentStay);
+    assert(press(HidNpadButton_AnyDown) == AppointmentStay);
+    check_draw("Appointment list", "Select", "2026-11-09  20:39");
+    assert(join_taps[0] && !join_taps[1]);
+    assert(press(HidNpadButton_A) == AppointmentStay);
+    assert(!appointments_worker_exchange(&service)); // Confirming the rail does not subscribe.
+    assert(press(HidNpadButton_A) == AppointmentStay);
+    exchange(0);
+    assert(last_subscription.id == 7 && last_subscription.app_id == violet);
+
+    // The rail keeps stable application identity across a refresh/reorder.
+    check_draw("Games on this page", "Leave appointment", "2026-11-09  20:39");
+    const u64 switch_game = game_taps[1];
+    appointments_capture_touch(switch_game);
+    const AppointmentRow moved = page.rows[0];
+    page.rows[0] = page.rows[1];
+    page.rows[1] = moved;
+    assert(press(HidNpadButton_R) == AppointmentStay);
+    exchange(AppointmentList);
+    assert(press(switch_game) == AppointmentStay);
+    check_draw("Games on this page", "Join appointment", "2026-11-09  20:38");
+    assert(join_taps[0] && !join_taps[1]);
+    assert(press(HidNpadButton_A) == AppointmentStay);
+    exchange(0);
+    assert(last_subscription.id == 6 && last_subscription.app_id == scarlet);
+
+    // Only the focused pane animates and each newly focused title starts at its beginning.
+    animation_overflow = true;
+    assert(press(HidNpadButton_AnyLeft) == AppointmentStay);
+    appointments_tick(++tick);
+    check_draw("Appointment list", "Select", NULL);
+    assert(appointments_title_animates() && animation_x < 365 && animation_elapsed == 0);
+    tick += 250;
+    appointments_tick(tick);
+    check_draw("Appointment list", "Select", NULL);
+    assert(appointments_title_animates() && animation_x < 365 && animation_elapsed == 250);
+    assert(press(HidNpadButton_A) == AppointmentStay);
+    appointments_tick(++tick);
+    check_draw("Games", "Leave appointment", NULL);
+    assert(appointments_title_animates() && animation_x > 365 && animation_elapsed == 0);
+    animation_overflow = false;
+    check_draw("Games", "Leave appointment", NULL);
+    assert(!appointments_title_animates());
+
+    puts("appointment UI: direct rooms link, local time, direct per-row join, independent ready, saved joins, stale touch, bilingual controls, retry, stable game rail, scoped controllers and focused long titles");
     return 0;
 }

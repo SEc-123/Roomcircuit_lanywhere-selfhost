@@ -39,7 +39,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #   NACP building is skipped as well.
 #---------------------------------------------------------------------------------
 TARGET		:=	lanywhere
-APP_TITLE	:=	LANywhere Self-host
+APP_TITLE	:=	RoomCircuit
 APP_AUTHOR	:=	augustocco
 APP_VERSION	?=	0.8.6
 BUILD		:=	build
