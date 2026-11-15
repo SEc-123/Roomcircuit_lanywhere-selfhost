@@ -18,7 +18,7 @@ Standard and fork client protocols cannot be mixed in one room: the first accept
 
 Use **Update** to install future releases, then restart Atmosphère. Install the first updater-enabled version with the SD ZIP. [Online updates](docs/distribution/ONLINE-UPDATES.md)
 
-The default nickname comes from the Switch name in System Settings. Press **−** to edit it or clear the field to use the Switch name again.
+Games that need a player name use the Switch name in System Settings automatically.
 
 [Game candidates](compatibility/PLAYER-GAMES.txt) · [Validation status](docs/distribution/VALIDATION.md) · [Pack and store integration](docs/distribution/INTEGRATORS.md)
 
@@ -52,6 +52,6 @@ Development assisted by OpenAI Codex. Portions of the code were AI-generated.
 
 安装首个带更新器的 SD 包后，今后可在应用内点「更新」，完成后重启虚拟系统。
 
-默认昵称使用系统设置中的 Switch 主机名称。按 **−** 可改名，清空后可恢复使用主机名称。
+游戏需要玩家名称时，自动使用系统设置中的 Switch 主机名称。
 
 [游戏候选清单](compatibility/PLAYER-GAMES.txt) · [验证记录](docs/distribution/VALIDATION.md)

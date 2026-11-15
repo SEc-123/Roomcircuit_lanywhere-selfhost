@@ -96,8 +96,8 @@ pasarela (`server/relay/lanplay.js`):
 
 ## Seguridad y límites del servidor
 
-- **Apodos:** se usa el apodo guardado en `config.ini` (`apodo=`). Si está vacío, se usa el nombre de la consola o un
-  apodo aleatorio si no está disponible. El servidor lo limpia (letras, números, espacio, `. _ -`; 2 a 20 caracteres; filtro de
+- **Nombres:** el cliente usa el nombre de la consola automáticamente en los campos de nombre del protocolo de juego.
+  Si no está disponible, usa `Player`. El servidor lo limpia (letras, números, espacio, `. _ -`; 2 a 20 caracteres; filtro de
   palabras ofensivas → "Jugador NNNN") y reescribe con esos apodos los nombres de los nodos de todo NetworkInfo que
   pasa por él (PUBLISH, SCAN_RESP y SYNC).
 - **UDP:** solo se acepta desde la misma IP pública que la conexión TCP del miembro (evita la reflexión con un token

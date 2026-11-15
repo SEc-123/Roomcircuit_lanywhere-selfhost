@@ -147,7 +147,7 @@ def package_files(version, server, port, embedded):
     if embedded is not None:
         setup = (
             "应用启动后会自动连接内置的联机服务器，显示大厅或连接状态。\n"
-            "玩家无需填写 IP 或端口。原有昵称和网络设置会保留。"
+            "玩家无需填写 IP 或端口。原有网络设置会保留。"
         )
     elif server is not None:
         setup = f"打开应用，确认服务器显示为 {server}:{port}。"
@@ -167,7 +167,7 @@ def package_files(version, server, port, embedded):
         "上游源码及作者信息 https://github.com/augustocco/lanywhere\n"
     ).encode("utf-8")
     if embedded is not None:
-        connection_zh = "   服务器地址已内置，无需输入地址或端口。原有昵称和网络设置会保留。"
+        connection_zh = "   服务器地址已内置，无需输入地址或端口。原有网络设置会保留。"
         connection_en = "   The server is built in; no address or port setup is needed. Existing preferences are kept."
     elif server is not None:
         connection_zh = "   如无原有配置，将随包的 lanywhere/config.ini 复制到卡上。"

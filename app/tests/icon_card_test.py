@@ -35,10 +35,17 @@ enum {C_ACCENT,C_BG_TOP,C_CARD,C_DIM,C_TEXT,C_OK,C_SEAT_OFF,C_WARN};
 ''' + game_type + r'''
 static bool g_zh;
 static GameCatalog g_catalog;static GameInfo fake;static int image_count,question_count;static char title[160];
+static const char private_owner[] = "Private room owner 073";
+static char details[160];
 static const GameInfo *game_info(u64 id) { assert(id==fake.id); return &fake; }
 static void gfx_round_rect(int x,int y,int w,int h,int r,u32 c){(void)x;(void)y;(void)w;(void)h;(void)r;(void)c;}
-static void gfx_text(int x,int y,int s,u32 c,const char *p){(void)x;(void)y;(void)s;(void)c;if(!strcmp(p,"?"))question_count++;}
-static void gfx_text_fit(int x,int y,int s,u32 c,const char *p,int w){(void)x;(void)y;(void)s;(void)c;(void)w;if(!title[0])snprintf(title,sizeof(title),"%s",p);}
+static void gfx_text(int x,int y,int s,u32 c,const char *p){(void)x;(void)y;(void)s;(void)c;assert(!strstr(p,private_owner));if(!strcmp(p,"?"))question_count++;}
+static void gfx_text_fit(int x,int y,int s,u32 c,const char *p,int w){
+    (void)x;(void)y;(void)c;(void)w;
+    assert(!strstr(p,private_owner));
+    if(s==23)snprintf(title,sizeof(title),"%s",p);
+    if(s==17)snprintf(details,sizeof(details),"%s",p);
+}
 static int gfx_text_width(int s,const char *p){(void)s;(void)p;return 10;}
 static void gfx_image(const Image *p,int x,int y,int w,int h){(void)p;(void)x;(void)y;(void)w;(void)h;image_count++;}
 static void seats(int x,int y,int p,int m){(void)x;(void)y;(void)p;(void)m;}
@@ -46,6 +53,7 @@ static void seats(int x,int y,int p,int m){(void)x;(void)y;(void)p;(void)m;}
 int main(void){
     LobbyGroup room={.code="ABC234",.game_id=0x222,.application_id=0x111,.metadata_flags=LOBBY_META_HOST};
     strcpy(room.title_en,"Host title");fake.id=0x111;fake.installed=true;fake.icon.px=(void*)1;
+    strcpy(room.host,private_owner);
     ui_set_language(false,false);
     strcpy(fake.name,"Local unrelated title");
     group_card(0,0,760,&room,NULL,false);
@@ -71,7 +79,13 @@ int main(void){
     group_card(0,0,760,&room,NULL,false);assert(!image_count&&question_count==1&&!local_game_info(&room));
     room.metadata_flags=LOBBY_META_HOST;image_count=question_count=0;title[0]=0;
     group_card(0,0,760,&room,NULL,false);assert(image_count==1&&!question_count&&!local_game_info(&room));
-    puts("Actual card: HOST and LOCAL display checks remain distinct from installed LCID launch gate");
+    room.room_access=RoomAccessHidden;
+    group_card(0,0,760,&room,"self",true);
+    assert(strstr(details,"Main server")&&strstr(details,"Password required"));
+    ui_set_language(true,false);
+    group_card(0,0,760,&room,"self",true);
+    assert(strstr(details,"主服务器")&&strstr(details,ui_text("Password required")));
+    puts("Actual card: game title and launch checks, password and source details, hidden legacy owner");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='switch-icon-route-') as d:

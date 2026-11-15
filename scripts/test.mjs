@@ -198,7 +198,7 @@ try {
         ['-std=c11', '-Wall', '-Wextra', '-Werror', 'app/tests/ui_text_test.c', '-o', uiBinary]);
     if (uiBuilt) await suite('App translation formats and fallback', uiBinary, []);
     await suite('App Chinese UI key coverage', process.env.PYTHON || 'python3', ['-B', 'app/tests/ui_text_coverage_test.py']);
-    await suite('App actual input routing and nickname boundaries', process.env.PYTHON || 'python3', ['-B', 'app/tests/input_routing_test.py']);
+    await suite('App input routing and room navigation', process.env.PYTHON || 'python3', ['-B', 'app/tests/input_routing_test.py']);
     await suite('Game password input, display and live refresh', process.env.PYTHON || 'python3', ['-B', 'app/tests/room_password_test.py']);
     await suite('Appointment UI, language, precise time and room handoff', process.env.PYTHON || 'python3', ['-B', 'app/tests/appointments_ui_test.py']);
     const localeBinary = path.join(temp, 'ui-locale-test');

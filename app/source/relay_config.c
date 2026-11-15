@@ -10,8 +10,8 @@
 #define CONFIG_LIMIT 511
 #define PATH_CAPACITY 512
 
-enum ConfigField { Server, Port, Public, Nickname, Provider, FieldCount };
-static const char *const keys[] = { "server=", "port=", "public=", "apodo=", "network=" };
+enum ConfigField { Server, Port, Public, Provider, FieldCount };
+static const char *const keys[] = { "server=", "port=", "public=", "network=" };
 
 static bool provider_valid(const char *value)
 {
@@ -237,13 +237,6 @@ bool relay_config_save_endpoint(const char *path, const char *server, uint16_t p
 bool relay_config_save_public(const char *path, bool public_groups)
 {
     return save_fields(path, (const char *const [FieldCount]){ [Public] = public_groups ? "1" : "0" });
-}
-
-bool relay_config_save_nickname(const char *path, const char *nickname)
-{
-    if (strpbrk(nickname, "\r\n"))
-        return false;
-    return save_fields(path, (const char *const [FieldCount]){ [Nickname] = nickname });
 }
 
 bool relay_config_save_provider(const char *path, const char *provider)

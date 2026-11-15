@@ -148,18 +148,18 @@ enum { StateIdle = 0, StateConnecting = 1, StateInRoom = 2, StateError = 3 };
 static Service g_lanywhere;
 static Service g_lanywhere_list;  // sesión propia del hilo de la lista
 
-static Result lanywhere_create(u64 game_id, const char *nick)
+static Result lanywhere_create(u64 game_id)
 {
     return serviceDispatchIn(&g_lanywhere, 0, game_id,
         .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_In },
-        .buffers = { { nick, strlen(nick) } });
+        .buffers = { { "", 0 } });
 }
 
-static Result lanywhere_join(u64 game_id, const char *code, const char *nick)
+static Result lanywhere_join(u64 game_id, const char *code)
 {
     return serviceDispatchIn(&g_lanywhere, 1, game_id,
         .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_In, SfBufferAttr_HipcMapAlias | SfBufferAttr_In },
-        .buffers = { { code, strlen(code) }, { nick, strlen(nick) } });
+        .buffers = { { code, strlen(code) }, { "", 0 } });
 }
 
 static void lanywhere_leave(void)
@@ -224,15 +224,6 @@ static bool lanywhere_protocol_supported(void)
 {
     u32 version = 0;
     return R_SUCCEEDED(serviceDispatchOut(&g_lanywhere, LANYWHERE_IPC_CAPABILITIES_COMMAND, version)) && version == LANYWHERE_IPC_MAJOR;
-}
-
-// Apodo con el que te ven los demás (el sysmodule crea uno al azar si no hay).
-static void lanywhere_nickname(char *out, size_t size)
-{
-    memset(out, 0, size);
-    serviceDispatch(&g_lanywhere, 5,
-        .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
-        .buffers = { { out, size - 1 } });
 }
 
 static LobbyPage validate_group_page(Result rc, LobbyPage page, u32 offset, LobbyGroup *out, size_t count)
@@ -541,44 +532,6 @@ static void switch_language(void)
     clear_game_cache();
 }
 
-// Apodo nuevo: letras, números, espacios y . _ - ; de 2 a 20 caracteres. Devuelve false si no vale.
-static bool clean_nickname(const char *in, char *out, size_t size)
-{
-    size_t o = 0, chars = 0;
-    bool space = true;  // sin espacios al principio ni repetidos
-    for (const unsigned char *p = (const unsigned char *)in; *p && o + 4 < size && chars < 20; ) {
-        if (*p >= 0x80) {  // letra con tilde, ñ...: el carácter UTF-8 entero
-            size_t n = *p >= 0xF0 ? 4 : *p >= 0xE0 ? 3 : 2;
-            for (size_t i = 0; i < n && p[i]; i++)
-                out[o++] = p[i];
-            p += n;
-            chars++;
-            space = false;
-        } else if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
-                   *p == '.' || *p == '_' || *p == '-') {
-            out[o++] = *p++;
-            chars++;
-            space = false;
-        } else if (*p == ' ' && !space) {
-            out[o++] = *p++;
-            chars++;
-            space = true;
-        } else {
-            p++;
-        }
-    }
-    while (o > 0 && out[o - 1] == ' ') {
-        o--;
-        chars--;
-    }
-    out[o] = '\0';
-    // The module's nickname field has 31 payload bytes. Reject overlong input
-    // instead of letting it cut a UTF-8 character in half when reloaded.
-    if (o > 31)
-        return false;
-    return chars >= 2;
-}
-
 // --- lista de grupos en un hilo (la consulta al servidor tarda) ---
 
 static Mutex g_list_lock;
@@ -765,7 +718,7 @@ static LobbyNodeRoom g_rendered_node_rows[LOBBY_PAGE_SIZE];
 static LobbyNodeRoom g_touched_node;
 static int g_zone_count;
 
-// Botón del mando según la letra que se dibuja ("−" para Minus).
+// Botón del mando según la letra que se dibuja.
 static u64 button_mask(const char *label)
 {
     if (strcmp(label, "→") == 0) return HidNpadButton_Right;
@@ -777,7 +730,7 @@ static u64 button_mask(const char *label)
     case 'R': return HidNpadButton_R;
     case 'L': return HidNpadButton_L;
     case '+': return HidNpadButton_Plus;
-    default:  return HidNpadButton_Minus;
+    default:  return 0;
     }
 }
 
@@ -862,7 +815,6 @@ typedef struct {
     int provider_choice;
     u32 host_region, host_regions;
     bool host_region_available;
-    char nickname[33];
     char message[128];
     u64 room_notice_until;
     bool room_notice_visible, room_notice_from_session, status_valid;
@@ -1052,12 +1004,6 @@ static void status_pill(const View *v)
     gfx_round_rect(x, y, w, 40, 20, C_CARD);
     gfx_round_rect(x + 18, y + 13, 14, 14, 7, dot);
     gfx_text(x + 42, y + 8, 22, C_TEXT, text);
-
-    if (v->nickname[0]) {
-        const int pw = 220, px = x - 16 - pw;
-        gfx_round_rect(px, y, pw, 40, 20, C_CARD);
-        gfx_text_fit(px + 18, y + 8, 22, C_CODE, v->nickname, pw - 36);
-    }
 }
 
 static void seats(int x, int y, int players, int max)
@@ -1198,15 +1144,8 @@ static void group_card(int x, int y, int w, const LobbyGroup *g, const char *sou
         }
     }
     int tx = x + 78, right = x + w - 24;
-    char host[112];
-    const char *note = room_title_note(g);
-    const char *owner = g->host[0] ? g->host : TR("alguien", "someone");
-    if (g->room_access == RoomAccessHidden)
-        snprintf(host, sizeof(host), "%s · %s", ui_text("Password required"), owner);
-    else if (note) snprintf(host, sizeof(host), "%s · %s", note, owner);
-    else snprintf(host, sizeof(host), TR("Grupo de %s", "%s's group"), owner);
-    gfx_text_fit(tx, y + 9, 23, C_TEXT, room_title(g, fallback, sizeof(fallback)), right - 190 - tx);
-    char details[160];
+    const char *note = g->room_access == RoomAccessHidden ? ui_text("Password required") : room_title_note(g);
+    char details[160] = {0};
     if (source && source[0]) {
         const char *label = strcmp(source, REGION_PROVIDER_COMMUNITY) == 0 ? region_label(RelayRegionCommunity) :
             strcmp(source, REGION_PROVIDER_EU) == 0 ? region_label(RelayRegionEurope) : provider_label(lobby_provider_index(source));
@@ -1217,11 +1156,15 @@ static void group_card(int x, int y, int w, const LobbyGroup *g, const char *sou
                 break;
             }
         }
-        if (region) snprintf(details, sizeof(details), "%s · %s · %s", label, region, host);
-        else snprintf(details, sizeof(details), "%s · %s", label, host);
-    } else
-        snprintf(details, sizeof(details), "%s", host);
-    gfx_text_fit(tx, y + 36, 17, C_DIM, details, right - 190 - tx);
+        snprintf(details, sizeof(details), "%s%s%s", label, region ? " · " : "", region ? region : "");
+    }
+    if (note) {
+        const size_t used = strlen(details);
+        snprintf(details + used, sizeof(details) - used, "%s%s", used ? " · " : "", note);
+    }
+    gfx_text_fit(tx, y + (details[0] ? 9 : 18), 23, C_TEXT, room_title(g, fallback, sizeof(fallback)), right - 190 - tx);
+    if (details[0])
+        gfx_text_fit(tx, y + 36, 17, C_DIM, details, right - 190 - tx);
 
     char count[16];
     snprintf(count, sizeof(count), "%u/%u", g->players, g->max_players);
@@ -1751,8 +1694,6 @@ static void draw(const View *v)
         buttons[n] = "B"; labels[n++] = TR("Volver", "Back");
     } else if (v->appointment_game_id) {
         buttons[n] = "B"; labels[n++] = ui_text("Appointments");
-    } else if (v->config_state == RelayConfigReady) {
-        buttons[n] = "−"; labels[n++] = TR("Apodo", "Nickname");
     }
     buttons[n] = "+"; labels[n++] = TR("Volver al juego", "Back to game");
     if (lobby_guide_available(v)) {
@@ -1802,23 +1743,6 @@ static bool ask_code(char *out, size_t size)
         if (*p >= 'a' && *p <= 'z')
             *p -= 32;
     return R_SUCCEEDED(rc) && strlen(out) == 6;
-}
-
-static bool ask_nickname(const char *current, char *out, size_t size)
-{
-    SwkbdConfig kbd;
-    if (R_FAILED(swkbdCreate(&kbd, 0)))
-        return false;
-    swkbdConfigMakePresetDefault(&kbd);
-    swkbdConfigSetHeaderText(&kbd, TR("Tu apodo", "Your nickname"));
-    swkbdConfigSetSubText(&kbd, ui_text("Visible to other players. Clear to use your Switch name."));
-    swkbdConfigSetGuideText(&kbd, ui_text("Switch name"));
-    swkbdConfigSetInitialText(&kbd, current);
-    swkbdConfigSetStringLenMin(&kbd, 0);
-    swkbdConfigSetStringLenMax(&kbd, 20);
-    Result rc = swkbdShow(&kbd, out, size);
-    swkbdClose(&kbd);
-    return R_SUCCEEDED(rc);
 }
 
 #if !RELAY_PROFILE_FIXED
@@ -2145,7 +2069,6 @@ int main(int argc, char **argv)
         if (!inventory_started) atomic_store(&g_inventory_running, false);
     }
     if (!g_ns_ready || !inventory_started) atomic_store(&g_inventory_finished, true);
-    const char *nick = "";  // el sysmodule usa el apodo de config.ini
 
     View v = {0};
     v.sel = -1;
@@ -2171,7 +2094,6 @@ int main(int argc, char **argv)
     if (!thread_ok)
         v.count = g_list_page.count = ListUnavailable;
 
-    if (v.config_state == RelayConfigReady) lanywhere_nickname(v.nickname, sizeof(v.nickname));
     draw(&v);
     View last = {0};
     u32 page_offsets[MAX_PAGE_HISTORY] = {0};
@@ -2569,7 +2491,7 @@ int main(int argc, char **argv)
         } else if (v.discovery == LobbyDiscoveryLegacy && v.status_valid && v.private_panel && !is_self_network(&v) && !lobby_provider_is_lanplay(v.config.provider) && v.config_state == RelayConfigReady && v.st.state != StateInRoom && v.st.state != StateConnecting && (down & HidNpadButton_A)) {
             draw_busy(TR("Creando la sala…", "Creating the room…"));
             v.message[0] = '\0';
-            if (R_FAILED(lanywhere_create(0, nick)))
+            if (R_FAILED(lanywhere_create(0)))
                 snprintf(v.message, sizeof(v.message), "%s", TR("No se pudo crear la sala. ¿Hay internet?", "Could not create the room. Is there internet?"));
             else
                 snprintf(v.message, sizeof(v.message), "%s", TR("Sala creada: pásale el código a tu amigo.", "Share the code with your friend."));
@@ -2580,24 +2502,10 @@ int main(int argc, char **argv)
                 snprintf(busy, sizeof(busy), TR("Entrando en la sala %s…", "Joining room %s…"), code);
                 draw_busy(busy);
                 v.message[0] = '\0';
-                if (R_FAILED(lanywhere_join(0, code, nick)))
+                if (R_FAILED(lanywhere_join(0, code)))
                     snprintf(v.message, sizeof(v.message), TR("No se pudo entrar en la sala %s.", "Could not join room %s."), code);
                 else
                     snprintf(v.message, sizeof(v.message), TR("Estás en la sala %s. Ya puedes abrir el juego.", "Joined %s. Open the game."), code);
-            }
-        } else if (v.config_state == RelayConfigReady && (down & HidNpadButton_Minus)) {
-            char typed[64] = {0}, clean[64] = {0};
-            if (ask_nickname(v.nickname, typed, sizeof(typed))) {
-                if (typed[0] && !clean_nickname(typed, clean, sizeof(clean))) {
-                    snprintf(v.message, sizeof(v.message), "%s", TR("Apodo demasiado largo o no válido.", "Nickname is too long or invalid."));
-                } else if (!ensure_config_dir() || !relay_config_save_nickname(RELAY_CONFIG_PATH, clean)) {
-                    config_write_error(&v);
-                } else {
-                    lanywhere_nickname(v.nickname, sizeof(v.nickname));
-                    snprintf(v.message, sizeof(v.message), "%s", v.st.state == StateInRoom ?
-                             TR("Apodo cambiado: se usará en la próxima sala.", "Nickname changed: it will be used in the next room.") :
-                             TR("Apodo cambiado.", "Nickname changed."));
-                }
             }
         } else if (can_change_visibility(&v) && (down & HidNpadButton_X)) {
             const bool visible = !v.config.public_groups;
@@ -2624,8 +2532,7 @@ int main(int argc, char **argv)
                               v.st.state != last.st.state || v.st.member_count != last.st.member_count ||
                               strcmp(v.st.code, last.st.code) != 0 || strcmp(v.st.error, last.st.error) != 0 ||
                               v.match_available != last.match_available || memcmp(&v.match, &last.match, sizeof(v.match)) != 0;
-        if (down || status_changed || strcmp(v.nickname, last.nickname) != 0 ||
-            strcmp(v.message, last.message) != 0)
+        if (down || status_changed || strcmp(v.message, last.message) != 0)
             dirty = true;
         if (dirty || now - last_draw >= 5000) {
             draw(&v);

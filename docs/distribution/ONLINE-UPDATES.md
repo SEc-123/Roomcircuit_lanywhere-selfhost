@@ -19,7 +19,7 @@ The preset managed build uses this update feed. Configurable builds (`RELAY_PROF
 
 ## 中文
 
-打开 LANywhere，出现新版时点「更新」。安装前关闭游戏，完成后重启 Atmosphère。昵称、设置和约局会保留。
+打开 LANywhere，出现新版时点「更新」。安装前关闭游戏，完成后重启 Atmosphère。设置和约局会保留。
 
 首次或手动安装时，在电脑解压 SD 包，把 `atmosphere/` 和 `switch/` 合并到卡根目录。后台缺失或版本不匹配时仍可打开更新入口。安装意外中断时，从自制软件菜单打开「LANywhere Recovery」处理，再按提示重启。
 

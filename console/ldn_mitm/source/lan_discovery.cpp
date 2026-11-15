@@ -862,7 +862,7 @@ namespace ams::mitm::ldn {
         }
 
         node->isConnected = 1;
-        // LANywhere: en una sala, los demás ven el apodo, nunca el nombre de usuario de la consola.
+        // LANywhere uses the Switch name for the game-facing field.
         if (lanywhere::InRoom()) {
             memset(node->userName, 0, sizeof(node->userName));
             lanywhere::Nickname(node->userName, sizeof(node->userName));

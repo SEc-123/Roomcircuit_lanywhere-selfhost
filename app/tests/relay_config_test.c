@@ -65,9 +65,7 @@ int main(void)
     assert(strcmp(config.server, "192.0.2.10") == 0 && config.port == 65535 && !config.public_groups);
 
     assert(relay_config_save_public(path, true));
-    assert(relay_config_save_nickname(path, "New Nick"));
-    assert(!relay_config_save_nickname(path, "New\nserver=192.0.2.9"));
-    assert_contents(path, "# keep me\r\nother=keep\nserver=192.0.2.10\nport=65535\npublic=1\napodo=New Nick\n");
+    assert_contents(path, "# keep me\r\napodo=Jugadór\r\nother=keep\nserver=192.0.2.10\nport=65535\npublic=1\n");
     assert(rename(path, backup) == 0);
     assert(relay_config_load(path, &config) == RelayConfigReady);
     assert(access(backup, F_OK) != 0);

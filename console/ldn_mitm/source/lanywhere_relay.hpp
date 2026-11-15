@@ -174,8 +174,7 @@ namespace ams::mitm::lanywhere {
     void ReportGameNetworkError(bool unavailable);
     void ReportGameRouteChanged();
 
-    // El nombre en la sala es siempre el apodo (config.ini "apodo="; uno al azar si no hay), nunca el nombre de
-    // usuario de la consola.
+    // Compatibility name for game/relay fields. Member identity uses the index, IP and token.
     void Nickname(char *out, size_t size);
     Result CreateRoom(u64 game_id, const DiscoveryRoute *route = nullptr, GameRoute *joined = nullptr);
     Result JoinRoom(const char *code, u64 game_id, const DiscoveryRoute *route = nullptr, GameRoute *joined = nullptr);

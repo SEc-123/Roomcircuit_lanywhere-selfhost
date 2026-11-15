@@ -1,4 +1,4 @@
-LANywhere Self-host 0.8.5 Beta
+LANywhere Self-host 0.8.6 Beta
 
 中文
 
@@ -7,7 +7,7 @@ LANywhere Self-host 0.8.5 Beta
 安装会替换相同模块 ID 的 ldn_mitm。重启进入兼容的 Atmosphère，再从相册打开 LANywhere Self-host。
    @CONNECTION_ZH@
 默认英文。点右上角或按 RS 切换中英文，设置会保留。右下角可「查看教程」。
-默认昵称使用 Switch 主机名称。按 − 可修改，清空后恢复使用主机名称。
+游戏需要玩家名称时，自动使用 Switch 主机名称。
 
 在线更新
 打开应用后可检查新版。点「更新」，关闭游戏后安装，完成后重启虚拟系统。
@@ -36,7 +36,7 @@ This replaces an existing ldn_mitm with the same module ID. Restart into compati
    @CONNECTION_EN@
 Use the top-right language control or press the right stick (RS) to switch languages. Your selection is remembered.
 Choose View guide at the bottom right for help.
-The default nickname is your Switch name. Press − to edit it or clear the field to use the Switch name again.
+Games that need a player name use your Switch name automatically.
 
 Online updates
 Open the app to check for updates. Select Update, close the game and install. Restart Atmosphère when prompted.

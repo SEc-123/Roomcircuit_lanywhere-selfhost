@@ -73,7 +73,7 @@ namespace fs {
 }
 #include "../source/device_nickname.hpp"
 using ams::mitm::lanywhere::CopyDeviceNickname;
-static std::mutex g_lock;static bool g_public=true;static char g_nick[32]{},g_error[64]{};
+static std::mutex g_lock;static bool g_public=true;static char g_error[64]{};
 struct SetSysDeviceNickName { char nickname[128]; };
 static std::string device_name;
 static bool settings_open=false,settings_init_fails=false,settings_read_fails=false;
@@ -116,7 +116,6 @@ bool TrustedCommunityEndpoint(u32, u16);
 /* ACTUAL_CHOOSE */
 /* ACTUAL_CAPTURE */
 /* ACTUAL_CURRENT */
-static char g_fallback_nick[32]{};
 /* ACTUAL_NICKNAME */
 /* ACTUAL_SEND */
 /* ACTUAL_READ */
@@ -136,12 +135,17 @@ static bool MakeMatchFilter(const ldn::ScanFilter &f,u8 (&out)[MatchFilterSize])
 /* ACTUAL_FIND */
 /* ACTUAL_FIND_PAGE */
 /* ACTUAL_FILTERED */
-static int enter_calls=0;static sockaddr_in entered_server{};static std::string entered_provider;static bool matched=false;
+static int enter_calls=0;static sockaddr_in entered_server{};static std::string entered_provider,entered_name;static bool matched=false;
 static bool MatchArmed(){return matched;}static void CancelMatch(){matched=false;}
 static Result Enter(u8,const u8*,size_t,const sockaddr_in *pinned=nullptr,u8 *error=nullptr,const u8 *owner=nullptr,const DiscoveryRoute *route=nullptr,GameRoute *joined=nullptr);
 Result JoinRoom(const char*,u64,const DiscoveryRoute*,GameRoute *joined=nullptr);
 /* ACTUAL_JOIN */
-static Result Enter(u8,const u8*,size_t,const sockaddr_in *pinned,u8*,const u8*,const DiscoveryRoute *route,GameRoute *joined){
+static Result Enter(u8 type,const u8 *body,size_t size,const sockaddr_in *pinned,u8*,const u8*,const DiscoveryRoute *route,GameRoute *joined){
+ if(type==T_Join && size>=CodeLength+NickLength) {
+   const char *name=reinterpret_cast<const char *>(body+CodeLength);
+   const auto *end=static_cast<const char *>(std::memchr(name,0,NickLength));
+   assert(end);entered_name.assign(name,end);
+ }
  enter_calls++;char provider[33]{};std::scoped_lock lock(g_lock);if(!ChooseEnterRoute(pinned,route,&entered_server,provider))return 1;entered_provider=provider;
  if(joined){*joined={};joined->discovery.ipv4=entered_server.sin_addr.s_addr;joined->discovery.port=entered_server.sin_port;util::Strlcpy(joined->discovery.provider,provider,sizeof(joined->discovery.provider));joined->room_token=91;joined->room_epoch=11;std::memcpy(joined->room_code,"ABC234",6);}return 0;
 }
@@ -177,37 +181,36 @@ int main(){
   };
   device_name=u8"  家里的   Switch  ";
   fs::files.clear();
-  fs::writes=fs::creates=0;
+  fs::writes=fs::creates=fs::read_opens=0;
   assert(nickname()==u8"家里的 Switch" && settings_attempts==1 && settings_reads==1 && settings_exits==1);
   assert(fs::files.empty() && fs::writes==0 && fs::creates==0);
   config(9);
   const std::string original=fs::files[ConfigPath]->value;
-  assert(nickname()=="Tester" && settings_attempts==1);
-  fs::files[ConfigPath]->value.replace(original.find("apodo=Tester"),12,"apodo=");
-  const std::string cleared=fs::files[ConfigPath]->value;
   assert(nickname()==u8"家里的 Switch" && settings_attempts==2);
   device_name="Couch's Switch";
-  assert(nickname()=="Couchs Switch" && fs::files[ConfigPath]->value==cleared);
+  assert(nickname()=="Couchs Switch" && fs::files[ConfigPath]->value==original);
   device_name="1234567890123456789012345";
   assert(nickname()=="12345678901234567890");
   device_name=std::string("AB")+"中国主机中国主机中国主机";
   const auto bounded=nickname();
   assert(bounded==u8"AB中国主机中国主机中" && bounded.size()==29);
+  char gameName[33];
+  Nickname(gameName,sizeof(gameName));
+  assert(std::string(gameName)==bounded);
   settings_init_fails=true;
   const unsigned closed=settings_exits;
-  assert(nickname()=="Tigre Veloz 10" && settings_exits==closed && !settings_open);
+  assert(nickname()=="Player" && settings_exits==closed && !settings_open);
   settings_init_fails=false;settings_read_fails=true;
-  assert(nickname()=="Tigre Veloz 10" && settings_exits==closed+1);
+  assert(nickname()=="Player" && settings_exits==closed+1 && !settings_open);
   settings_read_fails=false;
   for(const std::string &bad:{std::string("Switch\nnetwork=self"),std::string("Good\xc0\x80"),std::string(128,'x'),std::string(" "),std::string("X")}) {
    device_name=bad;
-   assert(nickname()=="Tigre Veloz 10" && fs::files[ConfigPath]->value==cleared);
+   assert(nickname()=="Player" && fs::files[ConfigPath]->value==original);
    ++checks;
   }
   device_name="Recovered Switch";
-  assert(nickname()==device_name && fs::writes==0 && fs::creates==0 && !settings_open);
-  fs::files[ConfigPath]->value=original;
-  assert(nickname()=="Tester" && fs::files[ConfigPath]->value==original);
+  assert(nickname()==device_name && fs::writes==0 && fs::creates==0 && fs::read_opens==0 && !settings_open);
+  assert(fs::files[ConfigPath]->value==original);
   checks+=10;
  }
  {
@@ -222,7 +225,7 @@ int main(){
   fs::files.clear();DiscoveryRoute route{};assert(CaptureDiscoveryRoute(&route)&&std::string(route.provider)=="self"&&route.port==htons(11460));checks++;
   config(9,"lanywhere-public");assert(CaptureDiscoveryRoute(&route)&&std::string(route.provider)=="lanywhere-public"&&route.port==htons(11460));checks++;
   for(const std::string &bad:{std::string("network=invalid\n"),std::string("network=self\nnetwork=lanywhere-public\n"),std::string(512,'x'),std::string("network=self\n\0tail",18)}){
-   fs::files[ConfigPath]=std::make_shared<fs::Data>(fs::Data{bad});fs::writes=fs::creates=0;assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0&&std::string(nick)=="Player");checks++;
+   fs::files[ConfigPath]=std::make_shared<fs::Data>(fs::Data{bad});fs::writes=fs::creates=0;assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0&&std::string(nick)==device_name);checks++;
   }
   config(9);for(int mode=0;mode<3;mode++){fs::denied=mode==0;fs::fail_size=mode==1;fs::short_read=mode==2;fs::writes=fs::creates=0;assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0);checks++;}fs::denied=fs::fail_size=fs::short_read=false;
   std::printf("Actual fixed-profile config/nickname slices: %u scenarios passed.\n",checks);return 0;
@@ -238,7 +241,7 @@ int main(){
  {Relay relay(2);config(relay.port);fs::read_opens=0;ldn::ScanFilter f;f.valid=false;u32 next=0;assert(FindGroupsFilteredPage(f,0,&next,found,nullptr,nullptr)==6);assert(fs::read_opens==1&&relay.connections==1&&relay.pages==1);checks++;}
  {Relay relay(0);relay.reject_select=true;config(relay.port);fs::read_opens=0;u32 next=0;assert(FindGroupsPage(42,0,&next,found,nullptr,nullptr)==-1);assert(relay.finds==0&&relay.connections==1&&other.connections==0);checks++;}
  {Relay relay(0);config(relay.port);DiscoveryRoute route{};assert(CaptureDiscoveryRoute(&route));config(other.port,"self");enter_calls=0;assert(R_FAILED(JoinRoom("ABC234",42,&route)));assert(enter_calls==0&&std::string(g_error)=="Network changed; search again.");checks++;
-  config(relay.port);enter_calls=0;assert(R_SUCCEEDED(JoinRoom("ABC234",42,&route)));assert(enter_calls==1&&entered_provider=="lanywhere-public"&&entered_server.sin_port==htons(relay.port));checks++;
+  config(relay.port);enter_calls=0;assert(R_SUCCEEDED(JoinRoom("ABC234",42,&route)));assert(enter_calls==1&&entered_provider=="lanywhere-public"&&entered_server.sin_port==htons(relay.port)&&entered_name==device_name);checks++;
   config(relay.port);GameRoute joined{};enter_calls=0;assert(R_SUCCEEDED(JoinRoom("ABC234",42,&route,&joined)));assert(enter_calls==1&&joined.room_token==91&&joined.room_epoch==11&&!std::strcmp(joined.room_code,"ABC234")&&std::string(joined.discovery.provider)=="lanywhere-public");checks++;
   config(other.port,"self");enter_calls=0;assert(R_SUCCEEDED(JoinRoom("ABC234",0,nullptr)));assert(enter_calls==1&&entered_provider=="self"&&entered_server.sin_port==htons(other.port));checks++;
   sockaddr_in fixed{};fixed.sin_family=AF_INET;fixed.sin_port=htons(relay.port);fixed.sin_addr.s_addr=htonl(INADDR_LOOPBACK);sockaddr_in chosen{};char provider[33]{};assert(ChooseEnterRoute(&fixed,nullptr,&chosen,provider)&&std::string(provider)=="self");assert(!ChooseEnterRoute(&fixed,&route,&chosen,provider));checks++;
@@ -300,7 +303,7 @@ int main(){
  }
  for(u8 error_code:{u8(7),u8(8),u8(4)}){Relay relay(0);relay.reject_select=true;relay.select_error=error_code;config(relay.port);DiscoveryRoute route{};assert(CaptureDiscoveryRoute(&route));sockaddr_in server{};char provider[33]{};assert(ResolveDiscoveryRoute(route,&server,provider));const char *error=nullptr;assert(ConnectServer(server,&error,100,provider)<0);assert(std::string(error)==(error_code==7?"External network is busy. Try later.":error_code==8?"Update relay to use external networks.":"External network is unavailable."));checks++;}
  for(const std::string &bad: {std::string("network=bogus\n"),std::string("network=self\nnetwork=lanywhere-public\n"),std::string(512,'x'),std::string("network=self\n\0tail",18)}){
-  fs::files[ConfigPath]=std::make_shared<fs::Data>(fs::Data{bad});fs::writes=fs::creates=0;DiscoveryRoute route{};assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0&&std::string(nick)=="Player");checks++;
+  fs::files[ConfigPath]=std::make_shared<fs::Data>(fs::Data{bad});fs::writes=fs::creates=0;DiscoveryRoute route{};assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0&&std::string(nick)==device_name);checks++;
  }
  config(other.port);for(int mode=0;mode<3;mode++){fs::denied=mode==0;fs::fail_size=mode==1;fs::short_read=mode==2;fs::writes=fs::creates=0;DiscoveryRoute route{};assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0);checks++;}fs::denied=fs::fail_size=fs::short_read=false;
  config(other.port);fs::files["sdmc:/lanywhere/config.ini.bak"]=fs::files[ConfigPath];fs::files.erase(ConfigPath);DiscoveryRoute recovered{};assert(CaptureDiscoveryRoute(&recovered)&&std::string(recovered.provider)=="lanywhere-public");checks++;

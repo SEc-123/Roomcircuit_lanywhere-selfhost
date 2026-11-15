@@ -125,8 +125,6 @@ namespace ams::mitm::lanywhere {
         constinit os::SdkMutex g_node_resolve_lock;
         os::Tick g_last_keepalive;
         bool g_public = true;  // The saved visibility preference applies to external networks.
-        char g_nick[NickLength];  // config.ini "apodo=" takes precedence over the device name.
-        char g_fallback_nick[NickLength];
 
         RelayQueue g_queue;
         FragmentAssembly g_fragments;
@@ -164,7 +162,6 @@ namespace ams::mitm::lanywhere {
             u16 port = DefaultPort;
             bool validPort = true;
 #endif
-            g_nick[0] = '\0';
             g_public = true;
             fs::FileHandle file;
             Result open_result = fs::OpenFile(std::addressof(file), ConfigPath, fs::OpenMode_Read);
@@ -205,7 +202,6 @@ namespace ams::mitm::lanywhere {
                             if (provider) util::Strlcpy(provider, value, 33);
                         }
                         if (std::strncmp(line, "public=", 7) == 0) g_public = line[7] != '0';
-                        if (std::strncmp(line, "apodo=", 6) == 0) util::Strlcpy(g_nick, line + 6, sizeof(g_nick));
                     }
                 } else validProvider = false;
                 fs::CloseFile(file);
@@ -1463,31 +1459,15 @@ namespace ams::mitm::lanywhere {
     }
 
     void Nickname(char *out, size_t size) {
-        std::scoped_lock lk(g_lock);
-        if (!LoadServer()) {
-            util::Strlcpy(out, "Player", size);
-            return; // Do not append to unreadable or damaged preferences.
-        }
-        if (!g_nick[0] && R_SUCCEEDED(::setsysInitialize())) {
+        if (!out || !size) return;
+        if (R_SUCCEEDED(::setsysInitialize())) {
             SetSysDeviceNickName device{};
             const Result result = ::setsysGetDeviceNickname(&device);
             ::setsysExit();
-            if (R_SUCCEEDED(result))
-                CopyDeviceNickname(device.nickname, sizeof(device.nickname), g_nick, sizeof(g_nick));
+            if (R_SUCCEEDED(result) && CopyDeviceNickname(device.nickname, sizeof(device.nickname), out,
+                                                          std::min(size, NickLength))) return;
         }
-        if (!g_nick[0] && !g_fallback_nick[0]) {
-            // Keep the fallback in memory so a later successful system read
-            // can take effect and an explicitly cleared override stays clear.
-            static const char *const animals[] = { "Tigre", "Zorro", "Panda", "Lobo", "Koala", "Gato", "Conejo", "Tortuga",
-                                                   "Pulpo", "Mapache", "Puma", "Jaguar", "Nutria", "Oso", "Pato", "Gallo" };
-            static const char *const traits[] = { "Veloz", "Valiente", "Feliz", "Turbo", "Estelar", "Audaz", "Genial",
-                                                  "Ninja", "Fugaz", "Rebelde", "Gigante", "Brillante" };
-            u8 r[3];
-            os::GenerateRandomBytes(r, sizeof(r));
-            util::SNPrintf(g_fallback_nick, sizeof(g_fallback_nick), "%s %s %u",
-                           animals[r[0] % 16], traits[r[1] % 12], 10 + r[2] % 90);
-        }
-        util::Strlcpy(out, g_nick[0] ? g_nick : g_fallback_nick, size);
+        util::Strlcpy(out, "Player", size);
     }
 
     namespace {

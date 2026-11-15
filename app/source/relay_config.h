@@ -28,5 +28,4 @@ bool relay_config_parse_port(const char *text, uint16_t *port);
 RelayConfigState relay_config_load(const char *path, RelayConfig *config);
 bool relay_config_save_endpoint(const char *path, const char *server, uint16_t port);
 bool relay_config_save_public(const char *path, bool public_groups);
-bool relay_config_save_nickname(const char *path, const char *nickname);
 bool relay_config_save_provider(const char *path, const char *provider);

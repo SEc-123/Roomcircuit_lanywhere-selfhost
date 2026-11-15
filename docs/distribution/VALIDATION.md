@@ -82,3 +82,7 @@ Hosting selection and exact room selection both use the corrected resolver. The 
 The app opens in the live room lobby. The actual input and rendering fixtures verify both routes between the lobby and Appointments, including filtered rooms and a visible return action. Saving a blank nickname selects the system default and preserves other preferences. The native tests cover valid Unicode device names, saved overrides, cleared overrides, invalid names, and settings service failure.
 
 For Issue #2, a new read-only check received a PONG from the original LANywhere community endpoint on the main relay's network. The Mac made a TCP connection but the endpoint closed it before returning a PONG. A warmed main directory exposed the original Community source. This checks reachability and discovery only. Joining the same game from two physical consoles and comparing in-game latency using the same selected node remain unverified.
+
+## 0.8.6 local acceptance package
+
+The app no longer shows or edits a player nickname in the lobby or room cards. The actual input and room-card fixtures cover both English and Chinese, including hidden-password rooms with an older host name present in the metadata. Legacy Create and Join keep their IPC layout. The native module reads the Switch name automatically for game name fields and uses a fixed fallback if needed. Tests cover valid Unicode, invalid system names, old nickname settings, and the selected name in the actual Join request.

@@ -67,7 +67,7 @@ namespace ams::mitm::lanywhere {
     }
 
     Result LanywhereService::CreateRoom(u64 game_id, const sf::InBuffer &nick) {
-        AMS_UNUSED(nick);  // el nombre es el apodo de config.ini
+        AMS_UNUSED(nick);  // Legacy request field. The compatibility name comes from the Switch.
         R_RETURN(lanywhere::CreateRoom(game_id));
     }
 

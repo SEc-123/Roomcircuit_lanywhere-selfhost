@@ -10,16 +10,9 @@ int main(int argc, char **argv)
     if (!catalog || fread(catalog, 1, bytes, table) != bytes || !game_catalog_open(&g_catalog, catalog, bytes))
         return 2;
     fclose(table);
-    char clean[64];
-    if (!clean_nickname("一二三四五六七八九十", clean, sizeof(clean)) ||
-        !clean_nickname("一二三四五六七八九十A", clean, sizeof(clean)) ||
-        clean_nickname("一二三四五六七八九十甲", clean, sizeof(clean)) ||
-        clean_nickname("一二三四五六七八九十AB", clean, sizeof(clean))) {
-        fprintf(stderr, "Nickname UTF-8 byte boundary failed\n"); failures++;
-    }
     const char *scenes[] = { "empty-public", "empty-local", "populated", "selected", "friends-menu",
                              "friends-room", "public-room", "match-wait", "match-error", "offline",
-                             "match-expired", "long-nickname", "six-rooms-message", "no-service", "wrong-version",
+                             "match-expired", "legacy-room-owner", "six-rooms-message", "no-service", "wrong-version",
                              "connection-error-list-ready", "language-unsaved", "guide-unsaved", "no-service-unsaved",
                              "network-choice", "unknown-game", "external-confirm", "lanplay-main", "lanplay-private-guard",
                              "network-config-unreadable", "network-config-invalid", "local-match", "inventory-error", "external-offline",
@@ -44,9 +37,8 @@ int main(int argc, char **argv)
             v.discovery = LobbyDiscoveryLegacy;
             strcpy(v.config.provider, "self"); v.capabilities = LOBBY_CAP_RESERVED_MATCH;
             v.config.public_groups = true; v.match_available = true; v.status_valid = true; v.response_ms = 86;
-            snprintf(v.nickname, sizeof(v.nickname), "%s", zh ? "示例玩家" : "SamplePlayer");
             if (scene == 1) v.config.public_groups = false;
-            if (scene == 2 || scene == 3 || scene == 12) {
+            if (scene == 2 || scene == 3 || scene == 11 || scene == 12) {
                 v.count = LOBBY_PAGE_SIZE; v.next_page = LOBBY_PAGE_SIZE;
                 for (int i = 0; i < LOBBY_PAGE_SIZE; i++) {
                     snprintf(v.groups[i].code, sizeof(v.groups[i].code), "ABCD%02d", i);
@@ -69,7 +61,6 @@ int main(int argc, char **argv)
             }
             if (scene == 9) v.count = ListOffline;
             if (scene == 10) { v.match.mode = LobbyQuick; v.match.state = MatchExpired; }
-            if (scene == 11) snprintf(v.nickname, sizeof(v.nickname), "%s", zh ? "这个中文昵称已经非常长" : "TwentyCharacterNameX");
             if (scene == 12) snprintf(v.message, sizeof(v.message), "%s", zh ? "选择的房间已关闭，请重新选择。" : "The selected room closed. Choose another room.");
             if (scene == 15) { v.st.state = StateError; v.room_notice_visible = true; snprintf(v.st.error, sizeof(v.st.error), "UDP offline; reconnect failed"); }
             if (scene >= 16 && scene <= 18) g_language_save_failed = true;

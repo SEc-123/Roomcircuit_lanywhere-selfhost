@@ -56,14 +56,6 @@ int main(void)
     assert(!ferror(file));
     assert(fclose(file) == 0);
     assert(memcmp(stored, expected, sizeof(expected) - 1) == 0);
-    assert(relay_config_save_nickname(path, ""));
-    assert_fixed(path, true);
-    const char reset[] = "server=198.51.100.2\nport=65535\npublic=1\napodo=\n";
-    file = fopen(path, "rb");
-    assert(file);
-    assert(fread(stored, 1, sizeof(stored), file) == sizeof(reset) - 1);
-    assert(!ferror(file) && fclose(file) == 0);
-    assert(memcmp(stored, reset, sizeof(reset) - 1) == 0);
 
     const char invalid[] = "server=broken\nport=not-a-port\npublic=0\napodo=Player\n";
     write_config(path, invalid, sizeof(invalid) - 1);
