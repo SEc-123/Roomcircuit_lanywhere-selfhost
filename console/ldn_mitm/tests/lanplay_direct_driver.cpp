@@ -128,6 +128,16 @@ int main(int argc, char **argv) {
     lanplay::Endpoint endpoint{htonl(INADDR_LOOPBACK), htons(port)};
     if (argc == 4)
         assert(inet_pton(AF_INET, argv[3], &endpoint.ipv4) == 1);
+    const bool probe_reachable = !std::strcmp(argv[1], "probe");
+    if (probe_reachable || !std::strcmp(argv[1], "probe-unreachable")) {
+        const auto start = std::chrono::steady_clock::now();
+        const bool reachable = lanplay::Probe(endpoint);
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        assert(reachable == probe_reachable);
+        assert(elapsed < std::chrono::milliseconds(1800));
+        assert(reachable || elapsed >= std::chrono::milliseconds(1450));
+        return 0;
+    }
     assert(lanplay::Configure(2, endpoint));
     if (!std::strcmp(argv[1], "hostidentity")) {
         lanplay::HostedRoom snapshot;

@@ -160,12 +160,46 @@ async function scanRun(mode) {
   console.log('PASS '+mode+' finds target after 96 unrelated advertisements');
  }finally{child.kill();router.close();}
 }
+async function probeRun(mode){
+ const router=dgram.createSocket('udp4'),pings=[];
+ const other=mode==='probe-unreachable'?dgram.createSocket('udp4'):null;
+ router.on('message',(packet,peer)=>{
+  if(packet.length!==5||packet[0]!==2)return;
+  pings.push(Buffer.from(packet));
+  if(mode==='probe'&&pings.length===2)router.send(packet.subarray(0,4),peer.port,peer.address);
+  if(other){
+   const mismatch=Buffer.from(packet);mismatch[1]^=1;
+   router.send(mismatch,peer.port,peer.address);
+   other.send(packet,peer.port,peer.address);
+  }
+ });
+ await new Promise(resolve=>router.bind(0,'127.0.0.1',resolve));
+ if(other)await new Promise(resolve=>other.bind(0,'127.0.0.1',resolve));
+ const child=spawn(process.argv[2],[mode,String(router.address().port)],{stdio:['ignore','pipe','pipe']});
+ let errors='';child.stderr.on('data',data=>errors+=data);
+ try{
+  const result=await new Promise(resolve=>child.on('close',(code,signal)=>resolve({code,signal})));
+  assert.equal(result.code,0,errors);
+  assert.equal(pings.length,2);
+  assert.deepEqual(pings[0],pings[1]);
+  console.log(mode==='probe'?'PASS probe recovers after the first UDP packet drops':'PASS probe rejects mismatched nonces and senders within the original deadline');
+ }finally{child.kill();router.close();other?.close();}
+}
 async function recoveryRun(mode){
  const router=dgram.createSocket('udp4'),ports=new Set();let origin=null,firstPort=0,injected=false;
+ const replacementPings=new Set();let replacementPort=0,echoError=null;
  router.on('message',(packet,peer)=>{
   firstPort ||= peer.port;ports.add(peer.port);origin=peer;tryInject();
   if(packet[0]===2&&mode!=='rebind')router.send(packet,peer.port,peer.address);
-  if(packet[0]===2&&mode==='rebind'&&peer.port!==firstPort)router.send(packet,peer.port,peer.address);
+  if(mode==='rebind'&&peer.port!==firstPort){
+   replacementPort ||= peer.port;
+   if(packet.length===5&&packet[0]===2&&peer.port===replacementPort){
+    router.send(packet,peer.port,peer.address,error=>{
+     if(error)echoError=error;
+     else replacementPings.add(packet.readUInt32LE(1));
+    });
+   }
+  }
  });
  await new Promise(resolve=>router.bind(0,'127.0.0.1',resolve));
  const child=spawn(process.argv[2],[mode,String(router.address().port)],{stdio:['ignore','pipe','pipe']});
@@ -181,14 +215,21 @@ async function recoveryRun(mode){
  child.stdout.on('data',b=>{output+=b;tryInject();});child.stderr.on('data',b=>errors+=b);
  try{const result=await new Promise(resolve=>child.on('close',(code,signal)=>resolve({code,signal})));
   assert.equal(result.code,0,errors||output);assert.match(output,/PASS /);
-  if(mode==='rebind')assert(ports.size>1,'outer UDP endpoint did not actually change');
+  if(mode==='rebind'){
+   assert(replacementPort,'outer UDP endpoint did not actually change');
+   assert.equal(echoError,null);
+   assert.equal(ports.size,2,'replacement UDP endpoint did not remain in use');
+   assert(replacementPings.size>=2,'replacement did not receive two distinct heartbeat probes');
+  }
   console.log(output.trim().split('\n').at(-1));
  }finally{child.kill();router.close();}
 }
 
 (async()=>{
  const mode=process.env.LANPLAY_TEST_MODE;
+ if(mode==='probe'||mode==='probe-unreachable'){assert(!publicEndpoint);return probeRun(mode);}
+ if(mode==='rebind'){assert(!publicEndpoint);return recoveryRun(mode);}
  if(mode){assert(publicEndpoint&&['host','join','forkhost','forkjoin'].includes(mode));return mode.startsWith('fork')?forkRun(mode):run(mode);}
- if(!publicEndpoint){await scanRun('scanfilter');await scanRun('scanexact');await recoveryRun('collision');await recoveryRun('rebind');}
+ if(!publicEndpoint){await probeRun('probe');await probeRun('probe-unreachable');await scanRun('scanfilter');await scanRun('scanexact');await recoveryRun('collision');await recoveryRun('rebind');}
  await run('host');await run('join');if(publicEndpoint)await delay(45000);await forkRun('forkhost');await forkRun('forkjoin');
 })().catch(error=>{console.error(error);process.exitCode=1;});

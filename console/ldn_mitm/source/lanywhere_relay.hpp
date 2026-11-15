@@ -186,6 +186,8 @@ namespace ams::mitm::lanywhere {
     void LeaveGameRoom(const GameRoute &owned);
     void GetStatus(Status *out);
     bool InRoom();
+    // A logical UDP room survives transport recovery. Zero means no room.
+    u64 UdpRoomEpoch();
     u32 MyIp();
     // Stream transport is a distinct bounded path; it never enters the lossy
     // LDN control queue. Epoch changes invalidate all game TCP byte streams.

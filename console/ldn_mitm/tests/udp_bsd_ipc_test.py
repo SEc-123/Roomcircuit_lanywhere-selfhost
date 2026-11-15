@@ -15,6 +15,8 @@ spec.loader.exec_module(slices)
 source = (ROOT/'console/ldn_mitm/source/bsd_spy.cpp').read_text()
 base = (Path(__file__).with_name('tcp_stream_ipc_harness.cpp.in')).read_text().split('using ams::mitm::bsd::BsdSpyService;')[0]
 base = base.replace('#include "tcp_stream_hooks.hpp"', '#include "tcp_stream_hooks.hpp"\n#include "virtual_receive.hpp"\n#include "udp_port_policy.hpp"\n#include "bsd_ipc_abi.hpp"\n#include "relay_queue.hpp"')
+base = base.replace('struct GameNamespace {', 'struct GameNamespace {\n std::function<void(u32)> after_dispatch;')
+base = base.replace('  std::memcpy(output,&out,output_size);', '  if (self.after_dispatch) self.after_dispatch(command);\n  std::memcpy(output,&out,output_size);')
 base = base.replace('&&ints[1]==1);const int real=::socket(AF_INET,SOCK_STREAM,0)', '&&(ints[1]==1||ints[1]==2));const int real=::socket(AF_INET,ints[1],0)')
 base = base.replace('const auto e=endpoint(0);if(command==14', '''tcpstream::Endpoint e{};
     const auto *wire=static_cast<const uint8_t*>(buffers[0].data);
@@ -56,8 +58,8 @@ base=base.replace('#define R_SUCCEED() return 0','#define R_SUCCEED() return 0\n
 a=base.index('namespace mitm::lanywhere {');b=base.index('namespace mitm::tcpstream {',a)
 base=base[:a]+r'''
 namespace mitm::lanywhere {
-static bool room=true;static RelayQueue queue;static int unavailable=0;static u32 sent_ip;static u16 sent_port,sent_source;static std::vector<u8> sent_data;
-static bool InRoom(){return room;}static bool IsVirtual(u32 ip){return (ip>>16)==0x0a0d;}
+static bool room=true;static u64 room_epoch=1;static RelayQueue queue;static int unavailable=0;static u32 sent_ip;static u16 sent_port,sent_source;static std::vector<u8> sent_data;
+static bool InRoom(){return room;}static u64 UdpRoomEpoch(){return room ? room_epoch : 0;}static bool IsVirtual(u32 ip){return (ip>>16)==0x0a0d;}
 static bool HasData(u16 port,u32 peer=0,u16 source=0){return queue.Has(port,peer,source);}
 static ssize_t ReceiveData(u16 port,void *data,size_t size,u32 *ip,u16 *src,bool peek,u32 peer=0,u16 source=0){return queue.Take(port,data,size,ip,src,peek,peer,source);}
 static bool SendData(u32 ip,u16 src,u16 dst,const void *data,size_t size){sent_ip=ip;sent_port=dst;sent_source=src;sent_data.assign(static_cast<const u8*>(data),static_cast<const u8*>(data)+size);return true;}
@@ -77,11 +79,12 @@ base=base[:a]+'''
  Result SendTo(sf::Out<s32>,sf::Out<s32>,s32,s32,const sf::InAutoSelectBuffer&,const sf::InAutoSelectBuffer&);
 ''' +base[b:]
 fields=source[source.index('        struct Destination {'):source.index('        os::Tick g_last_summary;')]
-helpers='\n'.join(slices.function(source,x) for x in ['SocketStats *Find(', 'void OpenSocketOwner(', 'void CloseSocketOwner(', 'template<class Update> void UpdateAliases(', 'bool DuplicateUdp(', 'SocketStats UdpSocket(', 'bool UdpReadable('])
+helpers='\n'.join(slices.function(source,x) for x in ['SocketStats *Find(', 'void OpenSocketOwner(', 'void CloseSocketOwner(', 'template<class Update> void UpdateAliases(', 'bool DuplicateUdp(', 'SocketStats UdpSocket('])
+helpers += source[source.index('        struct UdpWatch {'):source.index('        void Summary(')]
 base=base.replace('/* UDP_TABLE_SOURCE */',fields+'\n'+helpers)
 methods=['EnsureUdpPort','Socket','Poll','Select','Recv','RecvFrom','ReceiveVirtual','Fcntl','SetSockOpt','Send','SendTo','Bind','Connect','Listen','Close','Accept','GetPeerName','GetSockName','GetSockOpt','Shutdown','ShutdownAllSockets','DuplicateSocket','Read','Write','RecvMMsg','SendMMsg']
 base=base.replace(' Result Socket(', ' Result Listen(sf::Out<s32>,sf::Out<s32>,s32,s32);\n Result Socket(',1)
-functions='\n'.join(slices.function(source,s) for s in ['tcpstream::Owner TcpOwner(','u32 TcpDispatch(','void TcpAddress(','ssize_t TakeRoomPacket(s32 fd, tcpstream::Owner owner, void *buffer, size_t size, sockaddr_in *from, s32 flags) {','BsdSpyService::BsdSpyService(','BsdSpyService::~BsdSpyService(']+['Result BsdSpyService::'+name+'(' for name in methods])
+functions='\n'.join(slices.function(source,s) for s in ['tcpstream::Owner TcpOwner(','u32 TcpDispatch(','void TcpAddress(','ssize_t TakeRoomPacket(const SocketStats &socket, void *buffer, size_t size, sockaddr_in *from, s32 flags) {','BsdSpyService::BsdSpyService(','BsdSpyService::~BsdSpyService(']+['Result BsdSpyService::'+name+'(' for name in methods])
 base=base.replace('/* ACTUAL_SOURCE */',functions).replace('/* BSD_PREDICATE */','static bool ShouldMitm(const sm::MitmProcessInfo&){return true;}')
 sdk=(ROOT/'console/Atmosphere-libs/libstratosphere/include/stratosphere/ncm/ncm_content_meta_id.hpp').read_text()
 base=base.replace('/* SDK_PREDICATE */','')

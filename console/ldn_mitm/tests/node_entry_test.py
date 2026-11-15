@@ -50,6 +50,7 @@ static bool g_public=true,g_recovering=false;
 static char g_error[128]{},g_room_provider[33]="self",g_code[8]="ABC234";
 static sockaddr_in g_server{};
 static std::atomic<u64>g_stream_epoch{1};
+static u64 g_udp_room_epoch=0;
 static std::atomic<bool>g_stream_ready{false},g_direct_session{false};
 static std::atomic<u32>g_net_ip{0};
 static u32 g_token=0,g_capabilities=0,g_my_ip=0;
@@ -60,6 +61,7 @@ static bool LoadServer(sockaddr_in *server=nullptr,char *provider=nullptr){
 static Result ResultRelayFailed(){return 1;}
 static Result ResultCommunityUnreachable(){return 2;}
 static void SetError(const char *text){util::Strlcpy(g_error,text,sizeof(g_error));g_state=RelayState::Error;}
+static void Log(const char *,...){}
 static void Nickname(char *out,size_t size){util::Strlcpy(out,"Player",size);}
 static u64 le64(const u8 *p){u64 v=0;for(int i=0;i<8;i++)v|=u64(p[i])<<(8*i);return v;}
 static void put64(u8 *p,u64 v){for(int i=0;i<8;i++)p[i]=u8(v>>(8*i));}
@@ -110,6 +112,7 @@ static int central_entries=0;
 static Result Enter(u8,const u8*,size_t,const sockaddr_in*,u8*,const u8*,const DiscoveryRoute*,GameRoute*){central_entries++;return 0;}
 ''' + ''.join(actual(s) for s in (
     'Result CreateRoom(', 'Result JoinRoom(', 'void LeaveGameRoom(', 'int FindDirectNodeGroups(', 'bool CaptureTcpTransport(',
+    'u64 UdpRoomEpoch(',
 )) + r'''
 static void found(const char*,const void*,void*){}
 int main(){
@@ -118,14 +121,17 @@ int main(){
  assert(CaptureHostGameRoute(&host)&&host.discovery.node_id==2);
  assert(host.discovery.ipv4==htonl(0x0808080a)&&!strcmp(host.discovery.provider,"lanplay-nl"));
  GameRoute forged=host;forged.discovery.node_id=3;assert(!GameRouteStillCurrent(forged));
- GameRoute joined{};assert(CreateRoom(42,&host.discovery,&joined)==0);
+ GameRoute joined{};
+ lanplay::reachable=false;assert(CreateRoom(42,&host.discovery,&joined)==ResultCommunityUnreachable()&&UdpRoomEpoch()==0);
+ lanplay::reachable=true;assert(CreateRoom(42,&host.discovery,&joined)==0);
  assert(lanplay::hosts==1&&central_entries==0&&joined.discovery.node_id==2&&g_net_ip==0x0a0d1234);
+ assert(UdpRoomEpoch()==joined.room_epoch);
  assert(SetHostNode(3)!=0&&GetHostNode()==2);cases++;
  GameRoute captured{};assert(CaptureGameRoute(&captured)&&GameRouteStillCurrent(captured));
  u64 epoch=0;u32 caps=0,ip=0;assert(CaptureTcpTransport(&epoch,&caps,&ip)&&epoch==captured.room_epoch&&caps==(128|256)&&ip==0x0a0d1234);
  GameRoute old=joined;old.discovery.node_id=3;LeaveGameRoom(old);assert(lanplay::state.active);
  old=joined;old.room_epoch++;LeaveGameRoom(old);assert(lanplay::state.active);
- LeaveGameRoom(joined);assert(!g_direct_session&&!lanplay::state.active);cases++;
+ LeaveGameRoom(joined);assert(!g_direct_session&&!lanplay::state.active&&UdpRoomEpoch()==0);cases++;
  // A selected remote room overrides the host preference and preserves all raw identity.
  NodeRoomSelection request{};request.node_id=3;request.game_id=43;request.locator.flavor=NodeFlavorFork;
  request.locator.host_ip=LanPlayNet|0x5678;request.locator.bssid[0]=2;request.locator.network_id[16]=9;
@@ -158,6 +164,10 @@ int main(){
  // Self/original-public rows keep the established selector, not LAN Play synthetic codes.
  request={};request.node_id=0;request.game_id=42;strcpy(request.locator.code,"ABC234");assert(SelectNodeRoom(request)==0&&gateway_joins==1);
  request.node_id=1;assert(SelectNodeRoom(request)==0&&gateway_joins==2);cases++;
+ g_state=RelayState::InRoom;g_udp_room_epoch=g_stream_epoch.load();
+ const u64 udpRoom=UdpRoomEpoch();g_stream_epoch++;
+ assert(udpRoom&&UdpRoomEpoch()==udpRoom);
+ g_state=RelayState::Idle;assert(!UdpRoomEpoch());cases++;
  g_relay_region=RelayRegionEurope;assert(GetHostNode()==NODE_ID_INVALID);cases++;
  printf("PASS native public-node entry points: %u cases; direct route pinning, raw identity, lifecycle, stale routes and legacy selector\n",cases);
 }

@@ -67,6 +67,7 @@ constexpr uint32_t Network = 0x0a0d0000u, Broadcast = 0x0a0dffffu;
 constexpr size_t InfoBytes = 0x480, NodeBytes = 64, FrameBytes = 0x600, GameBytes = 65507;
 constexpr uint16_t LdnPort = 11452, ForkStreamPort = 11453, ForkControl = 0x4243, ForkGame = 0x474e;
 constexpr size_t MaxFlows = 16, MaxScans = 32, StreamBuffer = 16384, StreamCredit = 8192;
+constexpr uint64_t PingIntervalMs = 5000, RebindIntervalMs = 15000;
 bool Virtual(uint32_t ip) {
     return (ip & 0xffff0000u) == Network && (ip & 0xffffu) && (ip & 0xffffu) != 0xffffu && ip != 0x0a0d2501 &&
            ip != 0x0a0dfefe;
@@ -178,7 +179,7 @@ struct Impl {
     bool started = false, configured = false, active = false, hosting = false, joined = false,
          collision = false, renew_address = false;
     uint32_t node = 0, self = 0, sent = 0, received = 0, next_id = 1;
-    uint64_t epoch = 0, game = 0, last_ping = 0, last_pong = 0, last_beacon = 0;
+    uint64_t epoch = 0, game = 0, last_ping = 0, last_pong = 0, last_rebind_attempt = 0, last_beacon = 0;
     uint16_t relay_fragment_id = 0, wire_id = 0, sequence = 0;
     uint8_t own_member = 0, host_flavor = NodeFlavorNone;
     uint8_t pending_join[NodeBytes + 6]{};
@@ -285,13 +286,16 @@ struct Impl {
         return self->SendIp(data + 1, packet->tot_len) ? ERR_OK : ERR_IF;
     }
     bool SendRaw(const void *data, size_t size) {
-        if (socket < 0)
+        return SendRaw(socket, data, size);
+    }
+    bool SendRaw(int fd, const void *data, size_t size) {
+        if (fd < 0)
             return false;
         sockaddr_in to{};
         to.sin_family = AF_INET;
         to.sin_addr.s_addr = endpoint.ipv4;
         to.sin_port = endpoint.port;
-        const ssize_t count = ::sendto(socket, data, size, 0, reinterpret_cast<sockaddr *>(&to), sizeof(to));
+        const ssize_t count = ::sendto(fd, data, size, 0, reinterpret_cast<sockaddr *>(&to), sizeof(to));
         return count == static_cast<ssize_t>(size);
     }
     bool SendIp(const uint8_t *packet, size_t size) {
@@ -1342,21 +1346,29 @@ struct Impl {
     }
     void KeepAlive() {
         const uint64_t now = monotonic_ms();
-        if (now - last_ping >= 5000) {
+        if (now - last_ping >= PingIntervalMs) {
             last_ping = now;
             uint8_t ping[5];
             ping[0] = 2;
             Put32(ping + 1, static_cast<uint32_t>(now));
-            if (!SendRaw(ping, sizeof(ping)) || (last_pong && now - last_pong > 15000)) {
+            bool sent = now - last_pong < RebindIntervalMs && SendRaw(ping, sizeof(ping));
+            if (!sent && (!last_rebind_attempt || now - last_rebind_attempt >= RebindIntervalMs)) {
+                last_rebind_attempt = now;
                 const int replacement = ::socket(AF_INET, SOCK_DGRAM, 0);
-                if (replacement >= 0 && ::fcntl(replacement, F_SETFL, O_NONBLOCK) < 0) {
-                    ::close(replacement);
-                } else if (replacement >= 0) {
-                    if (socket >= 0)
-                        ::close(socket);
-                    socket = replacement;
+                if (replacement >= 0) {
+                    // Keep the old port bound until the replacement can send its own probe.
+                    if (::fcntl(replacement, F_SETFL, O_NONBLOCK) >= 0 && SendRaw(replacement, ping, sizeof(ping))) {
+                        if (socket >= 0)
+                            ::close(socket);
+                        socket = replacement;
+                        sent = true;
+                    } else {
+                        ::close(replacement);
+                    }
                 }
             }
+            if (!sent)
+                SendRaw(ping, sizeof(ping));
             // A tiny IPv4 scan refreshes the relay's source-to-endpoint mapping.
             LdnUdp(Broadcast, 0, nullptr, 0, false);
         }
@@ -1578,6 +1590,8 @@ uint32_t VirtualAddress(bool renew) {
 } // namespace
 
 bool Probe(const Endpoint &endpoint, unsigned timeout_ms) {
+    const uint64_t start = monotonic_ms();
+    const uint64_t deadline = start + timeout_ms;
     const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0)
         return false;
@@ -1589,18 +1603,32 @@ bool Probe(const Endpoint &endpoint, unsigned timeout_ms) {
     ping[0] = 2;
     Put32(ping + 1, lanplay_random());
     bool valid = false;
-    if (::sendto(fd, ping, sizeof(ping), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&destination),
-                 sizeof(destination)) == sizeof(ping)) {
-        pollfd request{fd, POLLIN, 0};
-        if (::poll(&request, 1, timeout_ms) > 0 && (request.revents & POLLIN)) {
+    for (unsigned attempt = 0; attempt < 2 && !valid; ++attempt) {
+        if (attempt && monotonic_ms() >= deadline)
+            break;
+        if (::sendto(fd, ping, sizeof(ping), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&destination),
+                     sizeof(destination)) != sizeof(ping))
+            continue;
+        // Give the retry the remaining time on the original probe deadline.
+        const uint64_t wait_until = attempt ? deadline : start + timeout_ms / 2;
+        do {
+            const uint64_t now = monotonic_ms();
+            const int wait_ms = now < wait_until ? static_cast<int>(std::min<uint64_t>(wait_until - now, INT32_MAX)) : 0;
+            pollfd request{fd, POLLIN, 0};
+            const int ready = ::poll(&request, 1, wait_ms);
+            if (ready < 0 && errno == EINTR)
+                continue;
+            if (ready <= 0 || !(request.revents & POLLIN))
+                break;
             uint8_t reply[8];
             sockaddr_in from{};
             socklen_t size = sizeof(from);
             const ssize_t bytes =
                 ::recvfrom(fd, reply, sizeof(reply), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&from), &size);
-            valid = (bytes == 4 || bytes == 5) && from.sin_addr.s_addr == endpoint.ipv4 &&
+            valid = (bytes == 4 || bytes == 5) && size >= sizeof(from) && from.sin_family == AF_INET &&
+                    from.sin_addr.s_addr == endpoint.ipv4 &&
                     from.sin_port == endpoint.port && !std::memcmp(reply, ping, bytes);
-        }
+        } while (!valid && monotonic_ms() < wait_until);
     }
     ::close(fd);
     return valid;
@@ -1640,6 +1668,7 @@ bool Configure(uint32_t node, const Endpoint &endpoint) {
     netif_set_addr(&impl->interface, &address, &mask, &gateway);
     impl->last_ping = 0;
     impl->last_pong = monotonic_ms();
+    impl->last_rebind_attempt = 0;
     return true;
 }
 int Scan(const void *filter, size_t filter_size, const NodeRoomLocator *selected, Found found, void *user) {
