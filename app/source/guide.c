@@ -25,7 +25,7 @@ static const GuidePage pages_zh[] = {
         "留空并确认可清除大厅中的密码设置。"
     }, "大厅密码用于主服务器。社区线路的密码在游戏里输入。" },
     { "约局", {
-        "打开应用即进入约局。大厅按十字键左可返回。",
+        "大厅按十字键左或点「约局」。按 B 回到房间列表。",
         "选中约局按 A 加入或退出。按 L 发起新约局。",
         "开场前 30 分钟起按 Y 准备，临近开场按 X 找房。"
     }, "加入可收开房提醒。房主按 Y 准备后开房可关联约局。" },
@@ -67,7 +67,7 @@ static const GuidePage pages_en[] = {
         "Leave it blank to clear the lobby password setting."
     }, "Lobby passwords are for Main server. On Community, enter the password in the game." },
     { "Appointments", {
-        "The app opens in Appointments. D-pad Left reopens it.",
+        "Press Left or tap Appointments in the lobby. B returns to rooms.",
         "A to join or leave a selected appointment. L to create.",
         "Y for Ready from 30 min before. X to find rooms."
     }, "Join for room alerts. Hosts can mark Ready before opening a room to link it." },

@@ -178,12 +178,14 @@ void gfx_rect(int x, int y, int w, int h, u32 color)
 }
 
 static bool guide_tap, refresh_tap;
+static u64 rooms_tap;
 static u64 join_taps[APPOINTMENT_PAGE_SIZE];
 static void touch(int x, int y, int w, int h, u64 action)
 {
     assert(x >= 0 && y >= 0 && x + w <= GFX_W && y + h <= GFX_H && action);
     if (action == HidNpadButton_Right && x > 1000 && y > 648) guide_tap = true;
     if (action == HidNpadButton_R && x > 820 && y > 648) refresh_tap = true;
+    if (action == HidNpadButton_B && x >= 800 && y + h < 180) rooms_tap = action;
     if (action & APPOINTMENT_TOUCH_JOIN) {
         assert((action & 0xff) < APPOINTMENT_PAGE_SIZE && x > 620 && x + w < 816);
         join_taps[action & 0xff] = action;
@@ -196,6 +198,7 @@ static void check_draw(const char *heading, const char *action, const char *row)
     expected[0] = heading;
     expected[1] = action;
     expected[2] = row;
+    rooms_tap = 0;
     memset(join_taps, 0, sizeof(join_taps));
     appointments_draw(&catalog, touch);
     assert(!expected[0] && !expected[1] && !expected[2]);
@@ -232,11 +235,16 @@ int main(void)
                  {2, now + 73 * 60, lcid, scarlet, 0, 0, {0}}}};
     UEvent wake = {0};
     appointments_init(&wake);
+    appointments_open(false, false);
+    check_draw("Appointments", "All rooms", "No upcoming appointments");
+    assert(rooms_tap && press(rooms_tap) == AppointmentBack);
+    appointments_close();
     appointments_open(true, false);
     assert(appointments_active() && appointments_list_active() && appointments_tick(tick));
     exchange(AppointmentList);
-    check_draw("View guide", "Back to lobby", "Refresh");
-    assert(guide_tap && refresh_tap);
+    check_draw("View guide", "All rooms", "Refresh");
+    assert(guide_tap && refresh_tap && rooms_tap);
+    assert(press(HidNpadButton_B) == AppointmentBack);
     assert(wake.signals >= 2);
     check_draw("Appointments", "Join appointment", "2026-11-09  21:02");
     assert(join_taps[0] && join_taps[1]);
@@ -274,6 +282,8 @@ int main(void)
     exchange(AppointmentFollow);
     assert(last.id == 1 && subscriptions.count == 2 && page.rows[0].interested == 1);
     ui_set_language(true, false);
+    check_draw("约局", "全部房间", "1 人已准备");
+    assert(rooms_tap);
     check_draw("约局", "取消准备", "1 人已准备");
     check_draw("约局", "退出约局", "已加入");
     assert(press(HidNpadButton_Y) == AppointmentStay);
@@ -295,6 +305,7 @@ int main(void)
     assert(press(HidNpadButton_L) == AppointmentStay);
     assert(appointments_active() && !appointments_list_active());
     check_draw("约局", NULL, "宝可梦 紫");
+    assert(!rooms_tap);
     assert(press(HidNpadButton_A) == AppointmentStay);
     check_draw("设置本机时间", "确认约局", "38");
     assert(press(HidNpadButton_AnyRight) == AppointmentStay);
@@ -385,6 +396,6 @@ int main(void)
     check_draw("Appointments", "Leave appointment", "2026-11-09  20:38");
     assert(join_taps[0] && !join_taps[1]);
 
-    puts("appointment UI: local time, direct per-row join, independent ready, saved joins, stale touch, bilingual controls and retry");
+    puts("appointment UI: direct rooms link, local time, direct per-row join, independent ready, saved joins, stale touch, bilingual controls and retry");
     return 0;
 }

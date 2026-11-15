@@ -640,11 +640,14 @@ void appointments_draw(const GameCatalog *catalog, AppointmentTouchZone touch)
     gfx_text(ListX, 36, 40, TEXT, ui_text("Appointments"));
     gfx_text(ListX, 128, 24, TEXT, ui_text(g_screen == ListScreen ? "Upcoming · local time" :
                                          g_screen == GameScreen ? "Select a game" : "Choose local time"));
-    if (g_screen == ListScreen) draw_list(catalog, touch);
-    else if (g_screen == GameScreen) draw_games(touch);
+    if (g_screen == ListScreen) {
+        action(SideX, 92, "B", "All rooms", HidNpadButton_B, touch);
+        draw_list(catalog, touch);
+    } else if (g_screen == GameScreen) draw_games(touch);
     else draw_time(touch);
     if (g_notice)
         gfx_text_fit(ListX, FooterY - 35, 20, GOLD, ui_text(g_notice), GFX_W - 2 * ListX);
     gfx_rect(0, FooterY, GFX_W, 1, PANEL);
-    action(ListX, FooterY + 20, "B", g_screen == ListScreen ? "Back to lobby" : "Back", HidNpadButton_B, touch);
+    if (g_screen != ListScreen)
+        action(ListX, FooterY + 20, "B", "Back", HidNpadButton_B, touch);
 }

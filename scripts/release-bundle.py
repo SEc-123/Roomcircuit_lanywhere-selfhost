@@ -65,14 +65,14 @@ def main():
                 entries[f'{target}/{path.relative_to(directory).as_posix()}'] = ((ROOT / path).read_bytes(), 0o644)
     start = f'''# Switch 联机 {version}
 
-安装用 `01_SD_INSTALL/{sd_zip.name}`，合并到 SD 根目录后重启虚拟系统。
+解压 `01_SD_INSTALL/{sd_zip.name}`，把 atmosphere 和 switch 合并到 SD 根目录，重启虚拟系统。
 SD ZIP 顶层 README.txt 是安装说明，GAMES.txt 是完整游戏候选名单。
-从相册打开 LANywhere Self-host。默认英文，右上角或按 RS 切换中英文。启动后显示约局，B 进入房间大厅，右下角可查看教程。地址已内置。房间大厅汇总各线路，并在房卡上显示来源。
+从相册打开 LANywhere Self-host，直接进入房间大厅。点右上角或按 RS 切换中英文。地址已内置。房卡上会显示节点来源。
 
 - 在游戏内用本地无线建房，默认走主服务器。大厅按 Y 看本机测速、筛地区并选节点，再回游戏建房；L 可邀请好友一起测速。
 - 在主服务器开房可分享或隐藏游戏密码，也能触发约局开房提醒。
 - 在大厅按 ZL+ZR 筛游戏、地区，A 检测并选择房间实际节点。有隐藏密码时先验证，再回游戏搜索。
-- 首页点「参加」可约多场，再点一次取消。按 L 进入发起页面，临近开场可按 Y 准备。
+- 在大厅按十字键左或点「约局」安排游戏。可参加多场，再点一次取消。按 L 发起，临近开场可按 Y 准备。
 
 源码、许可证及运维文档位于 `02_SOURCE`；测试记录位于 `04_VERIFICATION`。
 `SOURCE_SHA256.json` 记录源码提交及校验值。兼容清单是调查资料，不能视为全部真机通过。

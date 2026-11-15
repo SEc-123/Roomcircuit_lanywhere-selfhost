@@ -206,6 +206,9 @@ int main(int argc, char **argv)
             if ((scene == 0 || scene == 22) && touch_action_at(1180, 682) != HidNpadButton_Right) {
                 fprintf(stderr, "Bottom-right guide is not touchable in %s\n", path); failures++;
             }
+            if ((scene == 0 || scene == 36) && touch_action_at(SIDE_X + 10, 105) != HidNpadButton_Left) {
+                fprintf(stderr, "Top Appointments link is not touchable in %s\n", path); failures++;
+            }
             if (scene == 35 &&
                 (touch_action_at(100, 310) != HidNpadButton_A || touch_action_at(100, 380) != HidNpadButton_X ||
                  touch_action_at(100, 450) != HidNpadButton_B)) {

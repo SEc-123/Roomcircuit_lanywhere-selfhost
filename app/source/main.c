@@ -1667,6 +1667,13 @@ static void draw_update_entry(bool shortcut)
     add_zone(340, 36, width + 20, 52, TOUCH_UPDATE);
 }
 
+static void draw_appointments_link(const View *v)
+{
+    if (!appointment_entry_available(v)) return;
+    const int width = gfx_button(SIDE_X, 92, "←", ui_text("Appointments"));
+    add_zone(SIDE_X - 8, 85, width + 16, 43, HidNpadButton_Left);
+}
+
 static void draw(const View *v)
 {
     gfx_begin();
@@ -1700,6 +1707,7 @@ static void draw(const View *v)
     status_pill(v);
     draw_update_entry(!can_change_provider(v));
     draw_language_control();
+    draw_appointments_link(v);
     if (v->provider_panel) provider_column(v);
     else if (v->private_panel || v->private_room) private_column(v);
     else groups_column(v);
@@ -1750,16 +1758,10 @@ static void draw(const View *v)
     if (lobby_guide_available(v)) {
         buttons[n] = "→"; labels[n++] = ui_text("View guide");
     }
-    int footer_left = MARGIN;
     if (!v->provider_panel && can_change_provider(v)) {
         const char *network = provider_label(lobby_provider_index(v->config.provider));
         int nw = gfx_button(MARGIN, FOOTER_Y + 20, "LS", network);
         add_zone(MARGIN - 10, FOOTER_Y + 8, nw + 20, 56, HidNpadButton_StickL);
-        footer_left += nw + 30;
-    }
-    if (appointment_entry_available(v)) {
-        int width = gfx_button(footer_left, FOOTER_Y + 20, "←", ui_text("Appointments"));
-        add_zone(footer_left - 10, FOOTER_Y + 8, width + 20, 56, HidNpadButton_Left);
     }
     int total = 0;
     for (int i = 0; i < n; i++)
@@ -1809,9 +1811,10 @@ static bool ask_nickname(const char *current, char *out, size_t size)
         return false;
     swkbdConfigMakePresetDefault(&kbd);
     swkbdConfigSetHeaderText(&kbd, TR("Tu apodo", "Your nickname"));
-    swkbdConfigSetSubText(&kbd, TR("Es lo que verán los demás. No uses tu nombre real.", "Visible to other players."));
-    swkbdConfigSetGuideText(&kbd, TR("Usa un apodo corto", "Use a short nickname"));
+    swkbdConfigSetSubText(&kbd, ui_text("Visible to other players. Clear to use your Switch name."));
+    swkbdConfigSetGuideText(&kbd, ui_text("Switch name"));
     swkbdConfigSetInitialText(&kbd, current);
+    swkbdConfigSetStringLenMin(&kbd, 0);
     swkbdConfigSetStringLenMax(&kbd, 20);
     Result rc = swkbdShow(&kbd, out, size);
     swkbdClose(&kbd);
@@ -2160,15 +2163,16 @@ int main(int argc, char **argv)
     room_password_init(&g_refresh);
     g_list_enabled = v.config_state == RelayConfigReady;
     g_list_page = (LobbyPage){ .count = g_list_enabled ? ListConnecting : ListOffline, .next = LOBBY_PAGE_END };
+    v.count = g_list_page.count;
     Thread thread;
     bool thread_created = R_SUCCEEDED(smGetService(&g_lanywhere_list, "lanywhr")) &&
                           R_SUCCEEDED(threadCreate(&thread, list_thread, NULL, NULL, 0x8000, 0x2C, -2));
     bool thread_ok = thread_created && R_SUCCEEDED(threadStart(&thread));
     if (!thread_ok)
-        g_list_page.count = ListUnavailable;
+        v.count = g_list_page.count = ListUnavailable;
 
     if (v.config_state == RelayConfigReady) lanywhere_nickname(v.nickname, sizeof(v.nickname));
-    if (appointment_entry_available(&v)) appointments_open(thread_ok, false);
+    draw(&v);
     View last = {0};
     u32 page_offsets[MAX_PAGE_HISTORY] = {0};
     u64 last_draw = 0, last_capture_check = 0;
@@ -2582,9 +2586,9 @@ int main(int argc, char **argv)
                     snprintf(v.message, sizeof(v.message), TR("Estás en la sala %s. Ya puedes abrir el juego.", "Joined %s. Open the game."), code);
             }
         } else if (v.config_state == RelayConfigReady && (down & HidNpadButton_Minus)) {
-            char typed[64] = {0}, clean[64];
+            char typed[64] = {0}, clean[64] = {0};
             if (ask_nickname(v.nickname, typed, sizeof(typed))) {
-                if (!clean_nickname(typed, clean, sizeof(clean))) {
+                if (typed[0] && !clean_nickname(typed, clean, sizeof(clean))) {
                     snprintf(v.message, sizeof(v.message), "%s", TR("Apodo demasiado largo o no válido.", "Nickname is too long or invalid."));
                 } else if (!ensure_config_dir() || !relay_config_save_nickname(RELAY_CONFIG_PATH, clean)) {
                     config_write_error(&v);

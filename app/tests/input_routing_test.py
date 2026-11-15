@@ -60,14 +60,17 @@ def main():
         'FIND_APPOINTMENT_ROOMS': function(source, 'static void open_appointment_rooms('),
         'SELECT_ROOM': function(source, 'static const char *external_join_hint(') + '\n' +
                        function(source, 'static void select_room('),
-        'START_SCREEN': between(source, '    if (appointment_entry_available(&v)) appointments_open(thread_ok, false);',
+        'START_SCREEN': between(source, '    if (v.config_state == RelayConfigReady) lanywhere_nickname(v.nickname, sizeof(v.nickname));',
                                 '    View last = {0};', loop),
+        'OPEN_APPOINTMENTS': between(source, '        if ((down & HidNpadButton_Left) && appointment_entry_available(&v)) {',
+                                      '        if ((down & HidNpadButton_B) && v.appointment_game_id', loop),
         'GUIDE': between(source, '        if (guide_input(&v, down)) {', '        if (appointments_active()) {', loop) +
                  between(source, '        if (v.provider_panel) {', '        const int shown =', loop),
         'SELECTION': between(source, '        const int shown =', '#if !RELAY_PROFILE_FIXED', loop),
         'BUSINESS': between(source, '        if (v.external_confirm) {',
                             '        if (down & (HidNpadButton_A | HidNpadButton_X | HidNpadButton_Y | HidNpadButton_B))', loop),
         'TOUCH': function(source, 'static void add_zone(') + '\n' + function(source, 'static u64 touch_action_at('),
+        'APPOINTMENTS_LINK': function(source, 'static void draw_appointments_link('),
         'NO_SERVICE': function(source, 'static void draw_no_service(') + '\n' + function(source, 'static void no_service('),
         'LANG_CONTROL': function(source, 'static void draw_language_control('),
         'PAGE_LIMIT': re.search(r'^#define MAX_PAGE_HISTORY\s+\d+$', source, re.M).group(),

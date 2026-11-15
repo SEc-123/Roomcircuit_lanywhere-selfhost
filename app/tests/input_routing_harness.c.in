@@ -75,6 +75,9 @@ static void draw_busy(const char *s) { (void)s; calls.busy++; }
 static int guide_page_count(void) { return 5; }
 enum { GuideAppointmentsPage = 4 };
 static bool appointment_screen, appointment_list;
+static bool nickname_confirmed;
+static const char *entered_nickname;
+static char saved_nickname[64];
 static bool appointments_active(void) { return appointment_screen; }
 static bool appointments_list_active(void) { return appointment_screen && appointment_list; }
 static void appointments_open(bool worker, bool resume)
@@ -85,7 +88,8 @@ static void appointments_open(bool worker, bool resume)
     calls.appointment_open++;
 }
 /* SOURCE_GUIDE_INPUT */
-static void start_screen(View v, bool thread_ok)
+static void lanywhere_nickname(char *out, size_t size);
+static void start_screen(View v)
 {
 /* SOURCE_START_SCREEN */
 }
@@ -119,12 +123,23 @@ static void lanywhere_leave(void) { calls.leave++; }
 static Result lanywhere_create(u64 game, const char *nickname) { assert(game == 0); (void)nickname; calls.create++; return 0; }
 static Result lanywhere_join(u64 game, const char *code, const char *nickname) { assert(game == 0); assert(strlen(code) == 6); (void)nickname; calls.join++; return 0; }
 static bool ask_code(char *out, size_t size) { calls.ask_code++; snprintf(out,size,"ABC234"); return accept_code; }
-static bool ask_nickname(const char *current, char *out, size_t size) { (void)current; (void)out; (void)size; return false; }
+static bool ask_nickname(const char *current, char *out, size_t size) {
+    (void)current;
+    if (!nickname_confirmed) return false;
+    assert(entered_nickname && strlen(entered_nickname) < size);
+    snprintf(out, size, "%s", entered_nickname);
+    return true;
+}
 static bool ensure_config_dir(void) { return true; }
 bool relay_config_save_public(const char *path, bool enabled) { (void)path; (void)enabled; calls.public_write++; return save_ok; }
-bool relay_config_save_nickname(const char *path, const char *nickname) { (void)path; (void)nickname; calls.nickname_write++; return save_ok; }
+bool relay_config_save_nickname(const char *path, const char *nickname) {
+    (void)path;
+    calls.nickname_write++;
+    if (save_ok) snprintf(saved_nickname, sizeof(saved_nickname), "%s", nickname);
+    return save_ok;
+}
 bool relay_config_save_provider(const char *path, const char *provider) { (void)path; (void)provider; calls.provider_write++; return save_ok; }
-static void lanywhere_nickname(char *out, size_t size) { snprintf(out,size,"Test"); }
+static void lanywhere_nickname(char *out, size_t size) { snprintf(out,size,"%s",saved_nickname[0]?saved_nickname:"SwitchName"); }
 static void config_write_error(View *v) { (void)v; calls.write_error++; }
 
 static int step(View *target, u64 down) {
@@ -140,6 +155,7 @@ static int step(View *target, u64 down) {
 /* SOURCE_PLUS */
         phase = 2;
 /* SOURCE_GUIDE */
+/* SOURCE_OPEN_APPOINTMENTS */
 /* SOURCE_SELECTION */
         phase = 3;
 /* SOURCE_BUSINESS */
@@ -160,7 +176,7 @@ static bool ui_chinese(void) { return g_zh; }
 typedef struct { int x,y,w,h; u64 button; } TouchZone;
 static TouchZone g_zones[24];
 static int g_zone_count, applet_ticks;
-enum { MARGIN=56, FOOTER_Y=648, GFX_W=1280, C_BG_TOP=0, C_BG_BOTTOM=0, C_TEXT=0, C_PANEL=0, C_DIM=0, C_LINE=0, C_WARN=0 };
+enum { MARGIN=56, SIDE_X=848, FOOTER_Y=648, GFX_W=1280, C_BG_TOP=0, C_BG_BOTTOM=0, C_TEXT=0, C_PANEL=0, C_DIM=0, C_LINE=0, C_WARN=0 };
 static u64 guide_touch_action(int x,int y,int page) { (void)x;(void)y;(void)page;return HidNpadButton_B; }
 /* SOURCE_TOUCH */
 static void gfx_begin(void) {}
@@ -173,6 +189,7 @@ static void guide_draw_language(bool chinese) {(void)chinese;}
 static void gfx_round_rect(int x,int y,int w,int h,int r,u32 color) {(void)x;(void)y;(void)w;(void)h;(void)r;(void)color;}
 static void gfx_rect(int x,int y,int w,int h,u32 color) {(void)x;(void)y;(void)w;(void)h;(void)color;}
 static int gfx_button(int x,int y,const char *key,const char *label) {(void)x;(void)y;(void)key;(void)label;return 120;}
+/* SOURCE_APPOINTMENTS_LINK */
 static bool appletMainLoop(void) { return applet_ticks-- > 0; }
 static void padUpdate(PadState *pad) {(void)pad;}
 static u64 padGetButtonsDown(PadState *pad) {(void)pad;return test_update?HidNpadButton_StickL:0;}
@@ -181,6 +198,7 @@ static u64 touch_button(void) {return test_update?0:touch_action_at(1130,680);}
 
 static View lobby(void) {
     memset(&calls,0,sizeof(calls)); g_guide_open=false;g_guide_page=0;appointment_screen=appointment_list=false;g_zh=false;g_language_save_failed=false;atomic_store(&g_inventory_running,false);accept_code=true;save_ok=true;launch_ok=true;node_reachable=true;
+    nickname_confirmed=false;entered_nickname=NULL;snprintf(saved_nickname,sizeof(saved_nickname),"Saved");
     View v={0};v.sel=-1;v.discovery=LobbyDiscoveryLegacy;route_result=0;v.config_state=RelayConfigReady;v.config.public_groups=true;v.match_available=true;v.status_valid=true;v.capabilities=LOBBY_CAP_RESERVED_MATCH;v.next_page=LOBBY_PAGE_END;
     strcpy(v.config.provider,"self");
     return v;
@@ -191,15 +209,20 @@ static void choose(View *v) {v->count=1;strcpy(v->groups[0].code,"ABC234");v->gr
 
 int main(void) {
     View v=lobby();step(&v,HidNpadButton_A);assert(effects()==0);checked();
-    v=lobby();start_screen(v,true);
-    assert(appointment_screen&&appointment_list&&!g_guide_open&&calls.appointment_open==1);checked();
+    v=lobby();start_screen(v);
+    assert(!appointment_screen&&!g_guide_open&&calls.draw==1&&calls.appointment_open==0);checked();
+    step(&v,HidNpadButton_Left);
+    assert(appointment_screen&&appointment_list&&calls.appointment_open==1);checked();
     assert(!guide_input(&v,HidNpadButton_R));checked(); /* R reaches the appointment list as refresh. */
     assert(guide_input(&v,HidNpadButton_Right)&&g_guide_open&&g_guide_page==GuideAppointmentsPage);checked();
     assert(guide_input(&v,HidNpadButton_B)&&!g_guide_open&&appointment_screen&&calls.appointment_open==1);checked();
     appointment_list=false;assert(!guide_input(&v,HidNpadButton_Right)&&!g_guide_open);checked();
     appointment_screen=false;step(&v,0);assert(!appointment_screen&&calls.appointment_open==1);checked();
-    v=lobby();strcpy(v.config.provider,"lanywhere-public");start_screen(v,true);
-    assert(appointment_screen&&!g_guide_open&&calls.appointment_open==1);checked();
+    v=lobby();strcpy(v.config.provider,"lanywhere-public");start_screen(v);
+    assert(!appointment_screen&&!g_guide_open&&calls.draw==1&&calls.appointment_open==0);checked();
+    g_zone_count=0;draw_appointments_link(&v);
+    assert(g_zone_count==1&&touch_action_at(SIDE_X+10,105)==HidNpadButton_Left);checked();
+    step(&v,touch_action_at(SIDE_X+10,105));assert(appointment_screen&&calls.appointment_open==1);checked();
     assert(!strcmp(v.config.provider,"lanywhere-public"));checked();
     appointment_screen=false;
     assert(step(&v,HidNpadButton_Right)==2&&g_guide_open&&g_guide_page==0);checked();
@@ -225,8 +248,9 @@ int main(void) {
     assert(lobby_room_equal(room_password_target(&v),v.pinned));checked();
     v=lobby();v.discovery=LobbyDiscoveryUnified;v.next_page=6;v.unified.snapshot=73;
     step(&v,HidNpadButton_ZR);assert(v.page_index==1&&requested_snapshot==73);checked();
-    v=lobby();v.config_state=RelayConfigFileError;start_screen(v,true);
+    v=lobby();v.config_state=RelayConfigFileError;start_screen(v);
     assert(!appointment_screen&&!g_guide_open);checked();
+    g_zone_count=0;draw_appointments_link(&v);assert(!touch_action_at(SIDE_X+10,105));checked();
     v=lobby();choose(&v);step(&v,HidNpadButton_A);assert(calls.select==1&&calls.create==0);checked();
     v=lobby();strcpy(v.selection.code,"OLD234");step(&v,HidNpadButton_A);assert(effects()==0&&!v.selection.code[0]);checked();
     v=lobby();choose(&v);step(&v,HidNpadButton_Y);
@@ -452,6 +476,21 @@ int main(void) {
     assert(!clean_nickname("汉汉汉汉汉汉汉汉汉汉汉",nick,sizeof(nick)));checked();
     assert(clean_nickname("AB",nick,sizeof(nick))&&!strcmp(nick,"AB"));checked();
     assert(!clean_nickname("A",nick,sizeof(nick)));checked();
+    v=lobby();nickname_confirmed=true;entered_nickname="";
+    step(&v,HidNpadButton_Minus);
+    assert(calls.nickname_write==1&&!saved_nickname[0]&&!strcmp(v.nickname,"SwitchName"));checked();
+    v=lobby();nickname_confirmed=true;entered_nickname="   ";
+    step(&v,HidNpadButton_Minus);
+    assert(!calls.nickname_write&&!strcmp(saved_nickname,"Saved")&&strstr(v.message,"invalid"));checked();
+    v=lobby();nickname_confirmed=true;entered_nickname="  My Name  ";
+    step(&v,HidNpadButton_Minus);
+    assert(calls.nickname_write==1&&!strcmp(saved_nickname,"My Name")&&!strcmp(v.nickname,"My Name"));checked();
+    v=lobby();entered_nickname="";
+    step(&v,HidNpadButton_Minus);
+    assert(!calls.nickname_write&&!strcmp(saved_nickname,"Saved"));checked();
+    v=lobby();nickname_confirmed=true;entered_nickname="";save_ok=false;snprintf(v.nickname,sizeof(v.nickname),"Saved");
+    step(&v,HidNpadButton_Minus);
+    assert(calls.nickname_write==1&&calls.write_error==1&&!strcmp(saved_nickname,"Saved")&&!strcmp(v.nickname,"Saved"));checked();
     (void)g_zh;(void)g_es;
     v=lobby();v.node_picker_available=true;v.host_node=0;
     step(&v,HidNpadButton_Y);assert(node_picks==1&&v.host_node==2&&v.host_region==RelayRegionCommunity);checked();

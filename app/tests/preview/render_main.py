@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent.parent / 'source'
 FUNCTIONS = ['tr_error', 'clean_nickname', 'button_mask', 'add_zone', 'draw_language_control', 'touch_action_at', 'show_matching', 'external_room_expired', 'supports_reserved', 'is_self_network', 'can_enter_game_password', 'room_password_allows_launch', 'match_state_text', 'list_error_title', 'status_pill', 'seats',
              'local_game_info', 'room_catalog_match', 'game_info_has_lcid', 'room_title', 'display_game_icon', 'room_title_note', 'provider_label', 'region_label', 'group_card', 'matching_column', 'network_offline_hint', 'list_error_hint', 'groups_column', 'can_change_visibility', 'can_change_provider', 'can_change_host_region', 'current_host_line_available', 'is_self_room_context', 'can_share_game_password', 'provider_column', 'private_column',
-             'appointment_entry_available', 'lobby_guide_available', 'side_column', 'draw_password_visibility', 'draw_update_entry', 'draw', 'draw_no_service']
+             'appointment_entry_available', 'lobby_guide_available', 'side_column', 'draw_password_visibility', 'draw_update_entry', 'draw_appointments_link', 'draw', 'draw_no_service']
 
 
 def block_end(source, start):
@@ -44,7 +44,7 @@ def block_end(source, start):
 
 
 def function(source, name):
-    found = re.search(r'^static [^\n]*\b' + name + r'\s*\(', source, re.M)
+    found = re.search(r'^(?:static )?[^\n ]+[^\n]*\b' + name + r'\s*\(', source, re.M)
     if not found: raise ValueError('Missing rendering function: ' + name)
     opening = source.index('{', found.start())
     return source[found.start():block_end(source, opening)]
@@ -62,10 +62,12 @@ def main():
     args = parser.parse_args()
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=True)
     main_source = (SOURCE / 'main.c').read_text()
+    node_source = (SOURCE / 'nodes_ui.c').read_text()
     prefixes = ('C_', 'MARGIN', 'LIST_W', 'SIDE_X', 'SIDE_W', 'FOOTER_Y', 'TOUCH_', 'NETWORK_ROW_')
     defines = '\n'.join(line for line in main_source.splitlines()
                         if line.startswith('#define ') and line.split()[1].startswith(prefixes))
     extracted = '\n\n'.join(function(main_source, name) for name in FUNCTIONS)
+    node_labels = '\n\n'.join(function(node_source, name) for name in ('nodes_ui_name', 'nodes_ui_region'))
     source = '''#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,11 +89,7 @@ static TouchZone g_zones[24];
 static int g_zone_count;
 static LobbyRoomId g_rendered_rooms[LOBBY_PAGE_SIZE];
 static LobbyNodeRoom g_rendered_node_rows[LOBBY_PAGE_SIZE];
-static const char *nodes_ui_name(uint32_t id) { return g_zh ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en; }
-static const char *nodes_ui_region(uint8_t region) {
-    const char *labels[]={"Region unverified","Asia","Europe","Americas","Oceania","Africa"};
-    return ui_text(region<6 ? labels[region] : "All regions");
-}
+''' + node_labels + '''
 static GameInfo sample_games[2];
 static const char *output_path;
 static unsigned failures;
@@ -127,7 +125,8 @@ static void save_capture_if_requested(void) { if (!gfx_save_png(output_path)) fa
         (output / 'extracted-main-render.c').write_text(source)
     print(result.stdout, end='')
     paths = [SOURCE / name for name in ['main.c', 'gfx.c', 'gfx.h', 'ui_text.c', 'ui_text.h', 'guide.c', 'guide.h',
-                                       'lobby_model.c', 'lobby_model.h', 'game_catalog.c', 'game_catalog.h', 'relay_config.h']]
+                                       'lobby_model.c', 'lobby_model.h', 'game_catalog.c', 'game_catalog.h', 'relay_config.h',
+                                       'nodes_ui.c']]
     paths += [SOURCE.parent.parent / 'common' / name for name in ['relay_profile.h', 'regional_relay.h']]
     paths += [HERE / 'main_fixture.inc', HERE / 'render_main.py', HERE / 'host_switch.c', HERE / 'switch.h']
     report = {

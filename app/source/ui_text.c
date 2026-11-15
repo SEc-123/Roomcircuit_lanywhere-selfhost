@@ -322,6 +322,8 @@ static const UiTranslation translations[] = {
     {"That nickname is not valid: use 2 to 20 letters or numbers.", "昵称无效，请使用 2 至 20 个字母或数字。"},
     {"Nickname changed: it will be used in the next room.", "昵称已修改，将在下个房间生效。"},
     {"Nickname changed.", "昵称已修改。"},
+    {"Visible to other players. Clear to use your Switch name.", "其他玩家可见。清空可使用 Switch 主机名称。"},
+    {"Switch name", "Switch 主机名称"},
     {"Your groups will appear on this relay.", "你的房间将对服务器玩家可见。"},
     {"Your groups will only be visible on the local network.", "你的房间仅在本地网络可见。"},
     {"%u players", "%u 人"},
