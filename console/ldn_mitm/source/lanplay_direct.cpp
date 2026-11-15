@@ -1587,15 +1587,15 @@ bool Probe(const Endpoint &endpoint, unsigned timeout_ms) {
     ping[0] = 2;
     Put32(ping + 1, lanplay_random());
     bool valid = false;
-    if (::sendto(fd, ping, sizeof(ping), 0, reinterpret_cast<sockaddr *>(&destination),
+    if (::sendto(fd, ping, sizeof(ping), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&destination),
                  sizeof(destination)) == sizeof(ping)) {
         pollfd request{fd, POLLIN, 0};
-        if (::poll(&request, 1, timeout_ms) > 0) {
+        if (::poll(&request, 1, timeout_ms) > 0 && (request.revents & POLLIN)) {
             uint8_t reply[8];
             sockaddr_in from{};
             socklen_t size = sizeof(from);
             const ssize_t bytes =
-                ::recvfrom(fd, reply, sizeof(reply), 0, reinterpret_cast<sockaddr *>(&from), &size);
+                ::recvfrom(fd, reply, sizeof(reply), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&from), &size);
             valid = (bytes == 4 || bytes == 5) && from.sin_addr.s_addr == endpoint.ipv4 &&
                     from.sin_port == endpoint.port && !std::memcmp(reply, ping, bytes);
         }

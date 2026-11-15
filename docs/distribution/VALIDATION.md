@@ -63,9 +63,16 @@ The 0.7.0 and 0.8.1 parsers aborted on the genuine signed release manifest in a 
 
 The reporter's subsequent logs identify the release build of 0.8.1 on HOS 23.0.1 with Atmosphère 1.12.2. The updater thread's return addresses match `check_worker` → `update_manifest_parse` → `sodium_init` → `randombytes_stir` → `sodium_misuse` → `abort` in that exact binary. The same thread then entered libnx cleanup, which closes HID before exiting the applet. The main thread's `2345-0008` report follows from polling HID during that cleanup. The HOME Menu report arrived one second later. The reporter's retest remains the check for that final UI outcome.
 
-## 0.8.3 Beta — combined startup, network and installation review
+## 0.8.3 candidate — combined startup, network and installation review
 
 - Startup, manual check and installation share the signed manifest verification. The host regression checks native entropy registration, valid signatures and tamper rejection.
 - Updater and node tests acquire the shared libnx network in either order. The regression covers failed initialization, retry, partial worker startup and releasing the socket after both features finish.
 - A fresh manual install needs the five runtime files under `atmosphere/` and `switch/`. User data remains separate from the install and the signed update file map remains compatible.
 - Interrupted update rollback and an unowned Recovery app are covered separately. The explicit conflict preserves the file and settings, and the signed update succeeds after moving the leftover file away. The reporter's physical console retest remains open.
+
+
+## 0.8.4 local acceptance package
+
+The Issue #3 reporter confirmed that Album opens and node probes complete. Pressing A on public LAN Play nodes then froze the console. The pinned libnx resolver reproduced the sysmodule's abort at the weak allocation hook with an otherwise successful DNS response. With the paired hooks, the same fixture resolves successfully and handles failed DNS. The packaged AArch64 sysmodule links the hooks to its existing bounded allocator. The original Community, numeric addresses and Main server keep their existing routing paths.
+
+Hosting selection and exact room selection both use the corrected resolver. The host tests cover DNS success, failure, a late answer, an invalid address, numeric paths, and keeping the active route on selection failure. UDP node probing now uses nonblocking I/O. The production catalog fingerprint is unchanged by the Main server display label. The full SD package and signed updater were checked locally. The reporter still needs to retest public node selection on a physical Switch.

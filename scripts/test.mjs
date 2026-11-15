@@ -132,6 +132,7 @@ try {
     await suite('Complete runtime deployment package', process.execPath, ['--test', 'deploy/test-runtime-package.cjs']);
     await suite('Public network catalog checker', process.env.PYTHON || 'python3', ['-B', 'deploy/test-public-network-catalog.py']);
     await suite('Native selected-node route and lifecycle', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_entry_test.py']);
+    await suite('Native public-node DNS and SDK allocation boundary', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_dns_boundary_test.py']);
     await suite('Native node directory parser', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_directory_test.py']);
     await suite('Native LAN Play direct transport', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/lanplay_direct_test.py'], { ...process.env, NODE: process.execPath }, 180_000);
     await suite('Native fixed discovery route and configuration', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/discovery_route_test.py']);

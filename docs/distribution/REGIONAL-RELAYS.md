@@ -4,9 +4,9 @@
 
 The standard release provides on-console node measurement: lobby **Y** selects a hosting node, **R** filters regions, and **X** retests. Guests use the actual node of the room selected in the unified lobby. Direct LANywhere and supported Switch LAN Play routes keep gameplay off the central directory server; legacy rooms without usable direct identity retain explicitly labeled compatibility forwarding. See [Nodes and compatibility](../REGIONS.md) for player steps, region evidence, standard/fork limits and unfinished hardware acceptance.
 
-The central server still provides the room directory, appointments and optional shared measurements. Public nodes are independently operated. `LANYWHERE_ENABLE_PUBLIC_UPSTREAM=1` enables the original LANywhere directory source; `LANYWHERE_ENABLE_COMMUNITY_DIRECT=1` enables its direct hosting choice. The server's catalog and the client build must agree. A configured source's availability is separate from a player's measured connection. Short outages retry the captured room endpoint; recovery never changes it to another region. Appointment alerts and lobby password sharing use My server.
+The central server still provides the room directory, appointments and optional shared measurements. Public nodes are independently operated. `LANYWHERE_ENABLE_PUBLIC_UPSTREAM=1` enables the original LANywhere directory source; `LANYWHERE_ENABLE_COMMUNITY_DIRECT=1` enables its direct hosting choice. The server's catalog and the client build must agree. A configured source's availability is separate from a player's measured connection. Short outages retry the captured room endpoint; recovery never changes it to another region. Appointment alerts and lobby password sharing use Main server.
 
-0.8.0 标准包可在大厅按 **Y** 单人测速选节点，**R** 筛地区，**X** 重测；加入时跟随房间实际节点。支持直连的房间对局不经过自有服务器，缺少直连会话信息的旧房间继续兼容转发并明确标注。地区依据、协议边界和操作见[节点说明](../REGIONS.md)。下文的自管欧洲节点是额外部署选项，不是使用公共节点的前提。
+0.8.0 标准包可在大厅按 **Y** 单人测速选节点，**R** 筛地区，**X** 重测；加入时跟随房间实际节点。支持直连的房间对局不经过主服务器，缺少直连会话信息的旧房间继续兼容转发并明确标注。地区依据、协议边界和操作见[节点说明](../REGIONS.md)。下文的自管欧洲节点是额外部署选项，不是使用公共节点的前提。
 
 ## Optional self-managed regional connections
 

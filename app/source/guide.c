@@ -8,7 +8,7 @@ static const GuidePage pages_zh[] = {
         "大厅按 Y 选节点，按 R 筛选地区。",
         "回到游戏，在“本地无线”里创建房间。",
         "参考主机实测延迟，或直接选择推荐节点。"
-    }, "选好后在游戏里建房。约局提醒请用自有网络。" },
+    }, "选好后在游戏里建房。约局提醒请用主服务器。" },
     { "加入房间", {
         "在大厅按 A 选房，线路按房间来源自动切换。",
         "按提示打开游戏，或从 HOME 回游戏。",
@@ -23,7 +23,7 @@ static const GuidePage pages_zh[] = {
         "“在大厅分享”会让选房的玩家看到密码。",
         "“隐藏密码”需要玩家向房主获取密码。",
         "留空并确认可清除大厅中的密码设置。"
-    }, "大厅密码用于自有网络。社区线路的密码在游戏里输入。" },
+    }, "大厅密码用于主服务器。社区线路的密码在游戏里输入。" },
     { "约局", {
         "打开应用即进入约局。大厅按十字键左可返回。",
         "选中约局按 A 加入或退出。按 L 发起新约局。",
@@ -33,7 +33,7 @@ static const GuidePage pages_zh[] = {
         "确认联网，尽量使用相同游戏版本。",
         "使用“本地无线”，别选游戏的官方在线模式。",
         "仍失败：退出游戏房间，再重新选择或创建。"
-    }, "社区线路连不上时，可切回自有网络。" },
+    }, "社区线路连不上时，可切回主服务器。" },
     { "一起测速", {
         "在节点列表按 L，发起或输入临时测速码。",
         "双方留在测速页，查看共同推荐节点。",
@@ -50,7 +50,7 @@ static const GuidePage pages_en[] = {
         "Press Y in the lobby to choose a node. R filters regions.",
         "Return to the game and create a room in Local Wireless.",
         "Use measured latency or select a recommended node."
-    }, "Then host in-game. Use My server for appointment alerts." },
+    }, "Then host in-game. Use Main server for appointment alerts." },
     { "Join a room", {
         "Select with A. The lobby uses that room's source.",
         "Open the game when prompted, or return to it from HOME.",
@@ -65,7 +65,7 @@ static const GuidePage pages_en[] = {
         "Share in lobby lets players see the password.",
         "Keep password hidden: players ask the host for it.",
         "Leave it blank to clear the lobby password setting."
-    }, "Lobby passwords are for My server. On Community, enter the password in the game." },
+    }, "Lobby passwords are for Main server. On Community, enter the password in the game." },
     { "Appointments", {
         "The app opens in Appointments. D-pad Left reopens it.",
         "A to join or leave a selected appointment. L to create.",
@@ -75,7 +75,7 @@ static const GuidePage pages_en[] = {
         "Check internet. Use the same game version where possible.",
         "Choose Local Wireless in the game's menu.",
         "Still stuck? Leave the in-game room, then choose or host again."
-    }, "If Community is unreachable, switch to My server." },
+    }, "If Community is unreachable, switch to Main server." },
     { "Test with friends", {
         "Press L in the node list to create or enter a test code.",
         "Stay on the node screen to compare shared results.",

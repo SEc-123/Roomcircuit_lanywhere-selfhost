@@ -39,7 +39,7 @@ def read_app_metadata(data):
     }
 
 
-def inspect_elf(path, expected_symbol=None, expected_version=None):
+def inspect_elf(path, expected_symbol=None, expected_version=None, strong_functions=()):
     """Read Switch ELF section metadata without requiring a host readelf."""
     data = path.read_bytes()
     if len(data) < 64 or data[:7] != b'\x7fELF\x02\x01\x01' or struct.unpack_from('<H', data, 0x12)[0] != 183:
@@ -68,13 +68,18 @@ def inspect_elf(path, expected_symbol=None, expected_version=None):
     if not 0 < id_size <= 32 or 16 + id_size > len(note):
         raise ValueError(f'Invalid GNU build-ID length in {path}')
 
-    if expected_symbol is not None:
+    if expected_symbol is not None or strong_functions:
         symbol_table = by_name[b'.symtab']
         strings = contents(sections[symbol_table[6]])
-        symbols = struct.iter_unpack('<IBBHQQ', contents(symbol_table))
-        if not any(index != 0 and (info & 0xF) == 2 and expected_symbol in c_string(strings, name)
-                   for name, info, _, index, _, _ in symbols):
+        symbols = [(c_string(strings, name), info >> 4)
+                   for name, info, _, index, _, _ in struct.iter_unpack('<IBBHQQ', contents(symbol_table))
+                   if index != 0 and (info & 0xF) == 2]
+        if expected_symbol is not None and not any(expected_symbol in name for name, _ in symbols):
             raise ValueError(f'Missing linked {expected_symbol.decode()} function in {path}')
+        globals_ = {name for name, binding in symbols if binding == 1}
+        for name in strong_functions:
+            if name not in globals_:
+                raise ValueError(f'Missing strong {name.decode()} function in {path}')
     if expected_version is not None and expected_version.encode('ascii') + b'\0' not in contents(by_name[b'.rodata']):
         raise ValueError(f'Sysmodule ELF is missing build version {expected_version!r} in .rodata')
 
@@ -264,12 +269,14 @@ def main():
     capabilities = None
     if args.require_capabilities or args.ipc_abi is not None:
         capabilities = b'LanywhereService23GetProtocolCapabilities'
-    module_id, module_bss = inspect_elf(module, capabilities, version)
+    allocator_hooks = (b'__libnx_alloc', b'__libnx_free')
+    module_id, module_bss = inspect_elf(module, capabilities, version, allocator_hooks)
     verify_build_id(entries['main'], module_id, exefs)
     for name, suffix in [('main', '.nso'), ('main.npdm', '.npdm')]:
         if entries[name] != module.with_suffix(suffix).read_bytes():
             raise ValueError(f'SD build ExeFS {name} differs from the leaf artifact')
     print(f'  Sysmodule {version}, AArch64 ELF build ID {module_id.hex()}, .bss {module_bss} bytes')
+    print('  Linked strong libnx allocation and release hooks')
     ipc = verify_ipc_abi(source, args.ipc_abi) if args.ipc_abi is not None else None
     if ipc is not None:
         ipc['capability_handler_linked'] = True
@@ -284,6 +291,7 @@ def main():
         module_report = describe_artifact(source, exefs, digest)
         module_report.update({'format': 'PFS0 ExeFS', 'embedded_version': version,
                               'elf_build_id': module_id.hex(), 'static_bss_bytes': module_bss,
+                              'strong_libnx_hooks': [hook.decode('ascii') for hook in allocator_hooks],
                               'boot2_flag': flag.relative_to(source).as_posix(),
                               'entries': {name: {'bytes': len(data), 'magic': data[:4].decode('ascii'),
                                                  'sha256': hashlib.sha256(data).hexdigest()}

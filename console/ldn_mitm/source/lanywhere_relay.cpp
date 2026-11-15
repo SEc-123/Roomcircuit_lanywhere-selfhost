@@ -244,15 +244,17 @@ namespace ams::mitm::lanywhere {
 
         struct NodeDnsWatch {
             u32 handle;
+            os::Tick began;
             std::atomic<bool> done{false};
+            std::atomic<bool> expired{false};
         };
         alignas(0x1000) u8 g_node_dns_stack[0x4000];
         os::ThreadType g_node_dns_thread;
         void CancelNodeDns(void *argument) {
             auto *watch = static_cast<NodeDnsWatch *>(argument);
-            const auto began = os::GetSystemTick();
             while (!watch->done.load()) {
-                if ((os::GetSystemTick() - began).ToTimeSpan() >= TimeSpan::FromSeconds(3)) {
+                if ((os::GetSystemTick() - watch->began).ToTimeSpan() >= TimeSpan::FromSeconds(3)) {
+                    watch->expired = true;
                     static_cast<void>(::resolverCancel(watch->handle));
                     return;
                 }
@@ -272,19 +274,23 @@ namespace ams::mitm::lanywhere {
             if (::inet_pton(AF_INET, definition.host, &address.sin_addr) != 1) {
                 addrinfo hint{}; hint.ai_family = AF_INET; hint.ai_socktype = SOCK_DGRAM;
                 addrinfo *result = nullptr;
-                NodeDnsWatch watch{::resolverGetCancelHandle()};
+                NodeDnsWatch watch{::resolverGetCancelHandle(), os::GetSystemTick()};
                 if (!watch.handle || R_FAILED(os::CreateThread(&g_node_dns_thread, CancelNodeDns, &watch,
                         g_node_dns_stack, sizeof(g_node_dns_stack), 10))) return false;
                 os::SetThreadNamePointer(&g_node_dns_thread, "lanywhere::NodeDns");
                 os::StartThread(&g_node_dns_thread);
                 const int resolved = ::getaddrinfo(definition.host, nullptr, &hint, &result);
+                const bool late = (os::GetSystemTick() - watch.began).ToTimeSpan() >= TimeSpan::FromSeconds(3);
                 watch.done = true;
                 os::WaitThread(&g_node_dns_thread);
                 os::DestroyThread(&g_node_dns_thread);
-                if (resolved != 0 || !result) return false;
-                if (result->ai_addrlen < sizeof(sockaddr_in)) { ::freeaddrinfo(result); return false; }
-                address.sin_addr = reinterpret_cast<const sockaddr_in *>(result->ai_addr)->sin_addr;
-                ::freeaddrinfo(result);
+                const bool valid = resolved == 0 && !late && !watch.expired.load() && result &&
+                    result->ai_family == AF_INET && result->ai_addr && result->ai_addrlen >= sizeof(sockaddr_in);
+                if (valid)
+                    address.sin_addr = reinterpret_cast<const sockaddr_in *>(result->ai_addr)->sin_addr;
+                if (result)
+                    ::freeaddrinfo(result);
+                if (!valid) return false;
             }
             const u32 ip = ntohl(address.sin_addr.s_addr);
             if (!(ip >> 24) || (ip >> 24) >= 224 || (ip >> 24) == 127 || (ip >> 24) == 10 ||

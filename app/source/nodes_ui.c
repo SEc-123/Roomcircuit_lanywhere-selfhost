@@ -56,6 +56,9 @@ static NodeView snapshot(void)
 }
 const char *nodes_ui_name(uint32_t id)
 {
+    // The display label is independent of the server-verified catalog bytes.
+    if (id == 0)
+        return ui_text("Main server");
     if (id >= NODE_CATALOG_COUNT)
         return ui_text("Unknown node");
     return ui_chinese() ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en;
@@ -879,7 +882,7 @@ static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gat
     gfx_text(56, 267, 32, NODE_COLOR_TEXT, value);
     gfx_text(
         56, 330, 23, NODE_COLOR_DIM,
-        ui_text(gateway ? "Your connection to My server gateway" : "Your connection to this room's node"));
+        ui_text(gateway ? "Your connection to Main server gateway" : "Your connection to this room's node"));
     if (m->state == NodeMeasureReady) {
         snprintf(value, sizeof(value), ui_text("Replies %u/%u · variation %u ms"), m->received, m->sent,
                  m->jitter_ms);

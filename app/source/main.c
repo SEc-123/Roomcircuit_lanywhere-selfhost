@@ -1171,7 +1171,7 @@ static const char *region_label(u32 region)
 {
     if (region == RelayRegionEurope) return ui_text("Europe");
     if (region == RelayRegionCommunity) return ui_text("Community · LANywhere");
-    return ui_text("My server");
+    return ui_text("Main server");
 }
 
 static void group_card(int x, int y, int w, const LobbyGroup *g, const char *source, bool selected)
@@ -1482,7 +1482,7 @@ static bool appointment_entry_available(const View *v)
 static void open_appointment_rooms(View *v, u64 game_id, bool worker_available)
 {
     if (v->discovery == LobbyDiscoveryLegacy && !is_self_network(v)) {
-        snprintf(v->message, sizeof(v->message), "%s", ui_text("Press LS and choose My server to find these rooms."));
+        snprintf(v->message, sizeof(v->message), "%s", ui_text("Press LS and choose Main server to find these rooms."));
         return;
     }
     v->appointment_game_id = game_id;

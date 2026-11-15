@@ -206,7 +206,7 @@ int main(void) {
     assert(step(&v,HidNpadButton_B)==2&&!g_guide_open&&!appointment_screen);checked();
     open_appointment_rooms(&v,17,true);
     assert(!calls.page&&!v.appointment_game_id&&!strcmp(v.config.provider,"lanywhere-public"));checked();
-    assert(!strcmp(v.message,"Press LS and choose My server to find these rooms."));checked();
+    assert(!strcmp(v.message,"Press LS and choose Main server to find these rooms."));checked();
     v=lobby();open_appointment_rooms(&v,17,true);
     assert(calls.page==1&&filtered_game==17&&v.appointment_game_id==17&&v.count==ListConnecting);checked();
     v=lobby();v.discovery=LobbyDiscoveryUnknown;strcpy(v.config.provider,"lanplay-nl");
