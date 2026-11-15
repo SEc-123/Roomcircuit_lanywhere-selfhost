@@ -15,8 +15,7 @@ sdk_predicate='\n'.join(re.findall(r'inline constexpr const ApplicationId Applic
 table = source[source.index('        struct Destination {'):source.index('        os::Tick g_last_summary;')]
 helpers = '\n'.join(slices.function(source, signature) for signature in [
     'SocketStats *Find(', 'void OpenSocketOwner(', 'void CloseSocketOwner(',
-    'template<class Update> void UpdateAliases(', 'bool DuplicateUdp(', 'SocketStats UdpSocket('])
-helpers += source[source.index('        struct UdpWatch {'):source.index('        void Summary(')]
+    'template<class Update> void UpdateAliases(', 'bool DuplicateUdp(', 'SocketStats UdpSocket(', 'bool UdpReadable('])
 template = template.replace('/* UDP_TABLE_SOURCE */', table + '\n' + helpers)
 template=template.replace('/* SDK_PREDICATE */',sdk_predicate).replace('/* BSD_PREDICATE */',slices.function(header,'static bool ShouldMitm('))
 with tempfile.TemporaryDirectory(prefix='tcp-actual-ipc-') as tmp:

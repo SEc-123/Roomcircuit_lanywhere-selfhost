@@ -651,7 +651,6 @@ namespace ams::mitm::ldn {
             // Retain LDN state while the transport is recovering. A final
             // error or explicit leave must also disconnect the game's view.
             if (status.state != lanywhere::RelayState::Connecting) {
-                lanywhere::Log("ldn: virtual room ended, relay state %u", static_cast<unsigned>(status.state));
                 this->disconnect_reason = DisconnectReason::SignalLost;
                 this->hostMember = -1;
                 this->resetStations();

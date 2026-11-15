@@ -1,5 +1,4 @@
 #include "tcp_stream_hooks.hpp"
-#include "bsd_ipc_abi.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -83,7 +82,7 @@ namespace ncm {using ProgramId=sm::Number;struct ApplicationId{u64 value;static 
 /* SDK_PREDICATE */
 }
 namespace sf {template<class T>struct Out{T *p;void SetValue(T n)const{*p=n;}};struct InAutoSelectBuffer{const u8 *p;size_t n;const u8 *GetPointer()const{return p;}size_t GetSize()const{return n;}};struct OutAutoSelectBuffer{u8 *p;size_t n;u8 *GetPointer()const{return p;}size_t GetSize()const{return n;}};using OutMapAliasBuffer=OutAutoSelectBuffer;struct MitmServiceImplBase{std::shared_ptr<Service> m_forward_service;sm::MitmProcessInfo m_client_info;MitmServiceImplBase(std::shared_ptr<Service> &&s,const sm::MitmProcessInfo &i):m_forward_service(std::move(s)),m_client_info(i){}};}
-namespace mitm::lanywhere {static bool InRoom(){return true;}static u64 UdpRoomEpoch(){return 1;}static bool IsVirtual(u32 ip){return (ip>>16)==0x0a0d;}static bool HasData(u16,u32=0,u16=0){return false;}static int unavailable=0;static void ReportTcpUnavailable(){unavailable++;}}
+namespace mitm::lanywhere {static bool InRoom(){return true;}static bool IsVirtual(u32 ip){return (ip>>16)==0x0a0d;}static bool HasData(u16,u32=0,u16=0){return false;}static int unavailable=0;static void ReportTcpUnavailable(){unavailable++;}}
 namespace mitm::tcpstream {static thread_local Proxy *selected;Proxy &TestGlobal(){assert(selected);return *selected;}}
 namespace mitm::bsd {
 using namespace ams;struct Out{s32 ret,err;};struct PollFd{s32 fd;s16 events,revents;};constexpr s16 PollIn=1,PollRdNorm=0x40;constexpr s32 PollSliceMs=5;constexpr size_t MaxPollFds=64;

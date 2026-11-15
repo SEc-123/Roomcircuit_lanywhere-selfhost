@@ -103,7 +103,6 @@ namespace ams::mitm::lanywhere {
         u32 g_udp_features;
         u32 g_capabilities;
         std::atomic<u64> g_stream_epoch{1};
-        u64 g_udp_room_epoch = 0; // Guarded by g_lock, survives same-room transport replacement.
         std::atomic<bool> g_stream_ready{false};
         char g_room_provider[33] = "self";
         u64 g_host_program_id;
@@ -1366,7 +1365,6 @@ namespace ams::mitm::lanywhere {
             g_server = server;
             if (owner) std::memcpy(g_room_ticket, owner, sizeof(g_room_ticket));
             Install(s);
-            g_udp_room_epoch = g_stream_epoch.load();
             Log("en la sala %s como miembro %u", g_code, g_my_index);
             g_state = RelayState::InRoom;
             if (owner || (discovery_route && discovery_route->selection_epoch))
@@ -1498,16 +1496,11 @@ namespace ams::mitm::lanywhere {
 
     namespace {
         Result EnterDirectNode(bool hosting, const char *code, u64 game_id, const DiscoveryRoute &route, GameRoute *joined) {
-            const auto report_failure = [&](const char *reason, Result result) {
-                Log("direct LAN Play: %s failed on node %u (%s)", hosting ? "host" : "join", route.node_id, reason);
-                return result;
-            };
-            if (!DirectNodeRoute(route) || !game_id) return report_failure("invalid route or game", ResultRelayFailed());
-            if (g_direct_session.load()) return report_failure("another session is active", ResultRelayFailed());
+            if (!DirectNodeRoute(route) || !game_id || g_direct_session.load()) return ResultRelayFailed();
             std::scoped_lock lifecycle(g_room_lifecycle_lock);
-            if (!DiscoveryRouteStillSelected(route)) return report_failure("selected route changed", ResultRelayFailed());
+            if (!DiscoveryRouteStillSelected(route)) return ResultRelayFailed();
             const lanplay::Endpoint endpoint{route.ipv4, route.port};
-            if (hosting && !lanplay::Probe(endpoint)) return report_failure("node probe timed out or failed", ResultCommunityUnreachable());
+            if (hosting && !lanplay::Probe(endpoint)) return ResultCommunityUnreachable();
             LeaveCurrentRoom();
             const bool configured = lanplay::Configure(route.node_id, endpoint);
             // Configure creates the lazy transport instance. Register before Host/Join can emit streams.
@@ -1515,18 +1508,16 @@ namespace ams::mitm::lanywhere {
             if (!configured || !(hosting ? lanplay::Host(game_id) : lanplay::Join(code, game_id))) {
                 const auto state = lanplay::State();
                 lanplay::Leave();
-                {
-                    std::scoped_lock lock(g_lock);
-                    SetError(state.error[0] ? state.error : "LAN Play connection failed. Try again.");
-                }
-                return report_failure(configured ? "session setup failed" : "transport setup failed", ResultRelayFailed());
+                std::scoped_lock lock(g_lock);
+                SetError(state.error[0] ? state.error : "LAN Play connection failed. Try again.");
+                return ResultRelayFailed();
             }
             const auto state = lanplay::State();
             std::unique_lock lock(g_lock);
             if (!PinnedRouteCurrentLocked(route)) {
                 lock.unlock();
                 lanplay::Leave();
-                return report_failure("route changed during setup", ResultRelayFailed());
+                return ResultRelayFailed();
             }
             g_direct_room = {};
             g_direct_room.discovery = route;
@@ -1659,15 +1650,6 @@ namespace ams::mitm::lanywhere {
         if (g_direct_session.load()) return lanplay::State().active;
         std::scoped_lock lk(g_lock);
         return g_state == RelayState::InRoom;
-    }
-
-    u64 UdpRoomEpoch() {
-        if (g_direct_session.load()) {
-            const auto state = lanplay::State();
-            return state.active ? state.epoch : 0;
-        }
-        std::scoped_lock lock(g_lock);
-        return g_state == RelayState::InRoom ? g_udp_room_epoch : 0;
     }
 
     u32 RoomTag() {

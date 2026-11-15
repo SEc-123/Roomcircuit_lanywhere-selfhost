@@ -42,72 +42,13 @@ int main(){
  lanywhere::room=false;
  assert(service->GetSockName({&ret},{&error},{&length},bound,Output(address,sizeof(address)))==0&&ret==0);
  assert(tcpstream::ReadAddress(address,sizeof(address),&result)&&result.ip==0x0a0d1111&&result.port);
- const int before_native_receive=kernel.command_count[8];
- assert(service->Recv({&ret},{&error},bound,0x80,Output(read,sizeof(read)))==0&&ret==-1&&error==113);
- assert(kernel.command_count[8]==before_native_receive);
- input={bound,POLLIN,0};
- assert(service->Poll({&ret},{&error},1,0,Input(&input,sizeof(input)),Output(&polled,sizeof(polled)))==0&&ret==1&&(polled.revents&POLLERR));
  assert(service->Recv({&ret},{&error},copy,0x80,Output(read,sizeof(read)))==0&&ret==-1&&error==113);
  lanywhere::room=true;
- lanywhere::room_epoch=(u64{1}<<32)|1; // Same low 32 bits still describe a replacement room.
- assert(service->Recv({&ret},{&error},bound,0x80,Output(read,sizeof(read)))==0&&ret==-1&&error==113);
- lanywhere::room_epoch=1; // A recovering route retains its room identity.
- assert(service->Recv({&ret},{&error},bound,0x80,Output(read,sizeof(read)))==0&&ret==-1&&error==11);
  assert(service->Close({&ret},{&error},bound)==0&&ret==0);
  assert(service->Shutdown({&ret},{&error},copy,2)==0&&ret==0);
  assert(service->Write({&ret},{&error},copy,Input(payload,sizeof(payload)))==0&&ret==-1&&error==32);
  assert(service->Read({&ret},{&error},copy,Output(read,sizeof(read)))==0&&ret==0);
  assert(service->Close({&ret},{&error},copy)==0&&ret==0);
- // Simulate loss inside an infinite virtual wait through the forwarded IPC seam.
- assert(service->Socket({&ret},{&error},AF_INET,SOCK_DGRAM,0)==0&&ret>=0);const int mixed=ret;
- const auto any=tcpstream::MakeAddress({0,0});
- assert(service->Bind({&ret},{&error},mixed,Input(&any,sizeof(any)))==0&&ret==0);
- auto leave_on=[&](u32 wanted){ kernel.after_dispatch=[&,wanted](u32 cmd){if(cmd==wanted) lanywhere::room=false;}; };
- leave_on(6);
- const int before_mixed_receive=kernel.command_count[8];
- assert(service->Recv({&ret},{&error},mixed,0,Output(read,sizeof(read)))==0&&ret==-1&&error==113);
- assert(kernel.command_count[8]==before_mixed_receive+1); // Only the mixed socket's nonblocking check.
- kernel.after_dispatch={};
- // A new ordinary UDP receive outside a room still uses the native socket.
- assert(service->Recv({&ret},{&error},mixed,0x80,Output(read,sizeof(read)))==0&&ret==-1&&error==11);
- assert(kernel.command_count[8]==before_mixed_receive+2);
- {
-  const int sender=::socket(AF_INET,SOCK_DGRAM,0);
-  sockaddr_in destination{};socklen_t destination_size=sizeof(destination);
-  assert(sender>=0&&::getsockname(kernel.Real(mixed),reinterpret_cast<sockaddr*>(&destination),&destination_size)==0);
-  destination.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
-  assert(::sendto(sender,payload,sizeof(payload),0,reinterpret_cast<sockaddr*>(&destination),destination_size)==3);
-  input={mixed,POLLIN,0};
-  assert(service->Poll({&ret},{&error},1,100,Input(&input,sizeof(input)),Output(&polled,sizeof(polled)))==0&&ret==1&&(polled.revents&POLLIN));
-  assert(service->Recv({&ret},{&error},mixed,0x80,Output(read,sizeof(read)))==0&&ret==3&&!memcmp(read,payload,3));
-  ::close(sender);
- }
- lanywhere::room=true;
- leave_on(6);
- input={mixed,POLLIN,0};
- assert(service->Poll({&ret},{&error},1,-1,Input(&input,sizeof(input)),Output(&polled,sizeof(polled)))==0&&ret==1&&(polled.revents&POLLERR));
- lanywhere::room=true;
- leave_on(5);
- tcpstream::NativeSelectData selected{};selected.nfds=mixed+1;selected.null_timeout=1;
- u8 read_set[128]{},selected_set[128]{};read_set[mixed/8]|=1<<(mixed%8);
- assert(service->Select({&ret},{&error},selected,Input(read_set,sizeof(read_set)),{},{},Output(selected_set,sizeof(selected_set)),{},{})==0&&ret==1&&
-      (selected_set[mixed/8]&(1<<(mixed%8))));
- lanywhere::room=true;
- kernel.after_dispatch=[&](u32 cmd){if(cmd==6){std::scoped_lock lock(bsd::g_lock);
-      auto *entry=bsd::Find(mixed,{owner.process_id.value,owner.program_id.value},false);
-      assert(entry);entry->bound_port^=1;}};
- assert(service->Recv({&ret},{&error},mixed,0,Output(read,sizeof(read)))==0&&ret==-1&&error==113);
- kernel.after_dispatch=[&](u32 cmd){if(cmd==6){std::scoped_lock lock(bsd::g_lock);
-      auto *entry=bsd::Find(mixed,{owner.process_id.value,owner.program_id.value},false);
-      assert(entry);entry->identity=++bsd::g_socket_identity;}};
- assert(service->Recv({&ret},{&error},mixed,0,Output(read,sizeof(read)))==0&&ret==-1&&error==9);
- kernel.after_dispatch={};
- // Actual virtual SendTo marks a bound-ANY socket as relay-associated.
- assert(service->SendTo({&ret},{&error},mixed,0,Input(payload,sizeof(payload)),Input(&peer,sizeof(peer)))==0&&ret==3);
- lanywhere::room=false;
- assert(service->Recv({&ret},{&error},mixed,0x80,Output(read,sizeof(read)))==0&&ret==-1&&error==113);
- lanywhere::room=true;
- assert(service->Close({&ret},{&error},mixed)==0&&ret==0);
  // Reconnecting a virtual UDP socket to a physical endpoint clears the virtual peer on all aliases.
  assert(service->Socket({&ret},{&error},AF_INET,SOCK_DGRAM,0)==0&&ret>=0);const int changed=ret;
  {const Result rc=service->Connect({&ret},{&error},changed,Input(&peer,sizeof(peer)));if(rc||ret)std::cerr<<"virtual reconnect rc="<<rc<<" ret="<<ret<<" error="<<error<<" commands="<<kernel.command_count[14]<<"\n";assert(rc==0&&ret==0);}
