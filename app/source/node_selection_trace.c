@@ -15,7 +15,7 @@
 
 #define TRACE_PATH NODE_SELECTION_TRACE_DIRECTORY "/node-selection-app.log"
 #define TRACE_LIMIT 2048L
-#define TRACE_BUILD "node-select-20261116"
+#define TRACE_BUILD "node-select-20261116b"
 
 // Only the UI thread records selections. Each record is closed before the next
 // operation. Flush stdio and the SD file before IPC so the last completed stage

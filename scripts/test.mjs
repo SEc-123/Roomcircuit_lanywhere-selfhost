@@ -83,6 +83,8 @@ try {
     await suite('Node filtering and input behavior', process.env.PYTHON || 'python3', ['-B', 'app/tests/nodes_input_test.py']);
     await suite('Node selection app diagnostic I/O', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_selection_trace_test.py']);
     await suite('Node selection sysmodule diagnostic I/O', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/selection_trace_test.py']);
+    await suite('Native node probe with hostile replies and interrupted sockets', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/lanplay_probe_test.py']);
+    await suite('Pinned thread creation resource boundaries', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/thread_resource_boundary_test.py']);
     await suite('Online update delivery and game isolation', process.execPath, ['--test', 'server/relay/test-update-distribution.js']);
     await suite('Signed updater transaction and interrupted recovery', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_core_test.py']);
     await suite('Updater network transfer and cancellation', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_network_test.py']);

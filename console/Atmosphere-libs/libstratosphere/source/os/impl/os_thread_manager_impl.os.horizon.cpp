@@ -103,6 +103,12 @@ namespace ams::os::impl {
                     }
                     R_THROW(os::ResultOutOfResource());
                 }
+                // RoomCircuit: callers can recover when a late worker exceeds
+                // kernel thread, memory or handle budgets. Preserve the outer
+                // ThreadManager failure cleanup instead of aborting the module.
+                R_CATCH(svc::ResultLimitReached, svc::ResultOutOfMemory, svc::ResultOutOfHandles) {
+                    R_THROW(os::ResultOutOfResource());
+                }
             } R_END_TRY_CATCH_WITH_ABORT_UNLESS;
 
             R_SUCCEED();

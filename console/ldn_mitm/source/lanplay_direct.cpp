@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1597,21 +1598,45 @@ bool Probe(const Endpoint &endpoint, unsigned timeout_ms, selection_trace::Handl
     if (::sendto(fd, ping, sizeof(ping), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&destination),
                  sizeof(destination)) == sizeof(ping)) {
         selection_trace::Record(trace, "probe.send.end");
-        pollfd request{fd, POLLIN, 0};
+        const uint64_t deadline = monotonic_ms() + timeout_ms;
+        bool received_once = false;
+        int ready = 0;
         selection_trace::Record(trace, "probe.poll.begin");
-        const int ready = ::poll(&request, 1, timeout_ms);
-        selection_trace::Record(trace, "probe.poll.end", static_cast<uint32_t>(ready));
-        if (ready > 0 && (request.revents & POLLIN)) {
+        while (!valid) {
+            const uint64_t now = monotonic_ms();
+            if (now >= deadline) break;
+            pollfd request{fd, POLLIN, 0};
+            const int remaining = static_cast<int>(std::min<uint64_t>(deadline - now, 50));
+            ready = ::poll(&request, 1, remaining);
+            if (ready < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+            if (!(request.revents & POLLIN)) {
+                if (request.revents & (POLLERR | POLLHUP | POLLNVAL)) break;
+                continue;
+            }
             uint8_t reply[8];
             sockaddr_in from{};
             socklen_t size = sizeof(from);
-            selection_trace::Record(trace, "probe.receive.begin");
+            // Log the first receive boundary without SD writes for every stray
+            // packet. Unrelated datagrams cannot consume a new timeout budget.
+            if (!received_once) selection_trace::Record(trace, "probe.receive.begin");
             const ssize_t bytes =
                 ::recvfrom(fd, reply, sizeof(reply), MSG_DONTWAIT, reinterpret_cast<sockaddr *>(&from), &size);
-            selection_trace::Record(trace, "probe.receive.end", static_cast<uint32_t>(bytes));
-            valid = (bytes == 4 || bytes == 5) && from.sin_addr.s_addr == endpoint.ipv4 &&
-                    from.sin_port == endpoint.port && !std::memcmp(reply, ping, bytes);
+            if (!received_once) {
+                selection_trace::Record(trace, "probe.receive.end", static_cast<uint32_t>(bytes));
+                received_once = true;
+            }
+            if (bytes < 0) {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                break;
+            }
+            valid = (bytes == 4 || bytes == 5) && size >= sizeof(from) && from.sin_family == AF_INET &&
+                    from.sin_addr.s_addr == endpoint.ipv4 && from.sin_port == endpoint.port &&
+                    !std::memcmp(reply, ping, static_cast<size_t>(bytes));
         }
+        selection_trace::Record(trace, "probe.poll.end", static_cast<uint32_t>(ready));
     }
     selection_trace::Record(trace, "probe.close.begin");
     ::close(fd);

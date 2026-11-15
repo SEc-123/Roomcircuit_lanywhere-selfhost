@@ -100,7 +100,7 @@ int main(void) {
     assert(errno == EDOM);
     assert(flushed == 2 && synced == 2);
     read_record();
-    assert(strstr(saved, "app=0.8.8 build=node-select-20261116 node=2\n"));
+    assert(strstr(saved, "app=0.8.8 build=node-select-20261116b node=2\n"));
     assert(strstr(saved, "phase=before_ipc result=pending"));
     assert(!strstr(saved, "phase=after_ipc"));
     node_selection_trace_phase(NodeSelectionAfterIpc, 0x1159);

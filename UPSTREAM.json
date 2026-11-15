@@ -49,6 +49,13 @@
         "include/tesla.hpp"
       ],
       "reason": "Bound glyph memory, maintain list focus safely, handle input-thread/event initialization failure, and support saved Chinese locale."
+    },
+    {
+      "component": "console/Atmosphere-libs",
+      "files": [
+        "libstratosphere/source/os/impl/os_thread_manager_impl.os.horizon.cpp"
+      ],
+      "reason": "Return thread, memory and handle resource-limit failures to callers while preserving cleanup, retry and programmer-error behavior."
     }
   ]
 }

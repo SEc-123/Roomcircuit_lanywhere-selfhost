@@ -30,7 +30,7 @@ public:
 bool Append(const char *stage, std::uint32_t result) {
     char line[192];
     const int count = util::TSNPrintf(line, sizeof(line),
-        "format=1 build=node-select-20261116 module=%s node=%u seq=%u stage=%s result=%08x\n",
+        "format=1 build=node-select-20261116b module=%s node=%u seq=%u stage=%s result=%08x\n",
         GITDESCVER, g_node, g_sequence, stage, result);
     if (count <= 0 || static_cast<size_t>(count) >= sizeof(line) ||
         g_offset > MaxBytes - count) return false;

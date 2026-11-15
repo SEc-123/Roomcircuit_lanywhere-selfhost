@@ -59,3 +59,5 @@ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
 IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
 OF SUCH DAMAGE.
 ```
+
+Local Atmosphere-libs patch: thread creation returns recoverable kernel resource-limit failures to callers. The original revision and license remain recorded in UPSTREAM.json.
