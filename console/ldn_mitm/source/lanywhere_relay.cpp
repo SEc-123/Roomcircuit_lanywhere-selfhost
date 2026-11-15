@@ -2863,15 +2863,11 @@ namespace ams::mitm::lanywhere {
         }
 
         void RefreshDirectIdentity(DirectRegistration &room, u64 wire_id) {
-            if (!room.program) return;
-            if (wire_id == UINT64_MAX) {
-                GameCacheRecord exact{};
-                if (GameIdentityCacheExactRecord(room.program, &exact) != GameCacheFound) return;
-                wire_id = exact.local_communication_ids[0];
-            }
+            if (!room.program || !wire_id) return;
+            // Resolve display metadata for a legacy sentinel by exact local host ProgramID.
+            const u64 lcid = wire_id == UINT64_MAX ? 0 : wire_id;
             GameIdentity identity{};
-            if (wire_id && wire_id != UINT64_MAX &&
-                GameIdentityCacheLookup(room.program, wire_id, &identity) == GameCacheFound)
+            if (GameIdentityCacheLookup(room.program, lcid, &identity) == GameCacheFound)
                 room.identity = identity;
         }
 

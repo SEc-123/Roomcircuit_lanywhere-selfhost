@@ -109,7 +109,9 @@ int main(int argc, char **argv)
     assert(strstr(room_title(&room,fallback,sizeof(fallback)),"宝可梦 紫"));
     assert(!strcmp(room_title_note(&room),"共用游戏 ID"));
     room.game_id=UINT64_MAX;
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"游戏未识别"));
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"未提供游戏信息"));
+    room.game_id=0;
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"未提供游戏信息"));
     room.game_id=UINT64_C(0xDEADBEEFDEADBEEF);
     assert(strstr(room_title(&room,fallback,sizeof(fallback)),"DEADBEEFDEADBEEF"));
 

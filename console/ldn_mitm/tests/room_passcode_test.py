@@ -61,10 +61,15 @@ def main():
     )
     direct_state += '\nstatic os::SdkMutex g_direct_metadata_lock, g_direct_exchange_lock;\n'
     direct_state += 'static DirectRegistration g_direct_registration{};\n'
+    cache = (SOURCE.parent / 'game_identity_cache.cpp').read_text()
+    direct_state += '\n' + '\n'.join(function(cache, sig) for sig in [
+        'bool ReadAt(', 'GameCacheResult LookupPath(', 'GameCacheResult GameIdentityCacheLookup(',
+    ])
     direct_state += '\n' + '\n'.join(function(source, sig) for sig in [
         'u64 DirectMetadataNow() {', 'bool DirectMetadataReady(const DirectRegistration &room) {',
         'DirectRoomMetadataReply ExchangeDirectMetadata(', 'DirectRoomMetadata NewDirectMetadata(',
-        'DirectRoomMetadataReply PublishDirectMetadata(', 'u32 SetDirectRoomAccess(const RoomAccessChange &access, size_t length) {',
+        'DirectRoomMetadataReply PublishDirectMetadata(', 'void RefreshDirectIdentity(',
+        'u32 SetDirectRoomAccess(const RoomAccessChange &access, size_t length) {',
         'DirectRoomHost DescribeDirectHost(', 'RoomPasscodeReply LookupDirectRoomPasscode(',
     ])
     service = (SOURCE.parent / 'lanywhere_service.cpp').read_text()

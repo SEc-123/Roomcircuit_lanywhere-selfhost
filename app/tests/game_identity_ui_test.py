@@ -14,7 +14,8 @@ routes = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(routes)
 game_type = re.search(r'typedef struct\s*\{[^}]*\}\s*GameInfo;', source).group()
 functions = '\n\n'.join(routes.function(source, 'static ' + name) for name in
-    ('const GameInfo *local_game_info(', 'CatalogMatch room_catalog_match(', 'bool game_info_has_lcid(', 'const char *room_title(', 'bool has_pinned_direct_room(', 'bool room_password_allows_launch(', 'bool open_selected_game('))
+    ('const GameInfo *local_game_info(', 'CatalogMatch room_catalog_match(', 'bool game_info_has_lcid(', 'const char *room_title(',
+     'bool has_pinned_direct_room(', 'bool room_password_allows_launch(', 'const char *external_join_hint(', 'bool open_selected_game('))
 harness = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -73,6 +74,7 @@ int main(void) {
     assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Host game"));
     assert(!open_selected_game(&v) && launches==0); /* claimed ID does not match local LCID */
     room.game_id=UINT64_MAX;fake.lcids[0]=UINT64_MAX;v.pinned.game_id=UINT64_MAX;v.pinned_group=room;
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Host game"));
     assert(!open_selected_game(&v) && launches==0); /* sentinel is not proof, even if NACP contains it */
     room.game_id=0x222;fake.lcids[0]=0x333;v.pinned.game_id=room.game_id;v.pinned_group=room;
     installed=false; last_query=0;
@@ -93,7 +95,15 @@ int main(void) {
     assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"宝可梦 朱"));
     room.metadata_flags=0;room.application_id=0;room.title_en[0]=room.title_zh[0]=0;last_query=0;
     assert(strstr(room_title(&room,fallback,sizeof(fallback)),"0000000000000222") && last_query==0);
-    puts("Actual UI identity: local verification, host fallback, unknown LCID and launch gate passed");
+    room.game_id=UINT64_MAX;
+    v.pinned=lobby_room_id_on(&room,"lanplay-nl"); v.pinned_group=room;
+    assert(v.pinned.game_id==UINT64_MAX && !strcmp(v.pinned.code,room.code));
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"未提供游戏信息"));
+    g_zh=false;ui_set_language(false,false);
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Game info not provided"));
+    assert(!local_game_info(&room) && last_query==0 && !open_selected_game(&v) && launches==0);
+    assert(!strcmp(external_join_hint(v.pinned.provider,false),"Open the game from HOME, then search in Local Wireless."));
+    puts("Actual UI identity: known, numeric and missing labels; manual join and verified launch passed");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='switch-identity-ui-') as temp:

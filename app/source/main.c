@@ -1104,7 +1104,7 @@ static const char *room_title(const LobbyGroup *group, char *fallback, size_t ca
     const char *catalog_name = game_catalog_name(&catalog, g_zh);
     if (catalog_name) return catalog_name;
     if (!group || !group->game_id || group->game_id == UINT64_MAX)
-        return TR("Juego no identificado", "Game not identified");
+        return TR("No se proporcionó información del juego", "Game info not provided");
     snprintf(fallback, capacity, TR("ID del juego %016lX", "Game ID %016lX"), (unsigned long)group->game_id);
     return fallback;
 }

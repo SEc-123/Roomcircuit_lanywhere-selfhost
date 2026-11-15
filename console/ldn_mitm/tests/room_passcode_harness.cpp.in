@@ -230,6 +230,21 @@ static void assert_reply_empty(const RoomPasscodeReply &reply, u32 status) {
     assert(std::all_of(std::begin(reply.passcode), std::end(reply.passcode), [](char c) { return c == 0; }));
 }
 
+static void install_identity_cache(const GameCacheRecord &record) {
+    u8 header[GAME_CACHE_HEADER_SIZE], body[GAME_CACHE_RECORD_SIZE];
+    game_cache_header(header, 1, 1);
+    game_cache_encode_record(&record, body);
+    GameIdentitySha256 sha;
+    gi_sha256_init(&sha);
+    gi_sha256_update(&sha, header, 32);
+    gi_sha256_update(&sha, body, sizeof(body));
+    gi_sha256_final(&sha, header + 32);
+    auto file = std::make_shared<fs::Data>();
+    file->value.assign(reinterpret_cast<const char *>(header), sizeof(header));
+    file->value.append(reinterpret_cast<const char *>(body), sizeof(body));
+    fs::files[GAME_CACHE_PATH] = std::move(file);
+}
+
 int main() {
     std::signal(SIGPIPE, SIG_IGN);
     LanywhereService ipc;
@@ -257,6 +272,26 @@ int main() {
         g_direct_registration = {};
         g_direct_registration.epoch = 9;
         std::memset(g_direct_registration.proof, 0x5b, sizeof(g_direct_registration.proof));
+        GameCacheRecord record{};
+        record.application_id = 0x01006fe013472000ULL;
+        std::strcpy(record.names.english, "Fixture game");
+        std::strcpy(record.names.chinese, "测试游戏");
+        g_direct_registration.program = record.application_id;
+        for (u64 lcid : {u64{0}, u64{UINT64_MAX}}) {
+            record.local_communication_ids[0] = lcid;
+            install_identity_cache(record);
+            DirectRegistration unrelated{};
+            unrelated.program = record.application_id + 1;
+            RefreshDirectIdentity(unrelated, UINT64_MAX);
+            assert(!unrelated.identity.application_id && !unrelated.identity.english[0]);
+
+            g_direct_registration.identity = {};
+            RefreshDirectIdentity(g_direct_registration, UINT64_MAX);
+            assert(g_direct_registration.identity.application_id == record.application_id);
+            assert(g_direct_registration.identity.program_id == record.application_id);
+            assert(std::strcmp(g_direct_registration.identity.english, record.names.english) == 0);
+            assert(std::strcmp(g_direct_registration.identity.chinese, record.names.chinese) == 0);
+        }
         assert(ipc.GetRoomPasscodeHost({&description}) == 0 && description.status == RoomPasscodeUnavailable);
         assert(SetRoomAccess({change, 0, 0}) == RoomPasscodeUnavailable);
         g_direct_registration.verified_at = DirectMetadataNow();
@@ -275,6 +310,10 @@ int main() {
             std::memcpy(&request, requests[i].data(), sizeof(request));
             assert(request.operation == DirectRoomPublish && request.node_id == 7 && request.host_ip == 0x0a0d002a);
             assert(std::memcmp(request.network_id, lanplay::hosted_room.network_id, sizeof(request.network_id)) == 0);
+            assert(le64(request.network_id) == UINT64_MAX);
+            assert(request.application_id == record.application_id && request.program_id == record.application_id);
+            assert(std::strcmp(request.title_en, record.names.english) == 0);
+            assert(std::strcmp(request.title_zh, record.names.chinese) == 0);
             assert(std::memcmp(request.bssid, lanplay::hosted_room.bssid, sizeof(request.bssid)) == 0);
             assert(std::memcmp(request.proof, g_direct_registration.proof, sizeof(request.proof)) == 0);
             if (!i) {
@@ -290,6 +329,7 @@ int main() {
         assert(SetRoomAccess({change, 0, 0}) == RoomPasscodeRoomUnavailable && directory.seen_direct().size() == 3);
         lanplay::hosted_room = {};
         g_direct_session = false;
+        fs::files.erase(GAME_CACHE_PATH);
     }
     {
         DirectRoomMetadataReply reply{RoomPasscodeOk, RoomAccessHidden, 0, {}, {}};
@@ -693,5 +733,5 @@ int main() {
     }
     std::puts("PASS regional IPC28-31: direct EU exact/quick, scoped passwords, central appointments, pinned active room, A-B-A invalidation and Ready suppression");
     std::puts("PASS native IPC17–21/25: hidden/share/clear, denied and stale unlocks, binary grants, scoped matchmaking, no password in reservations, and legacy frames");
-    std::puts("PASS direct host IPC: registered session guard, share/hide/clear, hidden password withheld, old-directory fallback and locked read");
+    std::puts("PASS direct host IPC: exact local title with legacy wire ID, registered session guard, share/hide/clear, hidden password withheld, old-directory fallback and locked read");
 }

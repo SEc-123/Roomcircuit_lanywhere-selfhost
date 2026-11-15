@@ -453,7 +453,7 @@ static const UiTranslation translations[] = {
     {"Current", "当前"},
     {"Select", "选择"},
     {"Game ID %016lX", "游戏 ID %016lX"},
-    {"Game not identified", "游戏未识别"},
+    {"Game info not provided", "未提供游戏信息"},
     {"My room", "我的房间"},
     {"Syncing room details…", "正在同步房间资料"},
     {"In game", "游戏内"},
