@@ -1219,7 +1219,6 @@ static void matching_column(const View *v)
     }
     const bool has_password = v->password.value[0] != '\0';
     const bool password_panel = has_password || v->password.locked || v->password.pending || v->password.failed;
-    int note_y = y + 293;
     if (password_panel) {
         const int panel_y = y + 276;
         const int panel_h = has_password ? 132 : v->password.locked ? 94 : 64;
@@ -1250,11 +1249,6 @@ static void matching_column(const View *v)
             const char *message = v->password.pending ? ui_text("Checking game password…") : ui_text("Game password unavailable.");
             gfx_text_fit(x + 28, panel_y + 18, 21, C_DIM, message, LIST_W - 56);
         }
-        note_y = panel_y + panel_h + 12;
-    }
-    if (!quick) {
-        gfx_text_fit(x + 28, note_y, 20, C_DIM,
-            TR("Se buscará solo esta sala. Pulsa B para cancelar.", "Only this room is selected. Press B to cancel."), LIST_W - 56);
     }
 }
 
@@ -1302,7 +1296,7 @@ static void groups_column(const View *v)
     }
     gfx_text(x, y, 28, C_TEXT, v->appointment_game_id ? ui_text("Game rooms") :
         v->discovery == LobbyDiscoveryUnified ? ui_text("All rooms") : TR("Grupos abiertos ahora", "Public rooms"));
-    if (v->config_state == RelayConfigReady) {
+    if (v->config_state == RelayConfigReady && (v->page_index || v->next_page != LOBBY_PAGE_END)) {
         char page[32];
         snprintf(page, sizeof(page), TR("Página %u", "Page %u"), v->page_index + 1);
         gfx_text(x + 359, y + 7, 19, C_DIM, page);
@@ -1356,7 +1350,6 @@ static void groups_column(const View *v)
         gfx_round_rect(x, y, LIST_W, 200, 18, C_PANEL);
         if (v->page_index) {
             gfx_text(x + 28, y + 30, 26, C_TEXT, TR("Esta página se quedó vacía", "This page is now empty"));
-            gfx_text(x + 28, y + 78, 20, C_DIM, TR("Pulsa ZL para ver la página anterior.", "Press ZL for the previous page."));
             return;
         }
         if (v->discovery == LobbyDiscoveryLegacy && !is_self_network(v)) {
@@ -1507,8 +1500,6 @@ static void private_column(const View *v)
         add_zone(x + 20, y + 30, w + 32, 60, HidNpadButton_A);
         w = gfx_button(x + 28, y + 124, "X", TR("Introducir código", "Enter invite code"));
         add_zone(x + 20, y + 110, w + 32, 60, HidNpadButton_X);
-        gfx_text_fit(x + 28, y + 222, 22, C_DIM,
-            TR("Solo entran quienes tengan el código.", "Only players with the code can join."), LIST_W - 56);
     }
 }
 
@@ -1556,11 +1547,10 @@ static void side_column(const View *v)
         add_zone(x,y,SIDE_W,76,TOUCH_NODE_FILTER);y+=92;
     }
     if (can_share_game_password(v)) {
-        gfx_round_rect(x, y, SIDE_W, 94, 18, C_PANEL);
-        gfx_text(x + 20, y + 12, 24, C_TEXT, ui_text("Game password"));
-        gfx_button(x + 20, y + 49, "Y", ui_text("Edit password"));
-        add_zone(x, y, SIDE_W, 94, HidNpadButton_Y);
-        y += 110;
+        gfx_round_rect(x, y, SIDE_W, 76, 18, C_PANEL);
+        gfx_button(x + 20, y + 23, "Y", ui_text("Edit game password"));
+        add_zone(x, y, SIDE_W, 76, HidNpadButton_Y);
+        y += 92;
     }
     if (v->status_valid && v->config_state == RelayConfigReady && !v->appointment_game_id && !v->private_panel && !v->private_room && !show_matching(v) &&
         v->st.state != StateInRoom && v->st.state != StateConnecting &&
@@ -1594,7 +1584,6 @@ static void draw_password_visibility(void)
     draw_language_control();
     gfx_round_rect(MARGIN, 160, LIST_W, 340, 18, C_PANEL);
     gfx_text(MARGIN + 28, 185, 28, C_TEXT, ui_text("Who can see the password?"));
-    gfx_text_fit(MARGIN + 28, 235, 20, C_DIM, ui_text("The room stays visible in the lobby."), LIST_W - 56);
     const int x = MARGIN + 28;
     gfx_button(x, 300, "A", ui_text("Share in lobby"));
     add_zone(x - 8, 284, LIST_W - 44, 62, HidNpadButton_A);

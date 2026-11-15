@@ -363,13 +363,13 @@ static void draw_update(const UpdateView *view)
     char version[96];
     snprintf(version, sizeof(version), "%s %s", ui_text("Installed"), LANYWHERE_APP_VERSION);
     gfx_text(56, 204, 24, Dim, version);
-    if (view->manifest.version[0]) {
+    if (view->manifest.version[0] && strcmp(view->manifest.version, LANYWHERE_APP_VERSION) != 0) {
         snprintf(version, sizeof(version), "%s %s", ui_text("Available"), view->manifest.version);
         gfx_text(56, 244, 24, Dim, version);
     }
-    if (view->screen == UpdateOffered || view->screen == UpdateCurrent) {
+    if (view->screen == UpdateOffered) {
         gfx_text_fit(56, 314, 25, Text, ui_chinese() ? view->manifest.notes_zh : view->manifest.notes_en, 1168);
-        gfx_text(56, 410, 23, Dim, ui_text("Close the game before installing. Restart after the update."));
+        gfx_text(56, 410, 23, Dim, ui_text("Close the game before installing."));
     }
     if (view->screen == UpdateDownloading || view->screen == UpdateInstalling) {
         const unsigned percentage = view->total ? (unsigned)((uint64_t)view->completed * 100 / view->total) : 0;

@@ -16,6 +16,9 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output',type=Path,required=True)
 args=parser.parse_args();output=args.output.resolve();output.mkdir(parents=True,exist_ok=True)
 text=(SOURCE/'update_ui.c').read_text()
+version=json.loads((SOURCE.parents[1]/'package.json').read_text())['version']
+major,minor,patch=map(int,version.split('.'))
+fixture_version=f'{major}.{minor}.{patch + 1}'
 
 def function(signature):
     start=text.index(signature);depth=0
@@ -34,7 +37,8 @@ body='''#include <assert.h>
 #include "gfx.h"
 #include "ui_text.h"
 #include "update_core.h"
-#define LANYWHERE_APP_VERSION "0.7.0"
+#define LANYWHERE_APP_VERSION @APP_VERSION@
+#define SAMPLE_UPDATE_VERSION @FIXTURE_VERSION@
 static bool rollback_pending;
 static bool language_save_failed;
 '''+constants+'\n'+types+'\n'+function('static const char *screen_title(')+'\n'+function('static void draw_update(')+r'''
@@ -45,7 +49,7 @@ int main(int argc,char **argv) {
         ui_set_language(chinese,false);
         for(int screen=0;screen<=UpdateRecoveryBlocked;screen++) {
             UpdateView view={.screen=screen,.completed=37,.total=100};
-            strcpy(view.manifest.version,"0.7.1");
+            strcpy(view.manifest.version, screen == UpdateCurrent ? LANYWHERE_APP_VERSION : SAMPLE_UPDATE_VERSION);
             strcpy(view.manifest.notes_en,"Improves room recovery and update reliability.");
             strcpy(view.manifest.notes_zh,"优化房间恢复和更新稳定性。");
             if(screen==UpdateFailed)view.error="Update server is unavailable. Try again.";
@@ -60,6 +64,7 @@ int main(int argc,char **argv) {
     gfx_exit();printf("Updater: %u bilingual state previews\n",captures);
 }
 '''
+body=body.replace('@APP_VERSION@', json.dumps(version)).replace('@FIXTURE_VERSION@', json.dumps(fixture_version))
 flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','freetype2','libpng'],text=True))
 with tempfile.TemporaryDirectory(prefix='update-preview-') as temporary:
     temp=Path(temporary);(temp/'preview.c').write_text(body)

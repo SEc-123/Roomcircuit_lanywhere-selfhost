@@ -50,7 +50,9 @@ int main(int argc,char **argv){
   CatalogGameChoice games[2]={{17,{.en="Pokémon Violet",.zh="宝可梦 紫",.kind=CatalogCommunication}},{18,{.en="Mario Kart 8 Deluxe",.zh="马力欧卡丁车8 豪华版",.kind=CatalogCommunication}}};
   GameCatalog catalog={0};draw_filters(&catalog,games,2,0,0,NodeRegionEurope);capture(argv[1],"filters",zh);
   group_code[0]=0;memset(&group,0,sizeof(group));
-  assert(gfx_text_width(21,ui_text("Recommended for your network"))<620);
+  for(unsigned i=0;i<NODE_CATALOG_COUNT;i++){
+   assert(gfx_text_width(22,nodes_ui_name(i)) + gfx_text_width(22,ui_text(" (Recommended for you)")) < 700);
+  }
  }
  gfx_exit();puts("Nodes: 16 bilingual previews from actual drawing functions");
 }

@@ -583,8 +583,7 @@ static void draw_list(const GameCatalog *catalog, AppointmentTouchZone touch)
         action(SideX, ListY + 190, "L", "New appointment", HidNpadButton_L, touch);
     const bool watching = (g_subscriptions_ok && g_subscriptions.count) ||
         (i >= 0 && g_page.rows[i].followed);
-    const char *alert = watching ? appointment_alert_text(g_alert_status) :
-        (i >= 0 && g_subscriptions_ok ? "Join to get room alerts." : NULL);
+    const char *alert = watching ? appointment_alert_text(g_alert_status) : NULL;
     if (alert) gfx_text_fit(SideX, ListY + 247, 19, MUTED, ui_text(alert), SideW);
     if (g_offset)
         action(ListX + 444, 127, "ZL", "Prev", HidNpadButton_ZL, touch);
@@ -616,7 +615,6 @@ static void draw_time(AppointmentTouchZone touch)
 {
     const char *name = ui_chinese() ? g_game.names.chinese : g_game.names.english;
     gfx_text_fit(ListX, ListY, 25, TEXT, name, ListW);
-    gfx_text(ListX, ListY + 56, 19, MUTED, ui_text("Left/right selects a field. Up/down changes it."));
     AppointmentDate day = appointment_date_after(g_today, (unsigned)g_day);
     char value[3][32];
     snprintf(value[0], sizeof(value[0]), "%04d-%02d-%02d", day.year, day.month, day.day);
@@ -638,8 +636,10 @@ static void draw_time(AppointmentTouchZone touch)
 void appointments_draw(const GameCatalog *catalog, AppointmentTouchZone touch)
 {
     gfx_text(ListX, 36, 40, TEXT, ui_text("Appointments"));
-    gfx_text(ListX, 128, 24, TEXT, ui_text(g_screen == ListScreen ? "Upcoming · local time" :
-                                         g_screen == GameScreen ? "Select a game" : "Choose local time"));
+    if (g_screen == TimeScreen)
+        gfx_text(ListX, 128, 24, TEXT, ui_text("Choose local time"));
+    else if (g_screen == ListScreen && g_page.count)
+        gfx_text(ListX, 128, 21, MUTED, ui_text("Local time"));
     if (g_screen == ListScreen) {
         action(SideX, 92, "B", "All rooms", HidNpadButton_B, touch);
         draw_list(catalog, touch);

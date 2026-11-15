@@ -578,16 +578,15 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
     if (group_code[0]) {
         snprintf(text, sizeof(text), ui_text("Code %s · %u players"), group_code, group.participants);
         gfx_text(600, 181, 21, NODE_COLOR_TEXT, text);
-    } else
-        gfx_text(600, 181, 21, NODE_COLOR_DIM, ui_text("Recommended for your network"));
+    }
     for (unsigned i = first; i < count && i < first + NODE_ROWS; i++) {
         const uint32_t id = order[i];
         const LanywhereNode *node = &LanywhereNodes[id];
         const int y = 225 + (int)(i - first) * 58;
         const bool enabled = copy->catalog_ok && (copy->enabled & (1u << id));
         gfx_round_rect(56, y, 1168, 52, 12, i == selected ? RGBA(139, 92, 246, 65) : NODE_COLOR_PANEL);
-        snprintf(text, sizeof(text), "%s%s", nodes_ui_name(id),
-                 recommended[id] ? ui_text(" (Recommended)") : "");
+        const char *recommendation = group_code[0] ? " (Recommended)" : " (Recommended for you)";
+        snprintf(text, sizeof(text), "%s%s", nodes_ui_name(id), recommended[id] ? ui_text(recommendation) : "");
         gfx_text_fit(74, y + 4, 22, enabled ? NODE_COLOR_TEXT : NODE_COLOR_DIM, text, 700);
         snprintf(text, sizeof(text), "%s%s%s · %s", nodes_ui_region(node->region),
                  node->country[0] ? " · " : "", country_name(node->country),
@@ -694,11 +693,10 @@ static bool modal_touch_start(bool *held, int *x, int *y)
 static void draw_friend_panel(void)
 {
     begin_screen("Test with friends");
-    gfx_text(56, 205, 24, NODE_COLOR_DIM, ui_text("Share a code, then compare everyone's connection."));
     if (group_code[0]) {
         char text[160];
         snprintf(text, sizeof(text), ui_text("Code %s · %u players"), group_code, group.participants);
-        gfx_text(56, 290, 32, NODE_COLOR_TEXT, text);
+        gfx_text(56, 205, 32, NODE_COLOR_TEXT, text);
     }
     if (keyboard_error)
         gfx_text_fit(56, 460, 21, NODE_COLOR_WARN, ui_text(keyboard_error), 1168);
@@ -891,9 +889,8 @@ static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gat
     char value[80];
     measurement_label(m, value);
     gfx_text(56, 267, 32, NODE_COLOR_TEXT, value);
-    gfx_text(
-        56, 330, 23, NODE_COLOR_DIM,
-        ui_text(gateway ? "Your connection to Main server gateway" : "Your connection to this room's node"));
+    if (gateway)
+        gfx_text(56, 330, 23, NODE_COLOR_DIM, ui_text("Main server gateway"));
     if (m->state == NodeMeasureReady) {
         snprintf(value, sizeof(value), ui_text("Replies %u/%u · variation %u ms"), m->received, m->sent,
                  m->jitter_ms);
