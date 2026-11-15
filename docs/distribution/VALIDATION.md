@@ -50,3 +50,13 @@ Source inspection found that 0.8.0 accesses `sdmc:/lanywhere/lanplay-ip.bin` thr
 The actual Switch storage function passed host filesystem-boundary tests for saved identity reuse, missing/corrupt records, collision renewal, failed writes/renames and previous-file recovery. A clean Switch cross-build and paired 0.8.1 metadata/source verification passed. SD ZIP SHA-256: `27d956cd765b754d205ff1a6e337e5cc434883c0c16e1dbfa8b302de6a93a58a`. Release publication also requires CI and signed-update readback. Physical Switch restart/address reuse and two-console play remain unverified. The 0.8.0 public-node results above describe unchanged transport behavior, not a second hardware test.
 
 中文：已定位 0.8.0 的 LAN Play 地址保存接口与模块实际 SD 挂载方式不一致；0.8.1 针对此问题修复。实际 Switch 存储函数的主机边界回归、干净交叉构建与同版组件校验通过；发版仍须 CI 和签名更新回读。实机重启后的地址复用和双机游戏仍待实测。
+
+## 0.8.2 Beta — online launch from Album
+
+Issue #3 reports an immediate online crash in 0.7.0 and a successful launch in 0.6.2. Version 0.6.2 had no automatic update check. In the 0.7.0 and 0.8.1 release binaries, a complete update manifest reaches Sodium initialization before version comparison. The linked random backend attempts to open Unix random devices that libnx does not provide. Failure reaches the library's abort path. An unreachable update server returns a network error before initialization.
+
+0.8.2 registers libnx's kernel-seeded generator once before Sodium initialization. The updater still verifies the Ed25519 signature before trusting the manifest. The change applies to automatic checks, manual checks and installation verification. Issue #3 remains open until the reporter can retest on a Switch.
+
+中文：0.6.2 启动时没有更新检查。0.7.0 和 0.8.1 收到清单后会初始化验签库，默认 Unix 随机设备无法打开时会中止进程。0.8.2 改用 libnx 提供的随机数源，继续校验签名。报告者的实机复测仍待完成。
+
+The 0.7.0 and 0.8.1 parsers aborted on the genuine signed release manifest in a controlled build of the pinned Sodium version with Unix random facilities unavailable. The Switch code regression checks one-time entropy registration with concurrent checks and ensures that valid signatures pass and modified manifests fail. A separate test covers opening the node picker after the updater has registered libnx networking, then releasing that socket only from its owner.

@@ -80,12 +80,48 @@ static bool display_text(const uint8_t *text, size_t capacity) {
     return true;
 }
 
+#ifdef __SWITCH__
+static const char *switch_random_name(void) {
+    return "switch-libnx";
+}
+
+static uint32_t switch_random_u32(void) {
+    uint32_t value;
+    randomGet(&value, sizeof(value));
+    return value;
+}
+
+static randombytes_implementation switch_random = {
+    .implementation_name = switch_random_name,
+    .random = switch_random_u32,
+    .buf = randomGet,
+};
+#endif
+
+static bool update_crypto_ready(void) {
+#ifdef __SWITCH__
+    // The pinned Sodium port defaults to Unix random devices. Register the
+    // kernel-seeded libnx generator once, before Sodium initializes.
+    static Mutex init_lock;
+    static bool attempted, ready;
+    mutexLock(&init_lock);
+    if (!attempted) {
+        ready = randombytes_set_implementation(&switch_random) == 0 && sodium_init() >= 0;
+        attempted = true;
+    }
+    mutexUnlock(&init_lock);
+    return ready;
+#else
+    return sodium_init() >= 0;
+#endif
+}
+
 UpdateResult update_manifest_parse(const uint8_t raw[UPDATE_MANIFEST_SIZE],
                                    const char *current_version, UpdateManifest *out) {
     uint32_t current[3];
     if (!raw || !out || !version_parse(current_version, current)) return UPDATE_INVALID;
     memset(out, 0, sizeof(*out));
-    if (sodium_init() < 0 || crypto_sign_verify_detached(raw + UPDATE_MANIFEST_BODY_SIZE,
+    if (!update_crypto_ready() || crypto_sign_verify_detached(raw + UPDATE_MANIFEST_BODY_SIZE,
             raw, UPDATE_MANIFEST_BODY_SIZE, UPDATE_VERIFY_PUBLIC_KEY) != 0) return UPDATE_SIGNATURE;
     if (memcmp(raw, "LNU1", 4) || read32(raw + 4) != UPDATE_FORMAT_VERSION ||
         read32(raw + 20) != UPDATE_FORMAT_VERSION) return UPDATE_UNSUPPORTED;

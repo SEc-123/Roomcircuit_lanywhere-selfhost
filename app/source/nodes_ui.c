@@ -26,6 +26,7 @@ static NodeView view;
 static Mutex view_lock;
 static Thread probe_threads[3], friend_thread;
 static bool probe_created[3], friend_created, initialized, socket_ready;
+static bool socket_owned;
 static atomic_bool cancel_probe, cancel_friend, probe_done[3], friend_done;
 static NodeProbeGuard resolver_guards[3];
 static unsigned next_probe;
@@ -270,12 +271,17 @@ void nodes_ui_network_changed(void)
 }
 void nodes_ui_initialize(void)
 {
+    if (initialized)
+        return;
     mutexInit(&view_lock);
     initialized = true;
     for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++)
         view.measurements[i] =
             (NodeMeasurement){.node_id = i, .median_ms = NODE_PROBE_UNKNOWN, .jitter_ms = NODE_PROBE_UNKNOWN};
-    socket_ready = R_SUCCEEDED(socketInitializeDefault());
+    const Result socket_result = socketInitializeDefault();
+    socket_owned = R_SUCCEEDED(socket_result);
+    /* The updater may already have registered the process-wide socket device. */
+    socket_ready = socket_owned || socket_result == MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized);
     nifm_ready = R_SUCCEEDED(nifmInitialize(NifmServiceType_User));
     do {
         randomGet(participant, sizeof(participant));
@@ -419,9 +425,9 @@ void nodes_ui_shutdown(void)
     }
     if (nifm_ready)
         nifmExit();
-    if (socket_ready)
+    if (socket_owned)
         socketExit();
-    initialized = socket_ready = nifm_ready = false;
+    initialized = socket_ready = socket_owned = nifm_ready = false;
 }
 static void language_input(u64 down)
 {

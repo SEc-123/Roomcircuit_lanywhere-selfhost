@@ -124,7 +124,12 @@ test('update transfer slots, request sizes, file safety and backpressure are bou
     second.send(0x31, request(snapshot.hash, 0)); assert.equal((await second.frame()).body[0], 7);
     second.send(0x30, Buffer.alloc(1)); assert.equal((await second.frame()).body[0], 4);
     first.send(0x31, request(snapshot.hash, snapshot.bytes.length)); assert.equal((await first.frame()).body[0], 4);
-    first.send(0x31, request(snapshot.hash, 0)); first.send(0x31, request(snapshot.hash, 0));
+    // Deliver both requests together so the second reaches the pending
+    // transfer before an asynchronous read can complete.
+    first.socket.cork();
+    first.send(0x31, request(snapshot.hash, 0));
+    first.send(0x31, request(snapshot.hash, 0));
+    first.socket.uncork();
     const answers = [await first.frame(), await first.frame()];
     assert.deepEqual(answers.map(x => x.type).sort(), [0x85, 0xb1]);
     first.socket.destroy(); await until(() => server.manager.snapshot().transfers === 0, 'release transfer slot');
