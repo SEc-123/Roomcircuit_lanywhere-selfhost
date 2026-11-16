@@ -1,11 +1,11 @@
 # HOS 19.0.1 private trust preparation
 
-**Development only:** The embedded test CA is environment-specific and expires. This component is not a production installation package.
+Build with an explicitly supplied own DER CA. The same certificate must be used to issue the corresponding server certificate. The build validates the certificate and creates the embedded copy and matching SHA-256 header together; a missing, invalid or expired CA stops the build.
 
-The NRO checks emuMMC before filesystem startup, then requires HOS 19.0.1 and the exact certificate resource hash captured from the active emuMMC. It reads that resource through the active virtual system and writes only SD files. It never opens physical NAND storage or modifies a user account.
+```sh
+make CA_DER=/path/to/owned/ca.der
+```
 
-Press A to stage a private one-file RomFS and its SHA-256 sidecar under `sd:/atmosphere/roomcircuit-native/CertStore/`. Existing different files are preserved. The standard boot entry and original Atmosphere package are unchanged. The custom network build alone reads this private location, and only for the SSL process in emuMMC. The sidecar detects accidental corruption; it is not a signature or an authorization boundary.
+On a confirmed HOS 19.0.1 emuMMC only, this experimental NRO can read the active certificate store and stage a private one-file RomFS plus digest under `sd:/atmosphere/roomcircuit-native/CertStore/`. It does not modify the ordinary boot entry or activate the candidate. Existing different files are preserved. The digest detects corruption, not malicious replacement. The custom SSL-only emuMMC module must still be validated separately. This does not prove that a system account or game trusts the server.
 
-Only expired certificate slot 1033 changes. All original certificate payload bytes and other entries remain in the private file. The test CA is limited to the independent test endpoint; the native service still verifies the certificate, hostname and time. This staging operation does not prove that a retail account or game requests that certificate.
-
-`python3 test_store.py` checks parser failures and source preservation, then extracts the generated image with hactool. The extraction test requires Docker and a running container named `switch-nodes-sdk-080` with `/opt/devkitpro/tools/bin/hactool` installed. CI does not run this Docker-dependent test. Physical preparation and custom boot acceptance remain pending.
+`python3 test_store.py` checks parsing and independently extracts RomFS using a running Docker container named `switch-nodes-sdk-080` with hactool. CI runs the independent C/C++ format tests but not this container-dependent extraction. No hardware boot or gameplay acceptance is claimed.

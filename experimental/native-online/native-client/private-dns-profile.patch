@@ -56,16 +56,21 @@ index d7364fa..2633153 100644
          /* Print the redirections. */
          Log(log_file, "Redirections:\n");
          for (const auto &[host, address] : g_redirection_list) {
-@@ -383,8 +416,13 @@ namespace ams::mitm::socket::resolver {
+@@ -383,8 +416,18 @@ namespace ams::mitm::socket::resolver {
          }
      }
  
 -    bool GetRedirectedHostByName(ams::socket::InAddrT *out, const char *hostname) {
 +    bool GetRedirectedHostByName(ams::socket::InAddrT *out, bool *private_redirect, const char *hostname, size_t hostname_size) {
          std::scoped_lock lk(g_redirection_lock);
++        if (hostname == nullptr || std::memchr(hostname, '\0', hostname_size) == nullptr) {
++            *private_redirect = false;
++            return false;
++        }
++
 +        *private_redirect = roomcircuit::private_dns::Matches(g_private_dns_profile, hostname, hostname_size);
 +        if (*private_redirect) {
-+            *out = roomcircuit::private_dns::Endpoint;
++            *out = g_private_dns_profile.endpoint;
 +            return true;
 +        }
  

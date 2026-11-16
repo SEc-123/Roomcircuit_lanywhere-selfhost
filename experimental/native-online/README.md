@@ -4,7 +4,7 @@
 
 The backend includes independent account linking, authorization and selected game-protocol profiles. Client-side experiments target HOS 19.0.1 and Atmosphère 1.12.0 in emuMMC. Actual console account linking, native game connection and multiplayer gameplay remain unverified. The code does not establish support for all games.
 
-**Development configuration:** Some experimental DNS rules and probe sources contain a fixed test-server IP and an embedded test CA. Their certificates are time-limited. These settings are tied to one test environment and must not be used as a deployment profile for other users or production. Configure an independently owned endpoint and trust chain before further testing; do not activate the candidate boot or DNS profile as an installation step.
+**Development configuration:** Builds require an explicit independent CA and server address. Preparing credentials, checking TLS, and compiling the candidate do not activate DNS or boot profiles. Server routes, device enrollment and physical-console acceptance are still required; this is not an installation package.
 
 The account and game services are development fixtures; they are not connected to the public RoomCircuit release. Source and licenses are retained in this directory. No runtime account data, private keys or device reports are included.
 

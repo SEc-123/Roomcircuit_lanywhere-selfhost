@@ -26,15 +26,17 @@ The format test accepts a fixture from the native trust-store builder and reject
 
 ## Private DNS profile
 
-The local DNS candidate adds a read-only `atmosphere/roomcircuit-native/DNS/profile.txt` input. The loader requires HOS 19.0.1 and reads the file only after confirming emuMMC type 1. The profile selects exact aliases from the pinned account and two game contracts. Selected aliases point only to the independent server. Missing, unreadable or invalid input leaves the existing DNS rules in effect. The private IPv4 replies reject unsupported address families and malformed hints through the normal resolver error fields.
+The local DNS candidate adds a read-only `atmosphere/roomcircuit-native/DNS/profile.txt` input. The loader requires HOS 19.0.1 and reads the file only after confirming emuMMC type 1. The profile selects exact aliases from the pinned account and two game contracts. The profile must explicitly specify the target IPv4 address; there is no compiled-in endpoint. Selected aliases point to that address. Missing, unreadable or invalid input leaves the existing DNS rules in effect. The private IPv4 replies reject unsupported address families and malformed hints through the normal resolver error fields.
 
-The candidate and package readback receipt are stored separately in `.artifacts`. An active profile requires matching independent TLS certificates and working local service routes for every selected alias. The existing compatibility certificate covers the IP and `roomcircuit.native`. Physical acceptance for the account and game aliases remains pending.
+The candidate and package readback receipt are stored separately in `.artifacts`. An active profile requires matching independent TLS certificates and working local service routes for every selected alias. The actual server certificate and SNI routes must cover each selected alias; a test using a separately imported CA is not proof of the system account trust path. Physical acceptance for the account and game aliases remains pending.
 
 ```bash
 python3 -B native-client/test_private_dns_scope.py /path/to/atmosphere-1.12.0
 c++ -std=c++20 -Wall -Wextra -Werror native-client/test_private_dns.cpp -o /tmp/roomcircuit-test-private-dns
 /tmp/roomcircuit-test-private-dns
 ```
+
+The profile format starts with `RoomCircuitNativeDNS1 <IPv4>` and a newline, followed by one exact supported hostname per line. Unknown names, duplicate names, malformed addresses and empty profiles are rejected. The endpoint is never inferred and no profile is installed or activated by the build. Use the TLS-only preflight in `native-validation/preflight/` before preparing any real configuration.
 
 ## Native acceptance
 

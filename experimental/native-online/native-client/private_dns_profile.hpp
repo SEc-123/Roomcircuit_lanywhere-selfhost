@@ -7,9 +7,16 @@
 
 namespace roomcircuit::private_dns {
 
-    using Profile = std::uint16_t;
-    constexpr std::string_view Header = "RoomCircuitNativeDNS1 49.233.147.207\n";
-    constexpr std::uint32_t Endpoint = 49u | (233u << 8) | (147u << 16) | (207u << 24);
+    using HostMask = std::uint16_t;
+    struct Profile {
+        HostMask hosts = 0;
+        std::uint32_t endpoint = 0;
+        constexpr Profile() = default;
+        constexpr Profile(int) : hosts(0), endpoint(0) {}
+        constexpr bool operator==(const Profile &) const = default;
+        constexpr bool operator==(int value) const { return value == 0 && hosts == 0; }
+    };
+    constexpr std::string_view Header = "RoomCircuitNativeDNS1 ";
     constexpr std::size_t MaxBytes = 1024;
     constexpr std::array<std::string_view, 11> Hosts = {
         "accounts.nintendo.com",
@@ -24,13 +31,13 @@ namespace roomcircuit::private_dns {
         "g2c3c9a00-lp1.s.n.srv.nintendo.net",
         "g28abaa00-lp1.s.n.srv.nintendo.net",
     };
-    static_assert(Hosts.size() <= 8 * sizeof(Profile));
+    static_assert(Hosts.size() <= 8 * sizeof(HostMask));
 
     constexpr char AsciiLower(char c) {
         return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
     }
 
-    constexpr Profile HostBit(std::string_view name, bool query) {
+    constexpr HostMask HostBit(std::string_view name, bool query) {
         if (query && name.ends_with('.')) {
             name.remove_suffix(1);
         }
@@ -47,40 +54,60 @@ namespace roomcircuit::private_dns {
                 }
             }
             if (equal) {
-                return static_cast<Profile>(1u << index);
+                return static_cast<HostMask>(1u << index);
             }
         }
         return 0;
     }
 
-    constexpr Profile Parse(std::string_view file) {
-        if (file.size() > MaxBytes || !file.starts_with(Header)) {
-            return 0;
+    constexpr bool ParseAddress(std::string_view text, std::uint32_t &address) {
+        std::uint32_t result = 0;
+        for (std::size_t i = 0; i < 4; ++i) {
+            const auto end = text.find('.');
+            const auto part = text.substr(0, end);
+            if (part.empty() || part.size() > 3 || (part.size() > 1 && part[0] == '0')) return false;
+            unsigned number = 0;
+            for (const char c : part) {
+                if (c < '0' || c > '9') return false;
+                number = number * 10 + static_cast<unsigned>(c - '0');
+            }
+            if (number > 255 || (i == 0 && (number == 0 || number == 127 || number >= 224))) return false;
+            result |= static_cast<std::uint32_t>(number) << (8 * i);
+            if (i < 3) {
+                if (end == std::string_view::npos) return false;
+                text.remove_prefix(end + 1);
+            } else if (end != std::string_view::npos) return false;
         }
+        if (result == 0xffffffffu) return false;
+        address = result;
+        return true;
+    }
+
+    constexpr Profile Parse(std::string_view file) {
+        if (file.size() > MaxBytes || !file.starts_with(Header)) return {};
         file.remove_prefix(Header.size());
-        Profile result = 0;
+        const auto newline = file.find('\n');
+        if (newline == std::string_view::npos) return {};
+        Profile result;
+        if (!ParseAddress(file.substr(0, newline), result.endpoint)) return {};
+        file.remove_prefix(newline + 1);
         while (!file.empty()) {
             const auto end = file.find('\n');
-            if (end == std::string_view::npos) {
-                return 0;
-            }
+            if (end == std::string_view::npos) return {};
             const auto bit = HostBit(file.substr(0, end), false);
-            if (bit == 0 || (result & bit) != 0) {
-                return 0;
-            }
-            result |= bit;
+            if (bit == 0 || (result.hosts & bit) != 0) return {};
+            result.hosts |= bit;
             file.remove_prefix(end + 1);
         }
+        if (!result.hosts) return {};
         return result;
     }
 
     constexpr bool Matches(Profile active, const char *name, std::size_t size) {
-        if (active == 0 || name == nullptr) {
-            return false;
-        }
+        if (active.hosts == 0 || name == nullptr) return false;
         const std::string_view buffer(name, size < 254 ? size : 254);
         const auto end = buffer.find('\0');
-        return end != std::string_view::npos && (active & HostBit(buffer.substr(0, end), true)) != 0;
+        return end != std::string_view::npos && (active.hosts & HostBit(buffer.substr(0, end), true)) != 0;
     }
 
     constexpr bool ParseService(std::string_view service, std::uint16_t &port) {

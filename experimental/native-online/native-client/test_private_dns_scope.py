@@ -79,7 +79,7 @@ TESTS = r"""
 int main() {
     using namespace roomcircuit::private_dns;
     const char alias[] = "accounts.nintendo.com", blocked[] = "eshop.nintendo.net", unrelated[] = "example.org";
-    contents = std::string(Header) + alias + "\n";
+    contents = std::string(Header) + "192.0.2.1\n" + alias + "\n";
     assert(LoadPrivateDnsProfile() == 0);
     spl::smc::mode = 2;
     assert(LoadPrivateDnsProfile() == 0);
@@ -101,9 +101,12 @@ int main() {
     g_redirection_list.emplace_back("*nintendo*", 0x0100007f);
     std::uint32_t address = 0;
     bool matched = false;
-    assert(GetRedirectedHostByName(&address, &matched, alias, sizeof(alias)) && matched && address == Endpoint);
+    assert(GetRedirectedHostByName(&address, &matched, alias, sizeof(alias)) && matched && address == 0x010200c0);
     assert(GetRedirectedHostByName(&address, &matched, blocked, sizeof(blocked)) && !matched && address == 0x0100007f);
     assert(!GetRedirectedHostByName(&address, &matched, unrelated, sizeof(unrelated)) && !matched);
+    const char unterminated[] = {'a','c','c','o','u','n','t','s'};
+    assert(!GetRedirectedHostByName(&address, &matched, unterminated, sizeof(unterminated)) && !matched);
+    assert(!GetRedirectedHostByName(&address, &matched, nullptr, 0) && !matched);
     contents += "unsupported.example.org\n";
     g_private_dns_profile = LoadPrivateDnsProfile();
     assert(g_private_dns_profile == 0 && closes == 3);

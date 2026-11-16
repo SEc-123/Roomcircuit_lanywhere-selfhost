@@ -41,3 +41,9 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -c native-validation/trust-store/store.c -o "$RUNNER_TEMP/native-store.o"
           c++ -std=c++20 -Wall -Wextra -Werror native-client/test_private_certstore.cpp "$RUNNER_TEMP/native-store.o" -o "$RUNNER_TEMP/native-store-test"
           "$RUNNER_TEMP/native-store-test"
+      - name: Test explicit TLS configuration and alias preflight
+        working-directory: experimental/native-online
+        run: |
+          python3 native-validation/build-inputs/test_prepare.py
+          python3 native-validation/preflight/test_check.py
+          python3 native-validation/https-endpoint/test_prepare_endpoint.py

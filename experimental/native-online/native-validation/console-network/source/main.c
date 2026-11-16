@@ -13,7 +13,8 @@
 #include <unistd.h>
 #include "startup.h"
 
-#define PROBE_HOST "49.233.147.207"
+#include <rc_build_config.h>
+#define PROBE_HOST RC_PROBE_HOST
 #define PROBE_PATH "/native/compatibility"
 #define REPORT_DIR "sdmc:/switch/roomcircuit-native"
 #define REPORT_FILE REPORT_DIR "/network-probe.txt"

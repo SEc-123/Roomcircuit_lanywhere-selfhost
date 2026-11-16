@@ -6,7 +6,7 @@
 using namespace roomcircuit::private_dns;
 
 int main() {
-    std::string complete(Header);
+    std::string complete = std::string(Header) + "192.0.2.1\n";
     for (auto host : Hosts) {
         complete.append(host).push_back('\n');
     }
@@ -17,7 +17,7 @@ int main() {
         assert(Matches(all, name.c_str(), name.size() + 1));
         assert(!Matches(all, name.c_str(), name.size()));
     }
-    const auto one = Parse(std::string(Header) + "accounts.nintendo.com\n");
+    const auto one = Parse(std::string(Header) + "192.0.2.1\naccounts.nintendo.com\n");
     assert(one != 0 && one != all);
     const char first[] = "ACCOUNTS.NINTENDO.COM.";
     const char other[] = "api.accounts.nintendo.com";
@@ -33,7 +33,13 @@ int main() {
     assert(Parse(complete + "%-lp1.baas.nintendo.com\n") == 0);
     assert(Parse(complete.substr(0, complete.size() - 1)) == 0);
     assert(Parse(complete + std::string(MaxBytes, 'x')) == 0);
-    assert(Parse("RoomCircuitNativeDNS1 192.0.2.1\naccounts.nintendo.com\n") == 0);
+    assert(Parse("RoomCircuitNativeDNS1 0.0.0.0\naccounts.nintendo.com\n") == 0);
+    assert(Parse("RoomCircuitNativeDNS1 127.0.0.1\naccounts.nintendo.com\n") == 0);
+    assert(Parse("RoomCircuitNativeDNS1 224.0.0.1\naccounts.nintendo.com\n") == 0);
+    assert(Parse("RoomCircuitNativeDNS1 192.0.02.1\naccounts.nintendo.com\n") == 0);
+    assert(Parse("RoomCircuitNativeDNS1 192.0.2.256\naccounts.nintendo.com\n") == 0);
+    assert(Parse("RoomCircuitNativeDNS1 192.0.2.1\n") == 0);
+    assert(Parse("RoomCircuitNativeDNS1 203.0.113.9\naccounts.nintendo.com\n").endpoint == 0x097100cb);
 
     std::uint16_t port = 0;
     assert(ParseService("https", port) && port == 443);
@@ -42,7 +48,7 @@ int main() {
     assert(!ParseService("443!", port));
     assert(!ParseService("http", port));
     assert(!ParseService("", port));
-    static_assert(Endpoint == 0xcf93e931);
+    assert(one.endpoint == 0x010200c0);
 
     std::string wire_hint("\xbe\xef\xca\xfe", 4);
     wire_hint.resize(33);

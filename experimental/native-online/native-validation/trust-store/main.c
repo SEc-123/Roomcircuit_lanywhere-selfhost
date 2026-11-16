@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 #include <switch.h>
 #include "store.h"
-#include "ca_hash.h"
+#include <rc_build_config.h>
 #include "startup.h"
 #include <errno.h>
 #include <stdio.h>
