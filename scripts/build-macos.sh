@@ -47,16 +47,17 @@ version = source["derived_version"]
 upstream = source["commit"]
 atmosphere = source["submodules"]["console/Atmosphere-libs"]["commit"]
 tesla = source["submodules"]["console/libtesla"]["commit"]
+ultrahand = source["submodules"]["console/libultrahand"]["commit"]
 if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", version) or not all(
-    re.fullmatch(r"[a-f0-9]{40}", revision) for revision in (upstream, atmosphere, tesla)
+    re.fullmatch(r"[a-f0-9]{40}", revision) for revision in (upstream, atmosphere, tesla, ultrahand)
 ):
     sys.exit("Invalid build provenance in UPSTREAM.json")
-print(version, upstream, atmosphere, tesla)
+print(version, upstream, atmosphere, tesla, ultrahand)
 PY
 )
-read -r version upstream atmosphere tesla <<< "$provenance"
+read -r version upstream atmosphere tesla ultrahand <<< "$provenance"
 
-for component in console/Atmosphere-libs console/libtesla; do
+for component in console/Atmosphere-libs console/libtesla console/libultrahand; do
     gitlink=''
     # A container may see a linked worktree without its external Git directory.
     if [[ -e $root/.git ]] && git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -66,6 +67,7 @@ for component in console/Atmosphere-libs console/libtesla; do
         git -C "$root" submodule update --init --recursive -- "$component"
         expected=$atmosphere
         if [[ $component == console/libtesla ]]; then expected=$tesla; fi
+        if [[ $component == console/libultrahand ]]; then expected=$ultrahand; fi
         if [[ $(git -C "$root/$component" rev-parse HEAD) != "$expected" ]]; then
             printf '%s\n' 'The checked-out submodules must match UPSTREAM.json.' >&2
             exit 1
@@ -78,13 +80,13 @@ for component in console/Atmosphere-libs console/libtesla; do
 done
 if [[ ! -f $root/console/Atmosphere-libs/config/templates/stratosphere.mk ||
       ! -f $root/console/Atmosphere-libs/libstratosphere/Makefile ||
-      ! -f $root/console/libtesla/include/tesla.hpp ]]; then
-    printf '%s\n' 'The source tree must contain the pinned Atmosphere-libs and libtesla files.' >&2
+      ! -f $root/console/libultrahand/libtesla/include/tesla.hpp ]]; then
+    printf '%s\n' 'The source tree must contain the pinned Atmosphere-libs and libultrahand files.' >&2
     exit 1
 fi
 
 printf '%s\n' "${compiler_version%%$'\n'*}" "LANywhere $upstream" \
-    "Atmosphere-libs $atmosphere" "libtesla $tesla"
+    "Atmosphere-libs $atmosphere" "libtesla $tesla" "libultrahand $ultrahand"
 
 "$make_bin" -C "$root/console" -j "$jobs" "TARGET_VERSION=$version" "GITREV=${upstream:0:8}" \
     ATMOSPHERE_GIT_BRANCH=pinned "ATMOSPHERE_GIT_REVISION=pinned-${atmosphere:0:8}" \

@@ -8,7 +8,7 @@ static const GuidePage pages_zh[] = {
         "大厅按 Y 打开节点列表，选中节点后按 A。",
         "确认大厅底部的「建房线路」已显示所选节点。",
         "按 + 回到游戏，在「本地无线」里创建房间。"
-    }, "新房间会使用当前建房线路。选了第三方节点，房间就开在该节点。" },
+    }, "也可在浮层选「建房节点」。新房间会使用所选线路。" },
     { "加入房间", {
         "在大厅按 A 选房，线路按房间来源自动切换。",
         "按提示打开游戏，或从 HOME 回游戏。",
@@ -45,7 +45,7 @@ static const GuidePage pages_zh[] = {
         "更新完成后，退出并重启进入虚拟系统。"
     }, "也可以按 LS 检查更新。安装时请保持开机。" },
     { "自定义节点", {
-        "在 switch/RoomCircuit/nodes.ini 添加节点。",
+        "在 config/RoomCircuit/nodes.ini 添加节点。",
         "保存文件后重新打开节点列表。",
         "未收录的节点需双方设置相同地址并选择。"
     }, "管理员收录的节点及房间会显示在统一大厅。" },
@@ -55,7 +55,7 @@ static const GuidePage pages_en[] = {
         "Press Y in the lobby, choose a node, then press A.",
         "Check the selected node under Hosting line in the lobby.",
         "Press + to return to the game and host in Local Wireless."
-    }, "New rooms use the selected hosting node, including third-party nodes." },
+    }, "You can also choose the hosting node in the overlay." },
     { "Join a room", {
         "Select with A. The lobby uses that room's source.",
         "Open the game when prompted, or return to it from HOME.",
@@ -92,7 +92,7 @@ static const GuidePage pages_en[] = {
         "When finished, exit and restart into your virtual system."
     }, "You can check manually with LS. Keep the console on while installing." },
     { "Custom nodes", {
-        "Add nodes to switch/RoomCircuit/nodes.ini.",
+        "Add nodes to config/RoomCircuit/nodes.ini.",
         "Save the file and reopen the node list.",
         "For local nodes, both players select the same address."
     }, "Published nodes and rooms appear in the shared lobby." },

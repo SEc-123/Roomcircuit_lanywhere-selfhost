@@ -1,7 +1,7 @@
 #include "node_catalog.h"
 #include "node_lobby.h"
 #include "roomcircuit_paths.h"
-namespace storage { inline bool StorageUseCurrent(){ return false; } }
+namespace storage { inline bool StorageUseCurrent(){ return false; } unsigned StorageGeneration(){ return 0; } }
 #include <algorithm>
 #include <array>
 #include <atomic>

@@ -5,5 +5,7 @@
  * storage selection. Set once before opening any RoomCircuit user data. */
 void roomcircuit_storage_init(void);
 void roomcircuit_storage_set_authoritative(bool current);
+void roomcircuit_storage_set_generation(unsigned generation);
+unsigned roomcircuit_storage_generation(void);
 bool roomcircuit_storage_current(void);
 bool roomcircuit_storage_available(void);

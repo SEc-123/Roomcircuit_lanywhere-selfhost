@@ -1510,9 +1510,9 @@ uint32_t VirtualAddress(bool renew) {
 #if defined(__SWITCH__)
     // This sysmodule mounts sdmc through ams::fs, not libnx's stdio devoptab.
     namespace fs = ams::fs;
-    const char *Path = rc_storage_path(ams::mitm::storage::StorageUseCurrent(), RC_LEGACY_PATH("lanplay-ip.bin"), RC_CURRENT_PATH("lanplay-ip.bin"));
-    const char *TemporaryPath = rc_storage_path(ams::mitm::storage::StorageUseCurrent(), RC_LEGACY_PATH("lanplay-ip.bin.tmp"), RC_CURRENT_PATH("lanplay-ip.bin.tmp"));
-    const char *PreviousPath = rc_storage_path(ams::mitm::storage::StorageUseCurrent(), RC_LEGACY_PATH("lanplay-ip.bin.previous"), RC_CURRENT_PATH("lanplay-ip.bin.previous"));
+    const char *Path = rc_storage_path_gen(ams::mitm::storage::StorageGeneration(), RC_LEGACY_PATH("lanplay-ip.bin"), RC_V1_PATH("lanplay-ip.bin"), RC_CURRENT_PATH("lanplay-ip.bin"));
+    const char *TemporaryPath = rc_storage_path_gen(ams::mitm::storage::StorageGeneration(), RC_LEGACY_PATH("lanplay-ip.bin.tmp"), RC_V1_PATH("lanplay-ip.bin.tmp"), RC_CURRENT_PATH("lanplay-ip.bin.tmp"));
+    const char *PreviousPath = rc_storage_path_gen(ams::mitm::storage::StorageGeneration(), RC_LEGACY_PATH("lanplay-ip.bin.previous"), RC_V1_PATH("lanplay-ip.bin.previous"), RC_CURRENT_PATH("lanplay-ip.bin.previous"));
     auto read = [](const char *path, uint32_t *out) {
         fs::FileHandle file;
         if (R_FAILED(fs::OpenFile(&file, path, fs::OpenMode_Read)))
@@ -1542,7 +1542,7 @@ uint32_t VirtualAddress(bool renew) {
 #if defined(__SWITCH__)
     // Stage and verify before replacing the last valid identity. Any storage
     // failure keeps this session usable and leaves the old file recoverable.
-    static_cast<void>(fs::CreateDirectory(ams::mitm::storage::StorageUseCurrent() ? RC_CURRENT_DIR : RC_LEGACY_DIR));
+    static_cast<void>(fs::CreateDirectory(rc_storage_path_gen(ams::mitm::storage::StorageGeneration(), RC_LEGACY_DIR, RC_V1_DIR, RC_CURRENT_DIR)));
     std::memcpy(saved, "LPIP", 4);
     Put32(saved + 4, address);
     static_cast<void>(fs::DeleteFile(TemporaryPath));

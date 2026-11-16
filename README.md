@@ -16,8 +16,8 @@ RoomCircuit brings compatible Nintendo Switch games online through their built-i
 You need a Switch running Atmosphère, an internet connection, and a game with a compatible Local Wireless mode. Use the same game version as the other players.
 
 1. Download the **full SD ZIP** (`switch-online-*-sd.zip`) from the [latest release](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest).
-2. Extract it on a computer. Merge the ZIP's `atmosphere/` and `switch/` folders into the root of your SD card and replace matching files. This installs RoomCircuit's version of the `ldn_mitm` module.
-3. Safely eject the SD card, restart into Atmosphère, and open **RoomCircuit** from **Album**. The app is `switch/RoomCircuit/RoomCircuit.nro`, the overlay is `switch/.overlays/RoomCircuit.ovl`, and user data is under `switch/RoomCircuit/`.
+2. Extract it on a computer. Merge the ZIP's `atmosphere/` and `switch/` folders, and `config/` if present, into the root of your SD card. This installs RoomCircuit's version of the `ldn_mitm` module.
+3. Safely eject the SD card and restart Atmosphère. Open **RoomCircuit** from **Album** or its overlay. The app is in `switch/RoomCircuit/`, the overlay in `switch/.overlays/`, and settings in `config/RoomCircuit/`.
 
 ## Play
 
@@ -26,6 +26,8 @@ You need a Switch running Atmosphère, an internet connection, and a game with a
 1. From the lobby, press **Y** to open **Nodes**. Choose a node and press **A**. In the picker, press **R** to filter by region, **X** to retest, or **L** to test with friends.
 2. Check **Hosting line** at the bottom of the lobby. Press **+** to close RoomCircuit, then return to the game and create a room in **Local Wireless**. The new room uses the selected node.
 3. Set the room password in the game, then reopen RoomCircuit. Once the lobby shows **My room** and the password action is available, press **Y** and choose **Share in lobby** or **Keep password hidden**.
+
+You can also choose the hosting node from the RoomCircuit overlay in Ultrahand. Leave the current local-wireless session before switching nodes. The overlay follows Ultrahand's theme, side and sound settings. It needs Ultrahand and its loader; the Album app works separately.
 
 ### Join a room
 
@@ -36,7 +38,7 @@ If the game uses link codes instead of a room list, choose the same node, enter 
 
 ### Add a LAN Play node
 
-Create `switch/RoomCircuit/nodes.ini` on the SD card. Add one section per node:
+Create `config/RoomCircuit/nodes.ini` on the SD card. Add one section per node:
 
 ```ini
 [node]
@@ -47,6 +49,8 @@ region=europe
 ```
 
 Open **Nodes** again to load changes. `name`, `host` and `port` are required; `region` may be `unknown`, `asia`, `europe`, `americas`, `oceania` or `africa`. Up to seven local-only endpoints are supported. Use a public IPv4 address or hostname and UDP port supplied by the LAN Play server operator. The sample hostname is a placeholder.
+
+If both the old and new `nodes.ini` changed differently, back up both, keep the intended content in `config/RoomCircuit/nodes.ini`, move the old file aside, and reopen **Nodes**.
 
 An administrator-published node and its rooms appear in the shared lobby. An unregistered local node is selected by each player; its rooms are found from the game's Local Wireless search. Matching host and port use the administrator-published identity. The shared friend test currently compares the 13 built-in nodes. [Administrator setup and script example](deploy/CUSTOM-NODES.md)
 
@@ -68,7 +72,7 @@ Press **→** from the room list to open the in-app guide. See [node routing and
 
 ### Manual update (any version)
 
-Use the [full SD ZIP](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest) for a first install, to upgrade from a version before **v0.8.8**, or if the in-app update fails. Follow the [installation steps](#install) and overwrite matching files. Keep your existing `lanywhere/` folder until RoomCircuit has migrated its settings and appointments to `switch/RoomCircuit/`. For a custom server build, use its matching SD ZIP.
+Use the [full SD ZIP](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest) for a first install, to upgrade from a version before **v0.8.8**, or if the in-app update fails. Follow the [installation steps](#install) and overwrite matching files. Keep the existing `lanywhere/` and `switch/RoomCircuit/` data until migration to `config/RoomCircuit/` completes. For a custom server build, use its matching SD ZIP.
 
 ## Build and self-host
 

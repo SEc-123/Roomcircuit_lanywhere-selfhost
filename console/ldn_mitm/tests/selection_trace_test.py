@@ -14,9 +14,12 @@ extract = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(extract)
 logger = (NATIVE / 'selection_trace.cpp').read_text()
 logger = '\n'.join(line for line in logger.splitlines() if not line.startswith(('#include', '#if', '#endif')))
-logger = '#include "'+str(ROOT / 'common/roomcircuit_paths.h')+'"\nnamespace ams::mitm::storage { bool StorageUseCurrent() { return false; } }\n'+logger
+logger = '#include "'+str(ROOT / 'common/roomcircuit_paths.h')+'"\nnamespace ams::mitm::storage { bool StorageUseCurrent() { return false; } unsigned StorageGeneration(){ return 0; } }\n'+logger
 relay = (NATIVE / 'lanywhere_relay.cpp').read_text()
-select = (extract.function(relay, 'Result SetHostNodeInternal(u32 node, u64 expected_generation) {') + '\n' +
+select = (extract.function(relay, 'u64 BeginManualHostSelection(') + '\n' +
+          extract.function(relay, 'void FinishManualHostSelection(') + '\n' +
+          extract.function(relay, 'Result SetHostNodeInternalExpected(') + '\n' +
+          extract.function(relay, 'Result SetHostNodeInternal(u32 node, u64 expected_generation) {') + '\n' +
           extract.function(relay, 'Result SetHostNode(u32 node) {'))
 fixture = r'''
 #include "node_lobby.h"
@@ -77,6 +80,7 @@ namespace selection_trace=ams::mitm::selection_trace;
 
 static std::atomic<bool>g_direct_session=false;
 static std::atomic<u64>g_host_preference_generation{1};
+static u64 g_manual_host_generation=0;
 static u32 g_selected_status=NodeHostSelected;
 static NodeDynamicEntry g_selected_node{};
 static size_t NodeSlot(u32 id){return id<NODE_CATALOG_COUNT?id:NODE_TOTAL_CAPACITY;}

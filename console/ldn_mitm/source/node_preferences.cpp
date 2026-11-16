@@ -13,10 +13,10 @@ struct Record {
     u8 hash[32];
 };
 constexpr u32 Magic = 0x524e4f44;
-const char *Path() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("selected-node.bin"), RC_CURRENT_PATH("selected-node.bin")); }
-const char *Previous() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("selected-node.bin.previous"), RC_CURRENT_PATH("selected-node.bin.previous")); }
-const char *Invalid() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("selected-node.bin.invalid"), RC_CURRENT_PATH("selected-node.bin.invalid")); }
-const char *Temporary() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("selected-node.bin.tmp"), RC_CURRENT_PATH("selected-node.bin.tmp")); }
+const char *Path() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("selected-node.bin"), RC_V1_PATH("selected-node.bin"), RC_CURRENT_PATH("selected-node.bin")); }
+const char *Previous() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("selected-node.bin.previous"), RC_V1_PATH("selected-node.bin.previous"), RC_CURRENT_PATH("selected-node.bin.previous")); }
+const char *Invalid() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("selected-node.bin.invalid"), RC_V1_PATH("selected-node.bin.invalid"), RC_CURRENT_PATH("selected-node.bin.invalid")); }
+const char *Temporary() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("selected-node.bin.tmp"), RC_V1_PATH("selected-node.bin.tmp"), RC_CURRENT_PATH("selected-node.bin.tmp")); }
 bool RemoveIfPresent(const char *path) {
     const Result r = fs::DeleteFile(path);
     return R_SUCCEEDED(r) || fs::ResultPathNotFound::Includes(r);
@@ -48,7 +48,7 @@ NodePreferenceRead ReadNodePreference(NodeDynamicEntry *entry) {
 bool SaveNodePreference(const NodeDynamicEntry &entry) {
     Record saved{Magic, 1, entry, {}};
     crypto::GenerateSha256(saved.hash, sizeof(saved.hash), &saved, offsetof(Record, hash));
-    const char *directory = storage::StorageUseCurrent() ? RC_CURRENT_DIR : RC_LEGACY_DIR;
+    const char *directory = rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_DIR, RC_V1_DIR, RC_CURRENT_DIR);
     static_cast<void>(fs::CreateDirectory(directory));
     if (!RemoveIfPresent(Temporary()) || R_FAILED(fs::CreateFile(Temporary(), sizeof(saved)))) return false;
     fs::FileHandle file;

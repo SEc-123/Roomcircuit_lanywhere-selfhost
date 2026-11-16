@@ -9,6 +9,7 @@
 #define NODE_SHARED_CAPACITY 24u
 #define NODE_LOCAL_BASE 0x80000000u
 #define NODE_LOCAL_CAPACITY 7u
+#define NODE_LOCAL_CONFIG_INVALID (1u << 31)
 #define NODE_TOTAL_CAPACITY (NODE_SHARED_CAPACITY + NODE_LOCAL_CAPACITY)
 #define NODE_DYNAMIC_CATALOG_REQUEST 0x38u
 #define NODE_DYNAMIC_CATALOG_RESPONSE 0xb8u
@@ -18,6 +19,10 @@
 #define NODE_SET_LOCAL_IPC 43u
 #define NODE_GET_HOST_INFO_IPC 44u
 #define NODE_GET_ACTIVE_ROUTE_IPC 45u
+#define NODE_SET_HOST_IDENTITY_IPC 47u
+#define NODE_GET_HOST_IDENTITY_IPC 49u
+#define NODE_START_HOST_TASK_IPC 50u
+#define NODE_GET_HOST_TASK_IPC 51u
 #define NODE_CATALOG_REQUEST 0x32u
 #define NODE_CATALOG_RESPONSE 0xb2u
 #define NODE_LOBBY_REQUEST 0x33u
@@ -69,6 +74,13 @@ typedef struct {
     char name[48];
     uint8_t ipv4[4]; /* Central-validated route pin, network byte order. */
 } NodeDynamicEntry;
+
+enum NodeHostTaskState { NodeHostTaskIdle = 0, NodeHostTaskWorking = 1, NodeHostTaskFinished = 2, NodeHostTaskExpired = 3 };
+typedef struct {
+    uint32_t version, state, result, reserved;
+    uint64_t task_id;
+    NodeDynamicEntry identity;
+} NodeHostTaskStatus;
 
 typedef struct {
     uint32_t version, count, enabled, available;
@@ -159,6 +171,7 @@ typedef struct {
 NODE_STATIC_ASSERT(sizeof(NodeActiveRouteInfo) == 160, "active route IPC layout");
 NODE_STATIC_ASSERT(sizeof(NodeHostInfo) == 160, "node host IPC layout");
 NODE_STATIC_ASSERT(sizeof(NodeDynamicEntry) == 192, "dynamic node wire layout");
+NODE_STATIC_ASSERT(sizeof(NodeHostTaskStatus) == 216, "host task IPC layout");
 NODE_STATIC_ASSERT(sizeof(NodeDynamicCatalog) == 3472, "dynamic node catalog IPC layout");
 NODE_STATIC_ASSERT(sizeof(NodeRoomLocator) == 64, "node locator layout");
 NODE_STATIC_ASSERT(sizeof(NodeRoomWire) == NODE_LOBBY_ROW_SIZE, "node room row layout");

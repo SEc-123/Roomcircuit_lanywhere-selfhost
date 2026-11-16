@@ -7,7 +7,7 @@ source=(root/'console/ldn_mitm/source/appointment_notifier.cpp').read_text()
 digest=hashlib.sha256(source.encode()).hexdigest()
 assert source.count('#include "appointment_notifier.hpp"')==1
 source=source.replace('#include "appointment_notifier.hpp"','').replace('#include "storage_migration.hpp"','').replace('#include "../../../common/roomcircuit_paths.h"','')
-source='#include "roomcircuit_paths.h"\nnamespace ams::mitm::storage { bool StorageUseCurrent() { return false; } }\n'+source
+source='#include "roomcircuit_paths.h"\nnamespace ams::mitm::storage { bool StorageUseCurrent() { return false; } unsigned StorageGeneration(){ return 0; } }\n'+source
 harness=(Path(__file__).with_name('notifier_harness.cpp.in')).read_text().replace('@ACTUAL_SOURCE@',source)
 with tempfile.TemporaryDirectory(prefix='notifier-host-') as td:
  p=Path(td);(p/'main.cpp').write_text(harness)

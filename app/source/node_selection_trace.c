@@ -15,8 +15,8 @@
 #define TRACE_DIRECTORY NODE_SELECTION_TRACE_DIRECTORY
 #define TRACE_PATH NODE_SELECTION_TRACE_DIRECTORY "/node-selection-app.log"
 #else
-#define TRACE_DIRECTORY rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_DIR, RC_CURRENT_DIR)
-#define TRACE_PATH rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("node-selection-app.log"), RC_CURRENT_PATH("node-selection-app.log"))
+#define TRACE_DIRECTORY rc_storage_path_gen(roomcircuit_storage_generation(), RC_LEGACY_DIR, RC_V1_DIR, RC_CURRENT_DIR)
+#define TRACE_PATH rc_storage_path_gen(roomcircuit_storage_generation(), RC_LEGACY_PATH("node-selection-app.log"), RC_V1_PATH("node-selection-app.log"), RC_CURRENT_PATH("node-selection-app.log"))
 #endif
 #define TRACE_LIMIT 2048L
 #define TRACE_BUILD "node-select-20261116b"

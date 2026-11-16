@@ -46,7 +46,9 @@ static u64 application_pid,current_pid=100;
 static const char *pending_version="0.7.0",*module_version="0.7.0";
 static bool malformed,initialized,canonical_path,socket_ready,rollback_pending,must_exit;
 static bool storage_available = true;
+static unsigned storage_generation = 3;
 static bool roomcircuit_storage_available(void){return storage_available;}
+static unsigned roomcircuit_storage_generation(void){return storage_generation;}
 static bool thread_created, socket_registered, socket_error;
 static atomic_bool cancel_requested,worker_done;
 static Thread worker;
@@ -111,6 +113,8 @@ int main(void){
  assert(update_ui_initialize("sdmc:/switch/RoomCircuit/RoomCircuit.nro")&&bridge_calls==1&&!ack_calls&&state.screen==UpdateRecoveryBlocked);
  reset();recover_result=UPDATE_INSTALLED;
  assert(!update_ui_initialize("sdmc:/switch/RoomCircuit/RoomCircuit.nro")&&bridge_calls==1&&bridge_allow_existing&&ack_calls==1&&start_calls==1);
+ reset();recover_result=UPDATE_INSTALLED;storage_generation=1;
+ assert(update_ui_initialize("sdmc:/switch/RoomCircuit/RoomCircuit.nro")&&ack_calls==1&&state.screen==UpdateRestart&&!start_calls);storage_generation=3;
  reset();recover_result=UPDATE_INSTALLED;module_version="0.6.2";assert(update_ui_initialize("sdmc:/switch/lanywhere.nro")&&!ack_calls);
  reset();recover_result=UPDATE_INSTALLED;pending_result=UPDATE_IO;assert(update_ui_initialize("sdmc:/switch/lanywhere.nro")&&!ack_calls);
  reset();recover_result=UPDATE_INSTALLED;svc_result=1;assert(update_ui_initialize("sdmc:/switch/lanywhere.nro")&&!ack_calls);

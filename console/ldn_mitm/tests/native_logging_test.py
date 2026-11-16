@@ -62,9 +62,10 @@ namespace log {Result Initialize();void LogFormatImpl(const char*,...);}
 /* SOURCE */
 namespace fs=ams::fs;namespace util=ams::util;
 #define RC_LEGACY_DIR "sdmc:/lanywhere"
-#define RC_CURRENT_DIR "sdmc:/switch/RoomCircuit/data"
-namespace storage {bool StorageUseCurrent(){return false;}}
-const char *rc_storage_path(bool current,const char*oldPath,const char*newPath){return current?newPath:oldPath;}
+#define RC_V1_DIR "sdmc:/switch/RoomCircuit/data"
+#define RC_CURRENT_DIR "sdmc:/config/RoomCircuit/data"
+namespace storage {bool StorageUseCurrent(){return false;} unsigned StorageGeneration(){ return 0; }}
+const char *rc_storage_path_gen(unsigned gen,const char*oldPath,const char*v1,const char*newPath){return gen==3?newPath:gen==1?v1:oldPath;}
 static const char*LogPath(){return "sdmc:/lanywhere/bsd.log";}
 static bool DebugEnabled(){return true;}
 /* BSD */

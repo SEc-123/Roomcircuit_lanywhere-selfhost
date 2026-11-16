@@ -392,7 +392,7 @@ static void load_games(bool loading, bool failed)
         return;
     }
     if (!failed)
-        g_game_count = title_inventory_appointments_at(rc_storage_path(roomcircuit_storage_current(), GAME_CACHE_PATH, RC_CURRENT_PATH("game-titles.bin")), g_game_offset,
+        g_game_count = title_inventory_appointments_at(rc_storage_path_gen(roomcircuit_storage_generation(), GAME_CACHE_PATH, RC_V1_PATH("game-titles.bin"), RC_CURRENT_PATH("game-titles.bin")), g_game_offset,
             g_games, APPOINTMENT_PAGE_SIZE, &g_games_more);
     if (failed || g_game_count < 0) g_notice = "Could not read game titles. Reopen the app.";
     else g_notice = g_game_count ? NULL : "No installed games with Local Wireless found.";

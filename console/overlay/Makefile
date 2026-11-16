@@ -47,9 +47,9 @@ APP_VERSION :=	${TARGET_VERSION}
 
 TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source ../libultrahand/common ../libultrahand/libultra/source ../libultrahand/libtesla/source
 DATA		:=	data
-INCLUDES	:=	include ../libtesla/include
+INCLUDES	:=	include ../libultrahand/common ../libultrahand/libultra/include ../libultrahand/libtesla/include
 
 NO_ICON		:=  1
 
@@ -61,7 +61,7 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES) $(VERSION_DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DROOMCIRCUIT_NO_DOWNLOAD -DROOMCIRCUIT_NO_GLOBAL_THEME_WRITES -DROOMCIRCUIT_OWN_LANGUAGE
 
 CXXFLAGS	:= $(CFLAGS) -fno-exceptions -std=c++20
 
@@ -94,6 +94,7 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+CPPFILES	:=	$(filter-out download_funcs.cpp,$(CPPFILES))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
@@ -192,6 +193,7 @@ all	:	 $(OUTPUT).ovl
 
 $(OUTPUT).ovl		:	$(OUTPUT).elf $(OUTPUT).nacp 
 	@elf2nro $< $@ $(NROFLAGS)
+	@printf 'ULTR' >> $@
 	@echo "built ... $(notdir $(OUTPUT).ovl)"
 
 $(OUTPUT).elf	:	$(OFILES)

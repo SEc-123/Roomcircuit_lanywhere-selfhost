@@ -1,0 +1,68 @@
+{
+  "repository": "https://github.com/ppkantorski/libultrahand",
+  "tag": "v2.5.4",
+  "commit": "f58503071976881ec8c9c4097a7681fe2343a747",
+  "upstream_files_sha256": {
+    "LICENSE": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "README.md": "bb57952fb7ba52857cafe0da0b1c538e1eee8df5760692b2e0a41e93acf6cdb4",
+    "SUB_LICENSE": "7e7170e3cebf88a9f60c7b8421418323c09304da1af4d5e90f4da1dc1c8a2661",
+    "common/cJSON.c": "f892717f26cf3d21b7108de50cea95b6e48092950427615fe1d8d9c46ea09cca",
+    "common/cJSON.h": "fda63720ffad1d007802f62204831018d167084c26e2ce08ad36f11529a90682",
+    "libtesla/LICENSE": "189b1af95d661151e054cea10c91b3d754e4de4d3fecfb074c1fb29476f7167b",
+    "libtesla/README.md": "b59f3e995f08f123047280a5001a6021bf3dd2d9a84da620c190b6c8db03b16c",
+    "libtesla/example/Makefile": "a6b113af232586f8245008b19affa7c9ebeeab4d6d0f3fa4de2b3285488507b2",
+    "libtesla/example/source/main.cpp": "c74608cf4c895193239d4609b55470d52df22682efbd20c9fafff68f6bc5575e",
+    "libtesla/include/stb_truetype.h": "161778620c6dd428af3bc640b2342c3f9829ba625446ba2892d1772773c19185",
+    "libtesla/include/tesla.hpp": "ab334deb585a73ef5e5842ddcd0906dd36cd7dc042ea571047f140ae038747a6",
+    "libtesla/source/tesla.cpp": "963eca7750d72f231b934d4f160f1d7f15f1d683a4e2bfdce43116cd78fa714e",
+    "libultra/LICENSE": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "libultra/README.md": "56d3b3fe1211703ee08a799aee9eae81a350117cf552c3a907e263a8ff34296e",
+    "libultra/SUB_LICENSE": "7e7170e3cebf88a9f60c7b8421418323c09304da1af4d5e90f4da1dc1c8a2661",
+    "libultra/include/audio.hpp": "e13d7f48978a2ae989d127ec4438d5cdff0a1e098f77d6db7a22ab1ed25b1f81",
+    "libultra/include/debug_funcs.hpp": "9ec18d5ebec8e4520cf8bd61c014f4e2a6f6d9c0a4732cfaa5c5ace81f3df17d",
+    "libultra/include/download_funcs.hpp": "651dd3148818d3240bc49230a534e486b760b491cd5eb93bb95c4fdaf37df7f3",
+    "libultra/include/exception_wrap.hpp": "67eb23ce39e73ddb161cf1e70c1613ca6afc36d4237209ca22bf81642978a83d",
+    "libultra/include/get_funcs.hpp": "a9bf30f28a52b0d030a55795bd32f6ccb365e3af572de48b51068efabfc02831",
+    "libultra/include/global_vars.hpp": "2df1754869fbeb00c30afd3dcb0f9d37bb3ed23a8265c7fbc1cf75c62ee5c0b2",
+    "libultra/include/haptics.hpp": "190145770e57f589e5c27a5221a847da0e84f8be1d5e9970335b9ad04a8c3b64",
+    "libultra/include/hex_funcs.hpp": "7433b033c905820a13ff9e6b119db61d6f0e6fad3696221b2b110ff33971b7e6",
+    "libultra/include/ini_funcs.hpp": "292527b2c26f152651135fa4d4a5fc6b9f9a1d4c1dd789ed22b777fc2704285f",
+    "libultra/include/json_funcs.hpp": "5721cea29f86bc267ca2c3c8d766e30526e3e6ca642f21a63b87aec951967b00",
+    "libultra/include/list_funcs.hpp": "b411ba897c5df39ac77cee34282d1260dd1dcaaf84d35f51e9e30af319a2f7dc",
+    "libultra/include/mod_funcs.hpp": "3386a2ee3c1fa988b7c23a282fdd4794dd88f79ab4037f76ae0f9ad46a78e79b",
+    "libultra/include/path_funcs.hpp": "dee8b145aff04d7302f735dd13f6e80b8dace24500d3f28f4bed5b902489381b",
+    "libultra/include/string_funcs.hpp": "34828ca1a2b7192e1cb871ae071948378696124c519cb13b5baeb0475a95d5e5",
+    "libultra/include/tsl_utils.hpp": "cfc51214da69c83bb489520d0fa6c2129f3892e2cb85a7be79e68c5af5d2f0ec",
+    "libultra/include/ultra.hpp": "a9c8b4a6eda654de69b03e805dfb21d29085db0733aca054be83343e0ce6f8df",
+    "libultra/source/audio.cpp": "031fcf8fce0357f627e86b8cda90a3cc5f329b7bad044b127b8ca2460e1c75e7",
+    "libultra/source/debug_funcs.cpp": "49b16f6157aa13b4de2d2d71cdbb3d14b7d6204ef78168b03da8d549a93a84dd",
+    "libultra/source/download_funcs.cpp": "d42acf5dfbad1c43b247fedf6b983d396aeef578da9cb34692de052ecb3c1452",
+    "libultra/source/exception_wrap.cpp": "61fa676d74ae6920b21acd824fc720027effd078c3f4200881274a39ba75706f",
+    "libultra/source/get_funcs.cpp": "7c87f4fd08d32247719f4dbe7ab1ea6e8bb9d47e719c41178ff79f7c6432ecf4",
+    "libultra/source/global_vars.cpp": "7eaaeae909643d2b9eb557f9cc58c80c7905cb6f636364d6143fdbfbd6f73fb3",
+    "libultra/source/haptics.cpp": "60f67f77926c1b357b58607486b0ad9a2beb129fade47a1afc33be3070c99afa",
+    "libultra/source/hex_funcs.cpp": "e9a27adf9d05ca1c36796b78ee4d406518e699790cf0411b40edddc4ca4d8448",
+    "libultra/source/ini_funcs.cpp": "0e0ec650e33a83fe812411ce7c1df8c6a05a12c14ff619c1a404de51e9d3110b",
+    "libultra/source/json_funcs.cpp": "7d293f8e1028696bc949827a10960edb1d354fb7e47575b1eea01af261e06800",
+    "libultra/source/list_funcs.cpp": "989e549ebdbc5f767c3d0e956ff551284a85cb9574ef7929c1073d01cd98813b",
+    "libultra/source/mod_funcs.cpp": "07ab54b97216d65f3f72a906cf11bcf562ad3ed54edec53946c1d6ce6254606b",
+    "libultra/source/path_funcs.cpp": "8e0ff84d45477f738a47f7e3327f7263a564a4c11e967710692f3e85ce9c6e3b",
+    "libultra/source/string_funcs.cpp": "a8b40b8b911cd445f4a78ca2cd8ea815d4e36ee1d4d4763130aeea3434fbdd24",
+    "libultra/source/tsl_utils.cpp": "53cdad7dee3136507f6763e1d67806eee3b121fa9a55a5e4c27949d9480007ee",
+    "ultrahand.mk": "1c80bfc7102777f456157ba2648fae88c1d381f4653bef5fa91c2c6991b58054"
+  },
+  "local_patches": {
+    "libtesla/include/tesla.hpp": {
+      "upstream_sha256": "ab334deb585a73ef5e5842ddcd0906dd36cd7dc042ea571047f140ae038747a6",
+      "local_sha256": "e1a2726e6d5acb2e12df8318dd19938f13fbebbfb157c3329b57737089700551"
+    },
+    "libtesla/source/tesla.cpp": {
+      "upstream_sha256": "963eca7750d72f231b934d4f160f1d7f15f1d683a4e2bfdce43116cd78fa714e",
+      "local_sha256": "f6e2ffe9dee00092c771d89690c0389f338405050db8d0e6db1e9eff9c0113e2"
+    },
+    "libultra/include/ultra.hpp": {
+      "upstream_sha256": "a9c8b4a6eda654de69b03e805dfb21d29085db0733aca054be83343e0ce6f8df",
+      "local_sha256": "76b84e8c27437e66dcb831939df2ea3110ff3a0f820e1a6cad47128d361fd311"
+    }
+  }
+}

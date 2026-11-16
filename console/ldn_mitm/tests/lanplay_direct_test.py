@@ -39,6 +39,7 @@ class NativeLanPlayTransport(unittest.TestCase):
             subprocess.run(shlex.split(os.environ.get("CXX", "c++")) +
                 ["-std=c++17", "-D__SWITCH__", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "common"), str(cpp), "-o", str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
+            subprocess.run([str(executable), "v1"], check=True)
             subprocess.run([str(executable), "current"], check=True)
 
     def test_switch_thread_priority_uses_stratosphere_conversion(self):

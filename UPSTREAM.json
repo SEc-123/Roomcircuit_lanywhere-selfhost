@@ -3,7 +3,7 @@
   "repository": "https://github.com/augustocco/lanywhere",
   "commit": "7f2bb47bacc972f9ae11ae9a48e35991d09a9837",
   "license": "GPL-2.0-only",
-  "derived_version": "0.9.0",
+  "derived_version": "0.9.1",
   "submodules": {
     "console/Atmosphere-libs": {
       "repository": "https://github.com/Atmosphere-NX/Atmosphere-libs.git",
@@ -12,6 +12,12 @@
     "console/libtesla": {
       "repository": "https://github.com/WerWolv/libtesla.git",
       "commit": "f766e9b607a05e9756843cbd62b3bfb98be1646c"
+    },
+    "console/libultrahand": {
+      "repository": "https://github.com/ppkantorski/libultrahand.git",
+      "commit": "f58503071976881ec8c9c4097a7681fe2343a747",
+      "license": "GPL-2.0-or-later and CC-BY-4.0; see component LICENSE files",
+      "tag": "v2.5.4"
     }
   },
   "status": "release; validation scope documented in docs/distribution/VALIDATION.md",
@@ -56,6 +62,15 @@
         "libstratosphere/source/os/impl/os_thread_manager_impl.os.horizon.cpp"
       ],
       "reason": "Return thread, memory and handle resource-limit failures to callers while preserving cleanup, retry and programmer-error behavior."
+    },
+    {
+      "component": "console/libultrahand",
+      "files": [
+        "libultra/include/ultra.hpp",
+        "libtesla/include/tesla.hpp",
+        "libtesla/source/tesla.cpp"
+      ],
+      "reason": "Exclude unused download code; preserve RoomCircuit language preference; avoid rewriting global theme/notification settings; bound glyph memory; handle event and thread resource failures and move UI requests to the UI thread."
     }
   ]
 }

@@ -1,6 +1,6 @@
 #include "node_lobby.h"
 #include "roomcircuit_paths.h"
-namespace ams::mitm::storage { inline bool StorageUseCurrent(){ return false; } }
+namespace ams::mitm::storage { inline bool StorageUseCurrent(){ return false; } unsigned StorageGeneration(){ return 0; } }
 #include <algorithm>
 #include <array>
 #include <cassert>

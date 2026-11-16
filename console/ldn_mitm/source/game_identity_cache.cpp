@@ -40,16 +40,16 @@ namespace ams::mitm::lanywhere {
         if (!out) return GameCacheInvalid;
         std::memset(out, 0, sizeof(*out));
         out->program_id = program_id;
-        GameCacheResult result = LookupPath(rc_storage_path(storage::StorageUseCurrent(), GAME_CACHE_PATH, RC_CURRENT_PATH("game-titles.bin")), program_id, local_communication_id, out);
+        GameCacheResult result = LookupPath(rc_storage_path_gen(storage::StorageGeneration(), GAME_CACHE_PATH, RC_V1_PATH("game-titles.bin"), RC_CURRENT_PATH("game-titles.bin")), program_id, local_communication_id, out);
         if (result == GameCacheInvalid)
-            result = LookupPath(rc_storage_path(storage::StorageUseCurrent(), GAME_CACHE_PREVIOUS_PATH, RC_CURRENT_PATH("game-titles.bin.previous")), program_id, local_communication_id, out);
+            result = LookupPath(rc_storage_path_gen(storage::StorageGeneration(), GAME_CACHE_PREVIOUS_PATH, RC_V1_PATH("game-titles.bin.previous"), RC_CURRENT_PATH("game-titles.bin.previous")), program_id, local_communication_id, out);
         return result;
     }
     GameCacheResult GameIdentityCacheExactRecord(u64 program_id, GameCacheRecord *out) {
         if (!out || !program_id) return GameCacheInvalid;
         std::memset(out, 0, sizeof(*out));
         fs::FileHandle file;
-        if (R_FAILED(fs::OpenFile(&file, rc_storage_path(storage::StorageUseCurrent(), GAME_CACHE_PATH, RC_CURRENT_PATH("game-titles.bin")), fs::OpenMode_Read))) return GameCacheInvalid;
+        if (R_FAILED(fs::OpenFile(&file, rc_storage_path_gen(storage::StorageGeneration(), GAME_CACHE_PATH, RC_V1_PATH("game-titles.bin"), RC_CURRENT_PATH("game-titles.bin")), fs::OpenMode_Read))) return GameCacheInvalid;
         s64 size = 0;
         GameCacheResult result = GameCacheInvalid;
         if (R_SUCCEEDED(fs::GetFileSize(&size, file)) && size >= 0)
@@ -60,6 +60,6 @@ namespace ams::mitm::lanywhere {
     bool GameIdentityCacheFingerprint(u8 out[32]) {
         if (!out) return false;
         std::memset(out, 0, 32);
-        return FingerprintPath(rc_storage_path(storage::StorageUseCurrent(), GAME_CACHE_PATH, RC_CURRENT_PATH("game-titles.bin")), out) || FingerprintPath(rc_storage_path(storage::StorageUseCurrent(), GAME_CACHE_PREVIOUS_PATH, RC_CURRENT_PATH("game-titles.bin.previous")), out);
+        return FingerprintPath(rc_storage_path_gen(storage::StorageGeneration(), GAME_CACHE_PATH, RC_V1_PATH("game-titles.bin"), RC_CURRENT_PATH("game-titles.bin")), out) || FingerprintPath(rc_storage_path_gen(storage::StorageGeneration(), GAME_CACHE_PREVIOUS_PATH, RC_V1_PATH("game-titles.bin.previous"), RC_CURRENT_PATH("game-titles.bin.previous")), out);
     }
 }

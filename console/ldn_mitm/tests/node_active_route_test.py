@@ -22,6 +22,7 @@ namespace lanplay {struct Snapshot {bool active=false;u64 epoch=0;};static Snaps
 struct DiscoveryRoute {u32 ipv4=0;uint16_t port=0;u32 node_id=0;u64 selection_epoch=0;};
 struct GameRoute {DiscoveryRoute discovery{};u64 room_epoch=0;};
 static std::mutex g_lock;static std::atomic<bool>g_direct_session{false};static GameRoute g_direct_room{};
+static NodeDynamicEntry g_selected_node{};
 enum class RelayState{Idle,Connecting,InRoom};static RelayState g_state=RelayState::Idle;
 static bool g_recovering=false;static sockaddr_in g_server{};static char g_room_provider[33]="self";
 static const char *REGION_PROVIDER_COMMUNITY="community";
@@ -38,6 +39,10 @@ int main(){
  g_direct_session=true;g_direct_room.discovery.node_id=13;g_direct_room.room_epoch=9;lanplay::state={true,9};
  x=GetActiveNodeRoute();assert(x.status==NodeRouteConnected&&x.node_id==13);
  lanplay::state.active=false;x=GetActiveNodeRoute();assert(x.status==NodeRouteUnavailable&&x.node_id==13);
+ g_direct_room.discovery.node_id=NODE_LOCAL_BASE;g_selected_node.id=NODE_LOCAL_BASE;strcpy(g_selected_node.name,"Saved local");lanplay::state={true,9};
+ x=GetActiveNodeRoute();assert(x.status==NodeRouteConnected&&!strcmp(x.name,"Saved local"));
+ lanplay::state.active=false;x=GetActiveNodeRoute();assert(x.status==NodeRouteUnavailable&&!strcmp(x.name,"Saved local"));
+ g_selected_node.id=NODE_LOCAL_BASE+1;x=GetActiveNodeRoute();assert(!strcmp(x.name,"Unknown node"));
  g_direct_session=false;g_state=RelayState::InRoom;g_server.sin_addr.s_addr=htonl(0x08080808);g_server.sin_port=htons(11460);
  x=GetActiveNodeRoute();assert(x.status==NodeRouteConnected&&x.node_id==0&&!strcmp(x.name,"Main server"));
  g_recovering=true;x=GetActiveNodeRoute();assert(x.status==NodeRouteRecovering);

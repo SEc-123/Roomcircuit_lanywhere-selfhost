@@ -46,7 +46,7 @@
 static bool g_es;
 static bool g_zh;
 static bool g_language_save_failed;
-#define UI_LANGUAGE_PATH rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("language.ini"), RC_CURRENT_PATH("language.ini"))
+#define UI_LANGUAGE_PATH rc_storage_path_gen(roomcircuit_storage_generation(), RC_LEGACY_PATH("language.ini"), RC_V1_PATH("language.ini"), RC_CURRENT_PATH("language.ini"))
 static bool g_guide_open;
 static int g_guide_page;
 #define TR(es, en) ui_tr((es), (en))
@@ -443,7 +443,7 @@ static void decode_icon(Image *img, const unsigned char *jpeg, size_t size)
 static void record_icon_status(u64 id, unsigned attempt, unsigned long result,
                                u64 size, const char *decode, const Image *icon, int installed)
 {
-    const char *path = rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("icon-status.log"), RC_CURRENT_PATH("icon-status.log"));
+    const char *path = rc_storage_path_gen(roomcircuit_storage_generation(), RC_LEGACY_PATH("icon-status.log"), RC_V1_PATH("icon-status.log"), RC_CURRENT_PATH("icon-status.log"));
     FILE *f = fopen(path, "a+");
     if (!f) return;
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return; }
@@ -831,6 +831,7 @@ typedef struct {
     uint32_t host_node;
     NodeHostInfo host_info;
     bool host_info_valid;
+    u32 storage_health;
     uint64_t game_filter, game_focus_id;
     bool game_rail_focused;
     char game_filter_name[128];
@@ -858,6 +859,28 @@ typedef struct {
     RoomPasswordEdit password_edit;
     int sel;  // grupo elegido en la lista, o -1
 } View;
+
+static u32 read_storage_health(Service *service)
+{
+    u32 health = 0;
+    const Result result = serviceDispatchOut(service, RC_STORAGE_HEALTH_IPC, health);
+    const u32 known = RC_STORAGE_HEALTH_LEGACY_CHANGED | RC_STORAGE_HEALTH_LEGACY_UNCHECKED |
+        RC_STORAGE_HEALTH_BOOTSTRAP_CONFLICT | RC_STORAGE_HEALTH_BOOTSTRAP_UNCHECKED;
+    if ((R_FAILED(result) && !(roomcircuit_storage_generation() != 3 && result == MAKERESULT(10, 221))) ||
+        (R_SUCCEEDED(result) && (health & ~known))) return RC_STORAGE_HEALTH_BOOTSTRAP_UNCHECKED;
+    return health;
+}
+
+static const char *storage_health_text(u32 health)
+{
+    return ui_text(health & RC_STORAGE_HEALTH_BOOTSTRAP_CONFLICT ?
+                   "Server settings conflict. Compare config.ini files." :
+                   health & RC_STORAGE_HEALTH_BOOTSTRAP_UNCHECKED ?
+                   "Could not check server settings. Try again." :
+                   health & RC_STORAGE_HEALTH_LEGACY_CHANGED ?
+                   "Older settings changed. Back up and compare." :
+                   "Could not check older settings. Back up and compare.");
+}
 
 static const char *hosting_node_label(const View *v, char *buffer, size_t size)
 {
@@ -1012,7 +1035,7 @@ static const char *match_state_text(u8 state)
 
 // Capturas sin mando: si aparece sdmc:/lanywhere/captura.flag (por ejemplo, copiado por FTP), el siguiente
 // fotograma se guarda como sdmc:/lanywhere/captura-N.png y el archivo se borra.
-#define CAPTURE_FLAG rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("captura.flag"), RC_CURRENT_PATH("captura.flag"))
+#define CAPTURE_FLAG rc_storage_path_gen(roomcircuit_storage_generation(), RC_LEGACY_PATH("captura.flag"), RC_V1_PATH("captura.flag"), RC_CURRENT_PATH("captura.flag"))
 static bool g_capture_pending;
 
 static bool capture_requested(void)
@@ -2087,6 +2110,8 @@ static void draw(const View *v)
     if (v->room_notice_visible)
         gfx_text_fit(MARGIN, FOOTER_Y - 36, 21, v->st.state == StateConnecting ? C_WARN : C_ERR,
                      tr_error(v->st.error), GFX_W - 2 * MARGIN);
+    else if (v->storage_health)
+        gfx_text_fit(MARGIN, FOOTER_Y - 36, 21, C_WARN, storage_health_text(v->storage_health), GFX_W - 2 * MARGIN);
     else if (v->inventory_error)
         gfx_text_fit(MARGIN, FOOTER_Y - 36, 21, C_ERR,
                      TR("No se pudieron leer los nombres. Vuelve a abrir la app.", "Could not read game titles. Reopen the app."), GFX_W - 2 * MARGIN);
@@ -2540,7 +2565,8 @@ static void select_module_storage(void)
     u32 selection = 2;
     Result rc = serviceDispatchOut(&service, 46, selection);
     serviceClose(&service);
-    if (R_SUCCEEDED(rc) && selection <= 1) roomcircuit_storage_set_authoritative(selection == 1);
+    if (R_SUCCEEDED(rc) && (selection == 0 || selection == 1 || selection == 3))
+        roomcircuit_storage_set_generation(selection);
 }
 
 int main(int argc, char **argv)
@@ -2596,6 +2622,7 @@ int main(int argc, char **argv)
     if (!g_ns_ready || !inventory_started) atomic_store(&g_inventory_finished, true);
 
     View v = {0};
+    v.storage_health = read_storage_health(&g_lanywhere);
     v.sel = -1;
     v.region_filter=255;
     v.node_picker_available=nodes_ui_supported(&g_lanywhere,&v.host_node);

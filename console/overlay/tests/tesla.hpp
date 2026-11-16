@@ -7,6 +7,8 @@
 #include <functional>
 #include <memory>
 #include <vector>
+struct SwapDepth { u32 value; explicit SwapDepth(u32 v):value(v){} };
+namespace ult { inline std::string BACK="Back", OK="OK", ON="On", OFF="Off", HIDE="Hide", CANCEL="Cancel"; }
 namespace tsl {
 namespace elm {
 class Element {public:virtual ~Element()=default;virtual bool onClick(u64){return false;}};
@@ -47,7 +49,13 @@ public:
     void restoreFocus() {}
 };
 inline std::unique_ptr<Gui> nextGui;
+inline unsigned swapCalls = 0;
 template<class G, class... Args> std::unique_ptr<Gui> &changeTo(Args&&... args) {
+    nextGui = std::make_unique<G>(std::forward<Args>(args)...);
+    return nextGui;
+}
+template<class G, class... Args> std::unique_ptr<Gui> &swapTo(SwapDepth, Args&&... args) {
+    ++swapCalls;
     nextGui = std::make_unique<G>(std::forward<Args>(args)...);
     return nextGui;
 }

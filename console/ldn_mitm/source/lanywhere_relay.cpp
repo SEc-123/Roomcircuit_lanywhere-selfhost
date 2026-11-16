@@ -8,6 +8,7 @@
 #include "selection_trace.hpp"
 #include "lanywhere_relay.hpp"
 #include "storage_migration.hpp"
+#include "node_config_sync.hpp"
 #include "custom_nodes.hpp"
 #include "node_preferences.hpp"
 #include "../../../common/roomcircuit_paths.h"
@@ -48,7 +49,7 @@ namespace ams::mitm::lanywhere {
 
     namespace {
 
-        const char *ConfigPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("config.ini"), RC_CURRENT_PATH("config.ini")); }
+        const char *ConfigPath() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("config.ini"), RC_V1_PATH("config.ini"), RC_CURRENT_PATH("config.ini")); }
 #if RELAY_PROFILE_FIXED
         static_assert(RELAY_PROFILE_PORT > 0 && RELAY_PROFILE_PORT <= 65535);
         constexpr const char ConfigError[] = "Invalid server or network settings";
@@ -57,7 +58,7 @@ namespace ams::mitm::lanywhere {
         constexpr const char ConfigError[] = "Set a valid server IPv4 and port in the LANywhere app";
 #endif
         constexpr s64 MaxConfigSize = 511;
-        const char *LogPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("relay.log"), RC_CURRENT_PATH("relay.log")); }
+        const char *LogPath() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("relay.log"), RC_V1_PATH("relay.log"), RC_CURRENT_PATH("relay.log")); }
         constexpr u32 UdpMagic = 0x594E414C;
         constexpr int ConnectTimeoutMs = 5000;
         constexpr int MatchIoTimeoutMs = 900;
@@ -139,6 +140,9 @@ namespace ams::mitm::lanywhere {
         constinit os::SdkMutex g_restore_lock;
         std::atomic<bool> g_preference_loaded{false};
         std::atomic<u64> g_host_preference_generation{1};
+        // Protected by g_lock. A retry may never adopt the generation of a
+        // manual selection that has not yet finished probing/committing.
+        u64 g_manual_host_generation = 0;
         std::atomic<bool> g_retry_running{false};
         constinit os::SdkMutex g_retry_lifecycle_lock;
         bool g_retry_requested = false;
@@ -150,6 +154,24 @@ namespace ams::mitm::lanywhere {
         bool RefreshDynamicNodes();
         void RestoreHostPreference();
         bool LookupNode(u32 node, NodeDynamicEntry *entry);
+        u64 BeginManualHostSelection() {
+            std::scoped_lock lock(g_lock);
+            u64 generation;
+            do { generation = ++g_host_preference_generation; } while (!generation);
+            g_manual_host_generation = generation;
+            return generation;
+        }
+        void FinishManualHostSelection(u64 generation, bool failed) {
+            bool retry = false;
+            {
+                std::scoped_lock lock(g_lock);
+                if (g_manual_host_generation == generation && g_host_preference_generation.load() == generation) {
+                    g_manual_host_generation = 0;
+                    retry = failed && g_selected_status == NodeHostUnavailable && g_host_node != NODE_ID_INVALID;
+                }
+            }
+            if (retry) StartPreferenceRetry();
+        }
         size_t NodeSlot(u32 node) {
             if (node < NODE_SHARED_CAPACITY) return node;
             if (node >= NODE_LOCAL_BASE && node < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY)
@@ -239,7 +261,7 @@ namespace ams::mitm::lanywhere {
             fs::FileHandle file;
             Result open_result = fs::OpenFile(std::addressof(file), ConfigPath(), fs::OpenMode_Read);
             if (fs::ResultPathNotFound::Includes(open_result))
-                open_result = fs::OpenFile(std::addressof(file), rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("config.ini.bak"), RC_CURRENT_PATH("config.ini.bak")), fs::OpenMode_Read);
+                open_result = fs::OpenFile(std::addressof(file), rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("config.ini.bak"), RC_V1_PATH("config.ini.bak"), RC_CURRENT_PATH("config.ini.bak")), fs::OpenMode_Read);
             if (R_FAILED(open_result) && !fs::ResultPathNotFound::Includes(open_result)) return false;
             if (R_SUCCEEDED(open_result)) {
                 char text[MaxConfigSize + 1] = {};
@@ -1884,7 +1906,7 @@ namespace ams::mitm::lanywhere {
         std::scoped_lock lk(g_log_lock);
         fs::FileHandle file;
         if (R_FAILED(fs::OpenFile(std::addressof(file), LogPath(), fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
-            static_cast<void>(fs::CreateDirectory(storage::StorageUseCurrent() ? RC_CURRENT_DIR : RC_LEGACY_DIR));
+            static_cast<void>(fs::CreateDirectory(rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_DIR, RC_V1_DIR, RC_CURRENT_DIR)));
             if (R_FAILED(fs::CreateFile(LogPath(), 0)) || R_FAILED(fs::OpenFile(std::addressof(file), LogPath(), fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
                 return;
             }
@@ -3646,18 +3668,7 @@ namespace ams::mitm::lanywhere {
         }
 
         bool ReadLocalNodes(char *buffer, size_t capacity, size_t *actual) {
-            *actual = 0;
-            fs::FileHandle file;
-            const Result opened = fs::OpenFile(&file, RC_CONFIG_DIR "/nodes.ini", fs::OpenMode_Read);
-            if (fs::ResultPathNotFound::Includes(opened)) return true;
-            if (R_FAILED(opened)) return false;
-            s64 size = 0;
-            bool valid = R_SUCCEEDED(fs::GetFileSize(&size, file)) && size >= 0 &&
-                static_cast<u64>(size) <= capacity &&
-                R_SUCCEEDED(fs::ReadFile(actual, file, 0, buffer, static_cast<size_t>(size))) &&
-                *actual == static_cast<size_t>(size);
-            fs::CloseFile(file);
-            return valid;
+            return storage::ReadNodeConfig(buffer, capacity, actual);
         }
 
         bool RefreshDynamicNodes() {
@@ -3678,7 +3689,7 @@ namespace ams::mitm::lanywhere {
                 for (u32 i = 0; i < g_dynamic_nodes.count; ++i)
                     if (g_dynamic_nodes.nodes[i].id < NODE_SHARED_CAPACITY)
                         clean.nodes[clean.count++] = g_dynamic_nodes.nodes[i];
-                clean.enabled = g_dynamic_nodes.enabled;
+                clean.enabled = g_dynamic_nodes.enabled & ((1u << NODE_SHARED_CAPACITY) - 1);
             }
             bool fresh_received = false;
             DiscoveryRoute route{};
@@ -3706,8 +3717,14 @@ namespace ams::mitm::lanywhere {
                 for (u32 i = 0; i < clean.count; ++i) std::memset(clean.nodes[i].ipv4, 0, 4);
             }
             size_t bytes = 0;
-            if (!ReadLocalNodes(scratch->config, sizeof(scratch->config), &bytes) ||
-                !custom_nodes::ParseLocal(scratch->config, bytes, clean, &scratch->combined)) return false;
+            const bool local_valid = ReadLocalNodes(scratch->config, sizeof(scratch->config), &bytes) &&
+                custom_nodes::ParseLocal(scratch->config, bytes, clean, &scratch->combined);
+            if (!local_valid) {
+                // A broken or conflicting local configuration must not leave
+                // stale local node identities selectable. Shared nodes remain.
+                scratch->combined = clean;
+                scratch->combined.enabled |= NODE_LOCAL_CONFIG_INVALID;
+            }
             auto &combined = scratch->combined;
             for (u32 i = 0; i < combined.count;) {
                 const auto &candidate = combined.nodes[i];
@@ -3730,7 +3747,20 @@ namespace ams::mitm::lanywhere {
                 if (g_selection.selection_epoch && SelectionNowMs() >= g_selection_until_ms)
                     ClearSelectionLocked();
                 if (g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting ||
-                    g_selection.selection_epoch) return true; // keep the active route pinned
+                    g_selection.selection_epoch) {
+                    // Retain the active endpoint, but surface conflicts and
+                    // never keep stale local entries selectable in the cache.
+                    if (!local_valid) {
+                        g_dynamic_nodes.enabled |= NODE_LOCAL_CONFIG_INVALID;
+                        g_dynamic_nodes.enabled &= NODE_LOCAL_CONFIG_INVALID | ((1u << NODE_SHARED_CAPACITY) - 1);
+                        for (u32 i = 0; i < g_dynamic_nodes.count;) {
+                            if (g_dynamic_nodes.nodes[i].id < NODE_LOCAL_BASE) { ++i; continue; }
+                            for (u32 j = i + 1; j < g_dynamic_nodes.count; ++j) g_dynamic_nodes.nodes[j - 1] = g_dynamic_nodes.nodes[j];
+                            g_dynamic_nodes.nodes[--g_dynamic_nodes.count] = {};
+                        }
+                    } else g_dynamic_nodes.enabled &= ~NODE_LOCAL_CONFIG_INVALID;
+                    return true;
+                }
                 if (g_host_node >= NODE_CATALOG_COUNT && g_host_node != NODE_ID_INVALID && g_preference_loaded) {
                     const NodeDynamicEntry *match = nullptr;
                     for (u32 i = 0; i < combined.count; ++i) {
@@ -3801,7 +3831,7 @@ namespace ams::mitm::lanywhere {
                 NodeDynamicEntry saved{};
                 {
                     std::scoped_lock lock(g_lock);
-                    if (g_selected_status != NodeHostUnavailable || g_host_node == NODE_ID_INVALID) break;
+                    if (g_manual_host_generation || g_selected_status != NodeHostUnavailable || g_host_node == NODE_ID_INVALID) break;
                     saved = g_selected_node;
                 }
                 if (saved.id >= NODE_CATALOG_COUNT) static_cast<void>(RefreshDynamicNodes());
@@ -3826,8 +3856,14 @@ namespace ams::mitm::lanywhere {
             std::scoped_lock lifecycle(g_retry_lifecycle_lock);
             if (g_retry_requested) {
                 g_retry_requested = false;
-                generation = g_host_preference_generation.load();
-                continue;
+                {
+                    std::scoped_lock lock(g_lock);
+                    if (!g_manual_host_generation && g_selected_status == NodeHostUnavailable &&
+                        g_host_node != NODE_ID_INVALID) {
+                        generation = g_host_preference_generation.load();
+                        continue;
+                    }
+                }
             }
             g_retry_running = false;
             break;
@@ -3836,13 +3872,19 @@ namespace ams::mitm::lanywhere {
 
         void StartPreferenceRetry() {
             std::scoped_lock lock(g_retry_lifecycle_lock);
+            u64 generation;
+            {
+                std::scoped_lock route(g_lock);
+                if (g_manual_host_generation || g_selected_status != NodeHostUnavailable ||
+                    g_host_node == NODE_ID_INVALID) return;
+                generation = g_host_preference_generation.load();
+            }
             if (g_retry_running.load()) { g_retry_requested = true; return; }
             if (g_retry_created) {
                 os::WaitThread(&g_retry_thread);
                 os::DestroyThread(&g_retry_thread);
                 g_retry_created = false;
             }
-            const auto generation = g_host_preference_generation.load();
             const Result created = os::CreateThread(&g_retry_thread, PreferenceRetryWorker,
                 reinterpret_cast<void *>(static_cast<uintptr_t>(generation)), g_retry_stack, sizeof(g_retry_stack), 10);
             if (R_FAILED(created)) return;
@@ -3919,10 +3961,12 @@ namespace ams::mitm::lanywhere {
         NodeActiveRouteInfo info{};
         info.version = 1;
         DiscoveryRoute active{};
+        NodeDynamicEntry saved{};
         const bool direct_before = g_direct_session.load();
         const auto direct = direct_before ? lanplay::State() : lanplay::Snapshot{};
         {
             std::scoped_lock lock(g_lock);
+            saved = g_selected_node;
             if (g_direct_session.load()) {
                 active = g_direct_room.discovery;
                 info.status = direct_before && direct.active && direct.epoch == g_direct_room.room_epoch ?
@@ -3948,7 +3992,9 @@ namespace ams::mitm::lanywhere {
         }
         info.node_id = active.node_id;
         NodeDynamicEntry node{};
-        if (LookupNode(active.node_id, &node)) {
+        const bool found = LookupNode(active.node_id, &node) ||
+            (active.node_id >= NODE_LOCAL_BASE && saved.id == active.node_id && saved.name[0] && (node = saved, true));
+        if (found) {
             info.protocol = node.protocol; info.region = node.region; info.port = node.port;
             util::Strlcpy(info.name, active.node_id == 0 ? "Main server" : node.name, sizeof(info.name));
             util::Strlcpy(info.host, node.host, sizeof(info.host));
@@ -3964,12 +4010,25 @@ namespace ams::mitm::lanywhere {
         return g_relay_region == RelayRegionEurope ? NODE_ID_INVALID : g_host_node;
     }
 
+    bool GetHostNodeIdentity(NodeDynamicEntry *out) {
+        if (!out) return false;
+        *out = {};
+        RestoreHostPreference();
+        std::scoped_lock lock(g_lock);
+        if (g_host_node == NODE_ID_INVALID || g_relay_region == RelayRegionEurope) return false;
+        if (g_host_node < NODE_CATALOG_COUNT) return LookupNode(g_host_node, out);
+        if (g_selected_node.id != g_host_node) return false;
+        *out = g_selected_node;
+        return true;
+    }
+
     namespace {
-    Result SetHostNodeInternal(u32 node, u64 expected_generation) {
+    Result SetHostNodeInternalExpected(u32 node, u64 expected_generation, const NodeDynamicEntry *expected) {
         const auto trace = selection_trace::Begin(node, "host.begin");
         if (NodeSlot(node) >= NODE_TOTAL_CAPACITY || g_direct_session.load()) return ResultRelayFailed();
         NodeDynamicEntry requested{};
-        if (!LookupNode(node, &requested) || !requested.flags) return ResultRelayFailed();
+        if (!LookupNode(node, &requested) || !requested.flags ||
+            (expected && std::memcmp(&requested, expected, sizeof(requested)))) return ResultRelayFailed();
         {
             std::scoped_lock match(g_match_lock);
             std::scoped_lock lock(g_lock);
@@ -3996,7 +4055,8 @@ namespace ams::mitm::lanywhere {
             g_recovering || ArmedLocked() || g_match.in_flight) return ResultRelayFailed();
         // Persist the full identity, not a mutable slot number alone.
         NodeDynamicEntry identity{};
-        if (!LookupNode(node, &identity) || !identity.flags || identity.id != requested.id ||
+        if (!LookupNode(node, &identity) || !identity.flags ||
+            (expected && std::memcmp(&identity, expected, sizeof(identity))) || identity.id != requested.id ||
             identity.protocol != requested.protocol || identity.port != requested.port ||
             std::strcmp(identity.host, requested.host) ||
             (node >= NODE_CATALOG_COUNT && node < NODE_SHARED_CAPACITY &&
@@ -4016,18 +4076,107 @@ namespace ams::mitm::lanywhere {
         selection_trace::Record(trace, "host.committed");
         R_SUCCEED();
     }
+    Result SetHostNodeInternal(u32 node, u64 expected_generation) {
+        return SetHostNodeInternalExpected(node, expected_generation, nullptr);
+    }
     }
 
     Result SetHostNode(u32 node) {
-        u64 generation;
-        { std::scoped_lock lock(g_lock); generation = ++g_host_preference_generation; }
+        const u64 generation = BeginManualHostSelection();
         const Result result = SetHostNodeInternal(node, generation);
-        if (R_FAILED(result)) {
-            bool unavailable = false;
-            { std::scoped_lock lock(g_lock); unavailable = g_selected_status == NodeHostUnavailable && g_host_node != NODE_ID_INVALID; }
-            if (unavailable) StartPreferenceRetry();
-        }
+        FinishManualHostSelection(generation, R_FAILED(result));
         return result;
+    }
+
+    Result SetHostNodeVerified(const NodeDynamicEntry &expected) {
+        NodeDynamicEntry current{};
+        if (!LookupNode(expected.id, &current) || !current.flags ||
+            std::memcmp(&current, &expected, sizeof(current))) return ResultRelayFailed();
+        const u64 generation = BeginManualHostSelection();
+        const Result result = SetHostNodeInternalExpected(expected.id, generation, &expected);
+        FinishManualHostSelection(generation, R_FAILED(result));
+        return result;
+    }
+
+    namespace {
+        constinit os::SdkMutex g_host_task_lock;
+        os::ThreadType g_host_task_thread;
+        alignas(os::MemoryPageSize) u8 g_host_task_stack[0x4000];
+        bool g_host_task_created = false;
+        NodeHostTaskStatus g_host_task{1, NodeHostTaskIdle, 0, 0, 0, {}};
+        u64 g_host_task_next_id = 0;
+        u64 g_host_task_generation = 0;
+
+        void HostNodeTaskWorker(void *) {
+            NodeDynamicEntry identity{};
+            u64 generation = 0;
+            {
+                std::scoped_lock lock(g_host_task_lock);
+                identity = g_host_task.identity;
+                generation = g_host_task_generation;
+            }
+            const Result result = SetHostNodeInternalExpected(identity.id, generation, &identity);
+            FinishManualHostSelection(generation, R_FAILED(result));
+            {
+                std::scoped_lock lock(g_host_task_lock);
+                g_host_task.result = result.GetValue();
+                g_host_task.state = NodeHostTaskFinished;
+            }
+        }
+    }
+
+    Result StartHostNodeTask(const NodeDynamicEntry &identity, u64 *task_id) {
+        if (!task_id) return ResultRelayFailed();
+        *task_id = 0;
+        NodeDynamicEntry current{};
+        if (!LookupNode(identity.id, &current) || !current.flags ||
+            std::memcmp(&current, &identity, sizeof(current))) return ResultRelayFailed();
+        std::scoped_lock lock(g_host_task_lock);
+        if (g_host_task.state == NodeHostTaskWorking || g_host_task_next_id == UINT64_MAX)
+            return ResultRelayFailed();
+        if (g_host_task_created) {
+            // Finished is published immediately before the worker returns.
+            // Never block an IPC worker waiting for its final exit.
+            if (!os::TryWaitThread(&g_host_task_thread)) return ResultRelayFailed();
+            os::DestroyThread(&g_host_task_thread);
+            g_host_task_created = false;
+        }
+        // A sysmodule can be restarted independently of the overlay. A random
+        // per-start sequence makes accidental cross-restart ID reuse unlikely.
+        if (!g_host_task_next_id) {
+            for (unsigned attempt = 0; attempt < 4 && !g_host_task_next_id; ++attempt) {
+                os::GenerateRandomBytes(&g_host_task_next_id, sizeof(g_host_task_next_id));
+                g_host_task_next_id &= UINT64_MAX >> 1;
+            }
+            if (!g_host_task_next_id) return ResultRelayFailed();
+        }
+        const u64 id = g_host_task_next_id++;
+        g_host_task = {1, NodeHostTaskWorking, 0, 0, id, identity};
+        const Result created = os::CreateThread(&g_host_task_thread, HostNodeTaskWorker, nullptr,
+            g_host_task_stack, sizeof(g_host_task_stack), 10);
+        if (R_FAILED(created)) {
+            g_host_task = {1, NodeHostTaskIdle, 0, 0, 0, {}};
+            return created;
+        }
+        g_host_task_created = true;
+        g_host_task_generation = BeginManualHostSelection();
+        os::SetThreadNamePointer(&g_host_task_thread, "lanywhere::HostNodeTask");
+        os::StartThread(&g_host_task_thread);
+        *task_id = id;
+        R_SUCCEED();
+    }
+
+    NodeHostTaskStatus GetHostNodeTask(u64 task_id) {
+        std::scoped_lock lock(g_host_task_lock);
+        if (g_host_task_created && g_host_task.state == NodeHostTaskFinished && os::TryWaitThread(&g_host_task_thread)) {
+            os::DestroyThread(&g_host_task_thread);
+            g_host_task_created = false;
+        }
+        if (task_id && task_id != g_host_task.task_id) {
+            NodeHostTaskStatus expired{1, NodeHostTaskExpired, 0, 0, task_id, {}};
+            return expired;
+        }
+        return g_host_task;
     }
 
     Result SelectNodeRoom(const NodeRoomSelection &request) {

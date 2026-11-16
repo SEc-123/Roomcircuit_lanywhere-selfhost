@@ -4,6 +4,7 @@
 #include <stdbool.h>
 typedef uint8_t u8;typedef uint16_t u16;typedef uint32_t u32;typedef uint64_t u64;typedef int32_t Result;
 typedef struct {int active;} Service;typedef Service TipcService;
+typedef struct {void *impl;} Thread;
 typedef struct {u64 value;} SmServiceName;
 typedef enum {SetLanguage_ENUS=1,SetLanguage_ZHCN=6,SetLanguage_ZHTW=11,SetLanguage_ZHHANS=15,SetLanguage_ZHHANT=16} SetLanguage;
 #define R_FAILED(x) ((x)!=0)
@@ -26,12 +27,17 @@ typedef struct { int x, y; } HidAnalogStickState;
 typedef struct {int out_num_objects;Service*out_objects; int buffer_attrs[8]; struct {void *ptr; size_t size;} buffers[8];} MockParams;
 #define SfBufferAttr_Out 1
 #define SfBufferAttr_HipcMapAlias 2
+#define SfBufferAttr_In 4
 #ifdef __cplusplus
 extern "C" {
 #endif
 Result mockDispatch(Service*,u32,const void*,size_t,void*,size_t,MockParams);
 bool serviceIsActive(Service*);void serviceClose(Service*);
 Result smGetService(Service*,const char*);SmServiceName smEncodeName(const char*);TipcService*smGetServiceSessionTipc(void);
+Result smInitialize(void);void smExit(void);
+Result threadCreate(Thread*,void (*)(void*),void*,void*,size_t,int,int);
+Result threadStart(Thread*);Result threadWaitForExit(Thread*);Result threadClose(Thread*);
+void svcSleepThread(int64_t);
 Result setInitialize(void);void setExit(void);Result setGetSystemLanguage(u64*);Result setMakeLanguage(u64,SetLanguage*);
 u64 armGetSystemTick(void);u64 armGetSystemTickFreq(void);
 #ifdef __cplusplus

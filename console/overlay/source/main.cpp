@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string_view>
+#include "../../../common/node_catalog.h"
 
 namespace {
     Service g_ldnSrv{}, g_relay{};
@@ -19,15 +20,41 @@ namespace {
     RoomPasscodeHost g_passcode_host{};
     NodeHostInfo g_host_node{};
     bool g_host_node_valid = false;
+    NodeDynamicEntry g_host_identity{};
+    bool g_host_identity_valid = false, g_host_identity_unsupported = false;
     NodeActiveRouteInfo g_active_route{};
     bool g_active_route_valid = false;
     bool g_chinese = false, g_protocol_mismatch = false;
+    u32 g_storage_health = 0;
     char g_version[32]{};
     std::string g_notice;
     u64 g_notice_until = 0;
     u64 g_last_poll = 0;
 
+    struct NodeTask {
+        u64 id = 0;
+        NodeDynamicEntry expected{};
+        bool tracked = false;
+    };
+    NodeTask g_node_task;
+    u64 g_last_handled_node_task = 0;
+
     const char *tr(const char *english, const char *chinese) { return g_chinese ? chinese : english; }
+
+    Result discoverNodeTask() {
+        if (g_node_task.tracked) return 0;
+        if (!serviceIsActive(&g_relay)) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        NodeHostTaskStatus status{};
+        const Result rc = lanywhereOverlayGetNodeTask(&g_relay, 0, &status);
+        if (R_SUCCEEDED(rc) &&
+            (status.state == NodeHostTaskWorking || status.state == NodeHostTaskFinished) &&
+            status.task_id != g_last_handled_node_task) {
+            g_node_task.id = status.task_id;
+            g_node_task.expected = status.identity;
+            g_node_task.tracked = true;
+        }
+        return rc;
+    }
 
     bool chinesePreference(const char *path, bool *found) {
         FILE *file = std::fopen(path, "rb");
@@ -42,6 +69,24 @@ namespace {
         return valid && std::string_view(value, size) == "language=zh";
     }
 
+    void refreshLanguagePreference() {
+        bool chinese = false;
+        tsl::hlp::doWithSDCardHandle([&] {
+            bool found = false;
+            u32 selection = 2;
+            if (!serviceIsActive(&g_relay) || R_FAILED(lanywhereOverlayGetStorageSelection(&g_relay, &selection))) return;
+            chinese = chinesePreference(rc_storage_path_gen(selection, RC_LEGACY_PATH("language.ini"),
+                RC_V1_PATH("language.ini"), RC_CURRENT_PATH("language.ini")), &found);
+            if (!found) chinese = chinesePreference(rc_storage_path_gen(selection, RC_LEGACY_PATH("language.ini.previous"),
+                RC_V1_PATH("language.ini.previous"), RC_CURRENT_PATH("language.ini.previous")), &found);
+        });
+        g_chinese = chinese;
+        // Ultrahand's framework labels follow RoomCircuit's own preference.
+        ult::BACK = tr("Back", "返回"); ult::OK = tr("OK", "确定");
+        ult::ON = tr("On", "开启"); ult::OFF = tr("Off", "关闭");
+        ult::HIDE = tr("Hide", "隐藏"); ult::CANCEL = tr("Cancel", "取消");
+    }
+
     bool hasPasscodeHost() {
         return g_passcode_host.status == RoomPasscodeOk && g_passcode_host.room[0] != '\0';
     }
@@ -52,8 +97,11 @@ namespace {
         g_passcode_host = {};
         g_host_node = {};
         g_host_node_valid = false;
+        g_host_identity = {};
+        g_host_identity_valid = g_host_identity_unsupported = false;
         g_active_route = {};
         g_active_route_valid = false;
+        g_storage_health = 0;
         u32 enabled = 0, logging = 0;
         if (serviceIsActive(&g_config.s) && R_SUCCEEDED(ldnMitmGetEnabled(&g_config, &enabled)) &&
             R_SUCCEEDED(ldnMitmGetLogging(&g_config, &logging))) {
@@ -69,7 +117,18 @@ namespace {
             g_snapshot.status = status;
             g_snapshot.match = match;
             g_host_node_valid = R_SUCCEEDED(lanywhereOverlayGetHostNode(&g_relay, &g_host_node));
+            const Result identity_result = lanywhereOverlayGetHostIdentity(&g_relay, &g_host_identity);
+            g_host_identity_valid = R_SUCCEEDED(identity_result) && g_host_node_valid &&
+                g_host_identity.id == g_host_node.node_id;
+            g_host_identity_unsupported = identity_result == MAKERESULT(10, 221);
             g_active_route_valid = R_SUCCEEDED(lanywhereOverlayGetActiveRoute(&g_relay, &g_active_route));
+            u32 storage_selection = 2;
+            if (R_SUCCEEDED(lanywhereOverlayGetStorageSelection(&g_relay, &storage_selection))) {
+                const Result health_result = lanywhereOverlayGetStorageHealth(&g_relay, &g_storage_health);
+                if (R_FAILED(health_result))
+                    g_storage_health = storage_selection != 3 && health_result == MAKERESULT(10, 221) ?
+                        0 : RC_STORAGE_HEALTH_BOOTSTRAP_UNCHECKED;
+            }
             if (status.state == 2 && status.my_index == 0 && status.game_id) {
                 if (R_FAILED(lanywhereOverlayGetPasscodeHost(&g_relay, &g_passcode_host)) ||
                     std::memcmp(status.code, g_passcode_host.room, sizeof(status.code)))
@@ -90,8 +149,11 @@ namespace {
         g_passcode_host = {};
         g_host_node = {};
         g_host_node_valid = false;
+        g_host_identity = {};
+        g_host_identity_valid = g_host_identity_unsupported = false;
         g_active_route = {};
         g_active_route_valid = false;
+        g_storage_health = 0;
     }
 
     void connectServices() {
@@ -117,6 +179,7 @@ namespace {
             }
         });
         refresh();
+        (void)discoverNodeTask();
     }
 
     class SafeToggle : public tsl::elm::ToggleListItem {
@@ -307,6 +370,263 @@ namespace {
         }
     };
 
+    const char *nodeRegion(u8 region) {
+        switch (region) {
+            case NodeRegionAsia: return tr("Asia", "亚洲");
+            case NodeRegionEurope: return tr("Europe", "欧洲");
+            case NodeRegionAmericas: return tr("Americas", "美洲");
+            case NodeRegionOceania: return tr("Oceania", "大洋洲");
+            case NodeRegionAfrica: return tr("Africa", "非洲");
+            default: return tr("Region unknown", "地区未知");
+        }
+    }
+
+    NodeDynamicEntry builtinNode(u32 id) {
+        NodeDynamicEntry result{};
+        const auto &source = LanywhereNodes[id];
+        result.id = id;
+        result.protocol = static_cast<u8>(source.protocol);
+        result.region = source.region;
+        result.port = source.port;
+        result.flags = 1;
+        std::snprintf(result.host, sizeof(result.host), "%s", source.host);
+        std::snprintf(result.name, sizeof(result.name), "%s", source.name_en);
+        return result;
+    }
+
+    bool sameHostNode(const NodeDynamicEntry &expected) {
+        return g_host_node_valid && g_host_identity_valid && g_host_node.node_id == expected.id &&
+            !std::memcmp(&g_host_identity, &expected, sizeof(expected));
+    }
+
+    const char *nodeTaskFailure(Result result) {
+        // Atmosphere SF module 10, CMIF UnknownCommandId 221: old module.
+        if (result == MAKERESULT(10, 221))
+            return tr("Update the background module.", "请更新后台模块。");
+        return tr("Selection failed. Try again.", "选择失败，请重试。");
+    }
+
+    enum class NodePoll { Waiting, Selected, Failed, Changed, Expired, Unavailable, UpdateRequired };
+
+    NodePoll pollNodeTask() {
+        if (!g_node_task.tracked || !serviceIsActive(&g_relay)) return NodePoll::Unavailable;
+        NodeHostTaskStatus status{};
+        const Result rc = lanywhereOverlayGetNodeTask(&g_relay, g_node_task.id, &status);
+        if (R_FAILED(rc)) return rc == MAKERESULT(10, 221) ? NodePoll::UpdateRequired : NodePoll::Unavailable;
+        if (status.state == NodeHostTaskExpired || status.state == NodeHostTaskIdle ||
+            status.task_id != g_node_task.id ||
+            std::memcmp(&status.identity, &g_node_task.expected, sizeof(status.identity))) {
+            g_last_handled_node_task = g_node_task.id;
+            g_node_task.tracked = false;
+            return NodePoll::Expired;
+        }
+        if (status.state == NodeHostTaskWorking) return NodePoll::Waiting;
+        g_last_handled_node_task = g_node_task.id;
+        g_node_task.tracked = false;
+        if (R_FAILED(status.result)) return NodePoll::Failed;
+        refresh();
+        return sameHostNode(status.identity) && g_host_node.status != NodeHostUnavailable ? NodePoll::Selected : NodePoll::Changed;
+    }
+
+    const char *nodePollMessage(NodePoll result) {
+        switch (result) {
+            case NodePoll::Waiting: return tr("Checking…", "正在检查…");
+            case NodePoll::Selected: return tr("Server selected.", "已选择服务器。");
+            case NodePoll::Changed: return tr("Server changed. Check again.", "服务器已变化，请重新检查。");
+            case NodePoll::Expired: return tr("Server check expired. Try again.", "服务器检查已过期，请重试。");
+            case NodePoll::Unavailable: return tr("Cannot check server. Try again.", "无法检查服务器，请重试。");
+            case NodePoll::UpdateRequired: return tr("Update the background module.", "请更新后台模块。");
+            default: return tr("Selection failed. Try again.", "选择失败，请重试。");
+        }
+    }
+
+    class NodeSelectGui : public tsl::Gui {
+        struct NodeRow { tsl::elm::ListItem *item{}; NodeDynamicEntry node{}; };
+        NodeDynamicCatalog m_catalog{};
+        NodeDynamicCatalog m_new_catalog{};
+        std::array<NodeRow, NODE_TOTAL_CAPACITY> m_rows{};
+        size_t m_row_count = 0;
+        u64 m_next_catalog_poll = 0;
+        u64 m_next_task_poll = 0;
+        tsl::elm::List *m_list{};
+        tsl::elm::ListItem *m_feedback{};
+        bool m_waiting = false, m_catalog_valid = false;
+
+        bool catalogContains(const NodeDynamicEntry &node) const {
+            if (node.id < NODE_CATALOG_COUNT) return true;
+            if (!m_catalog_valid) return false;
+            if (node.id >= NODE_LOCAL_BASE && (m_catalog.enabled & NODE_LOCAL_CONFIG_INVALID)) return false;
+            for (u32 i = 0; i < m_catalog.count; ++i)
+                if (!std::memcmp(&m_catalog.nodes[i], &node, sizeof(node))) return true;
+            return false;
+        }
+
+        void updateRows() {
+            for (size_t i = 0; i < m_row_count; ++i) {
+                const auto &row = m_rows[i];
+                const bool available = (row.node.flags & 1) && catalogContains(row.node);
+                const char *value = !available ? tr("Unavailable", "不可用") :
+                    sameHostNode(row.node) ? tr("Current", "当前") : nodeRegion(row.node.region);
+                row.item->setValue(value, !available);
+            }
+        }
+
+        void select(const NodeDynamicEntry &node) {
+            const Result discovery = discoverNodeTask();
+            if (R_FAILED(discovery)) {
+                m_feedback->setText(nodeTaskFailure(discovery));
+                return;
+            }
+            if (g_node_task.tracked) {
+                const NodePoll current = pollNodeTask();
+                if (current == NodePoll::Waiting || current == NodePoll::Unavailable || current == NodePoll::UpdateRequired) {
+                    m_waiting = true;
+                    m_feedback->setText(nodePollMessage(current));
+                    return;
+                }
+            }
+            refresh();
+            if (g_host_identity_unsupported) {
+                m_feedback->setText(tr("Update the background module.", "请更新后台模块。"));
+                return;
+            }
+            if (!overlay::canSelectHostNode(g_snapshot) || !g_active_route_valid ||
+                g_active_route.status != NodeRouteNone) {
+                m_feedback->setText(tr("Leave the room and stop matching first.", "请先退出房间并停止匹配。"));
+                return;
+            }
+            if (node.id >= NODE_CATALOG_COUNT && !m_catalog_valid) {
+                m_feedback->setText(tr("Custom nodes unavailable. Check configuration.", "自定义节点不可用，请检查配置。"));
+                return;
+            }
+            if (node.id >= NODE_LOCAL_BASE && (m_catalog.enabled & NODE_LOCAL_CONFIG_INVALID)) {
+                m_feedback->setText(tr("Local nodes unavailable. Check nodes.ini.", "本机节点不可用，请检查 nodes.ini。"));
+                return;
+            }
+            if (!catalogContains(node)) {
+                m_feedback->setText(tr("Server list changed. Reopen.", "服务器列表已变化，请重新打开。"));
+                return;
+            }
+            if (!(node.flags & 1)) {
+                m_feedback->setText(tr("Server unavailable.", "服务器不可用。"));
+                return;
+            }
+            m_waiting = true;
+            u64 task_id = 0;
+            const Result rc = lanywhereOverlayStartNodeTask(&g_relay, &node, &task_id);
+            if (R_SUCCEEDED(rc)) {
+                g_node_task = {task_id, node, true};
+                m_next_task_poll = 0;
+                m_feedback->setText(tr("Checking…", "正在检查…"));
+            } else {
+                m_waiting = false;
+                m_feedback->setText(nodeTaskFailure(rc));
+            }
+        }
+
+        void addNode(tsl::elm::List *list, const NodeDynamicEntry &node, const char *name) {
+            if (m_row_count >= m_rows.size()) return;
+            const size_t index = m_row_count++;
+            auto *item = new tsl::elm::ListItem(name);
+            m_rows[index] = {item, node};
+            const bool current = sameHostNode(node);
+            item->setValue(current ? tr("Current", "当前") : nodeRegion(node.region), !(node.flags & 1));
+            item->setClickListener([this, index](u64 keys) {
+                if (!(keys & HidNpadButton_A)) return false;
+                select(m_rows[index].node);
+                return true;
+            });
+            list->addItem(item);
+        }
+
+        void pollCatalog() {
+            const u64 now = armGetSystemTick();
+            if (now < m_next_catalog_poll) return;
+            m_next_catalog_poll = now + 2 * armGetSystemTickFreq();
+            if (!serviceIsActive(&g_relay) || R_FAILED(lanywhereOverlayGetNodeCatalog(&g_relay, &m_new_catalog))) {
+                m_catalog_valid = false;
+                updateRows();
+                m_feedback->setText(tr("Custom nodes unavailable. Check configuration.", "自定义节点不可用，请检查配置。"));
+                return;
+            }
+            bool changed = false;
+            for (u32 i = 0; i < m_new_catalog.count; ++i) {
+                const auto &node = m_new_catalog.nodes[i];
+                bool exists = false;
+                for (size_t j = NODE_CATALOG_COUNT; j < m_row_count; ++j) {
+                    if (m_rows[j].node.id == node.id) {
+                        exists = true;
+                        if (std::memcmp(&m_rows[j].node, &node, sizeof(node))) changed = true;
+                        break;
+                    }
+                }
+                if (!exists) addNode(m_list, node, node.name);
+            }
+            for (size_t j = NODE_CATALOG_COUNT; j < m_row_count; ++j) {
+                bool exists = false;
+                for (u32 i = 0; i < m_new_catalog.count; ++i)
+                    if (m_rows[j].node.id == m_new_catalog.nodes[i].id) { exists = true; break; }
+                if (!exists) changed = true;
+            }
+            m_catalog = m_new_catalog;
+            m_catalog_valid = true;
+            updateRows();
+            // A reused ID must not silently change what an existing row means.
+            if (m_catalog.enabled & NODE_LOCAL_CONFIG_INVALID)
+                m_feedback->setText(tr("Local nodes unavailable. Check nodes.ini.", "本机节点不可用，请检查 nodes.ini。"));
+            else if (changed && !m_waiting)
+                m_feedback->setText(tr("Server list changed. Reopen.", "服务器列表已变化，请重新打开。"));
+        }
+
+    public:
+        tsl::elm::Element *createUI() override {
+            auto *frame = new tsl::elm::OverlayFrame(tr("Choose server", "选择服务器"), GITDESCVER);
+            auto *list = m_list = new tsl::elm::List();
+            list->addItem(m_feedback = new tsl::elm::ListItem(""));
+            for (u32 id = 0; id < NODE_CATALOG_COUNT; ++id) {
+                const auto node = builtinNode(id);
+                const char *name = id == 0 ? tr("Main server", "主服务器") :
+                    id == 1 ? tr("Community · LANywhere", "社区 · LANywhere") :
+                    (g_chinese ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en);
+                addNode(list, node, name);
+            }
+            if (serviceIsActive(&g_relay) && R_SUCCEEDED(lanywhereOverlayGetNodeCatalog(&g_relay, &m_catalog))) {
+                m_catalog_valid = true;
+                for (u32 i = 0; i < m_catalog.count; ++i) addNode(list, m_catalog.nodes[i], m_catalog.nodes[i].name);
+                if (m_catalog.enabled & NODE_LOCAL_CONFIG_INVALID)
+                    m_feedback->setText(tr("Local nodes unavailable. Check nodes.ini.", "本机节点不可用，请检查 nodes.ini。"));
+            } else {
+                m_feedback->setText(tr("Custom nodes unavailable. Check configuration.", "自定义节点不可用，请检查配置。"));
+            }
+            if (g_host_identity_unsupported)
+                m_feedback->setText(tr("Update the background module.", "请更新后台模块。"));
+            const Result discovery = discoverNodeTask();
+            if (R_FAILED(discovery)) m_feedback->setText(nodeTaskFailure(discovery));
+            if (g_node_task.tracked) {
+                m_waiting = true;
+                m_feedback->setText(tr("Checking…", "正在检查…"));
+            }
+            updateRows();
+            frame->setContent(list);
+            return frame;
+        }
+
+        void update() override {
+            if (!m_waiting) pollCatalog();
+            if (!m_waiting) return;
+            const u64 now = armGetSystemTick();
+            if (now < m_next_task_poll) return;
+            m_next_task_poll = now + armGetSystemTickFreq() / 2;
+            const NodePoll result = pollNodeTask();
+            m_feedback->setText(nodePollMessage(result));
+            if (result == NodePoll::Waiting || result == NodePoll::Unavailable || result == NodePoll::UpdateRequired) return;
+            updateRows();
+            g_notice = nodePollMessage(result);
+            g_notice_until = armGetSystemTick() + 5 * armGetSystemTickFreq();
+            m_waiting = false;
+        }
+    };
+
     class MainGui : public tsl::Gui {
         tsl::elm::List *m_list{};
         tsl::elm::ListItem *m_connection{}, *m_host_node{}, *m_active_route{}, *m_room{}, *m_players{}, *m_match{}, *m_notice{}, *m_password{};
@@ -344,6 +664,16 @@ namespace {
             list->addItem(new tsl::elm::CategoryHeader(tr("Current session", "当前连接")));
             list->addItem(m_connection = new tsl::elm::ListItem(tr("Connection", "连接")));
             list->addItem(m_host_node = new tsl::elm::ListItem(tr("Hosting node", "建房节点")));
+            m_host_node->setClickListener([](u64 keys) {
+                if (!(keys & HidNpadButton_A)) return false;
+                refresh();
+                if (g_snapshot.relay_ok) tsl::changeTo<NodeSelectGui>();
+                else {
+                    g_notice = tr("Module unavailable. Reconnect or restart the console.", "插件服务不可用，请重连或重启主机。");
+                    g_notice_until = armGetSystemTick() + 5 * armGetSystemTickFreq();
+                }
+                return true;
+            });
             list->addItem(m_active_route = new tsl::elm::ListItem(tr("Room node", "房间节点")));
             list->addItem(m_room = new tsl::elm::ListItem(tr("Room", "房间")));
             list->addItem(m_players = new tsl::elm::ListItem(tr("Room members", "房间成员")));
@@ -364,7 +694,13 @@ namespace {
             return frame;
         }
         void update() override {
-            if (armGetSystemTick() - g_last_poll >= armGetSystemTickFreq()) refresh();
+            const bool due = armGetSystemTick() - g_last_poll >= armGetSystemTickFreq();
+            if (due) refresh();
+            if (due && g_node_task.tracked) {
+                const NodePoll result = pollNodeTask();
+                g_notice = nodePollMessage(result);
+                g_notice_until = armGetSystemTick() + 5 * armGetSystemTickFreq();
+            }
             if (!g_notice.empty() && armGetSystemTick() >= g_notice_until) g_notice.clear();
             updatePasswordAction();
             m_connection->setValue(connectionLabel(), !g_snapshot.relay_ok);
@@ -403,6 +739,10 @@ namespace {
                 !g_snapshot.config_ok ? tr("Module not loaded. Restart after installation.", "插件未加载，安装后请重启主机。") :
                 g_snapshot.relay_ok && g_snapshot.status.state == 1 ? tr("Waiting for the room connection.", "正在等待房间连接。") :
                 g_snapshot.relay_ok && g_snapshot.status.error[0] ? tr("Open RoomCircuit for connection details.", "请打开 RoomCircuit 查看连接详情。") :
+                g_storage_health & RC_STORAGE_HEALTH_BOOTSTRAP_CONFLICT ? tr("Server settings conflict. Compare config.ini files.", "服务器设置冲突，请对比 config.ini。") :
+                g_storage_health & RC_STORAGE_HEALTH_BOOTSTRAP_UNCHECKED ? tr("Could not check server settings. Try again.", "无法检查服务器设置，请重试。") :
+                g_storage_health & RC_STORAGE_HEALTH_LEGACY_CHANGED ? tr("Older settings changed. Back up and compare.", "旧设置已变更，请备份并对比。") :
+                g_storage_health & RC_STORAGE_HEALTH_LEGACY_UNCHECKED ? tr("Could not check older settings. Back up and compare.", "无法检查旧设置，请备份并对比。") :
                 !g_notice.empty() ? g_notice.c_str() :
                 tr("Plugin changes apply on the next local-wireless session.", "插件开关在下次本地联机时生效。");
             m_notice->setText(notice);
@@ -413,17 +753,15 @@ namespace {
     public:
         void initServices() override {
             connectServices();
-            tsl::hlp::doWithSDCardHandle([] {
-                bool found = false;
-                u32 selection = 2;
-                if (!serviceIsActive(&g_relay) || R_FAILED(lanywhereOverlayGetStorageSelection(&g_relay, &selection))) return;
-                const bool current = selection == 1;
-                g_chinese = chinesePreference(rc_storage_path(current, RC_LEGACY_PATH("language.ini"), RC_CURRENT_PATH("language.ini")), &found);
-                if (!found) g_chinese = chinesePreference(rc_storage_path(current, RC_LEGACY_PATH("language.ini.previous"), RC_CURRENT_PATH("language.ini.previous")), &found);
-            });
+            refreshLanguagePreference();
         }
         void exitServices() override { closeServices(); }
-        void onShow() override { refresh(); }
+        void onShow() override {
+            const bool previous = g_chinese;
+            refreshLanguagePreference();
+            if (previous != g_chinese) tsl::swapTo<MainGui>(SwapDepth{UINT32_MAX});
+            refresh();
+        }
         void onHide() override {} // Never leave a room or change settings when hidden.
         std::unique_ptr<tsl::Gui> loadInitialGui() override { return initially<MainGui>(); }
     };

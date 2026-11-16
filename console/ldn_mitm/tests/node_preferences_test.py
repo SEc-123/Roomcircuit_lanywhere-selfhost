@@ -37,7 +37,7 @@ harness = r'''
 #include <stratosphere.hpp>
 #include <cassert>
 #include <cstring>
-namespace ams::mitm::storage { bool current=false; bool StorageUseCurrent(){return current;} }
+namespace ams::mitm::storage { unsigned generation=0; bool StorageUseCurrent(){return generation==3;} unsigned StorageGeneration(){ return generation; } }
 using namespace ams::mitm::lanywhere;
 int main(){
  NodeDynamicEntry one{},two{},result{};one.id=2;one.port=11451;strcpy(one.host,"node.test");strcpy(one.name,"Node");
@@ -53,9 +53,14 @@ int main(){
  assert(ReadNodePreference(&result)==NodePreferenceRead::Invalid);
  assert(SaveNodePreference(two));assert(std::filesystem::exists("sdmc:/lanywhere/selected-node.bin.invalid"));
  assert(ReadNodePreference(&result)==NodePreferenceRead::Valid && result.id==3);
- ams::mitm::storage::current=true;
+ ams::mitm::storage::generation=1;
+ assert(ReadNodePreference(&result)==NodePreferenceRead::Missing);
+ assert(SaveNodePreference(two));assert(ReadNodePreference(&result)==NodePreferenceRead::Valid && result.id==3);
+ ams::mitm::storage::generation=3;
  assert(ReadNodePreference(&result)==NodePreferenceRead::Missing);
  assert(SaveNodePreference(one));assert(ReadNodePreference(&result)==NodePreferenceRead::Valid && result.id==2);
+ ams::mitm::storage::generation=1;assert(ReadNodePreference(&result)==NodePreferenceRead::Valid && result.id==3);
+ ams::mitm::storage::generation=3;assert(ReadNodePreference(&result)==NodePreferenceRead::Valid && result.id==2);
  ams::fs::fail_open=true;assert(ReadNodePreference(&result)==NodePreferenceRead::Invalid);
  puts("PASS persisted node restart, interruption fallback, corruption and new storage generation");
 }

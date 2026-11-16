@@ -6,7 +6,7 @@ from pathlib import Path, PurePosixPath
 import sys
 
 root = Path(__file__).resolve().parent.parent
-allowed = {'console/Atmosphere-libs', 'console/libtesla'}
+allowed = {'console/Atmosphere-libs', 'console/libtesla', 'console/libultrahand'}
 requested = set(sys.argv[1:]) or allowed
 if not requested <= allowed:
     raise SystemExit('Unknown vendored component')
@@ -24,4 +24,10 @@ for name, expected in manifest.items():
     count += 1
 if not count:
     raise SystemExit('Empty vendor snapshot')
+if 'console/libultrahand' in requested:
+    component = root / 'console/libultrahand'
+    actual = {p.relative_to(root).as_posix() for p in component.rglob('*') if p.is_file() or p.is_symlink()}
+    expected = {p for p in manifest if p.startswith('console/libultrahand/')}
+    if actual != expected:
+        raise SystemExit('Unexpected or missing libultrahand source file')
 print(f'Verified {count} vendored source files against the imported snapshot')

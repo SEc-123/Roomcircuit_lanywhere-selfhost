@@ -87,14 +87,26 @@ try {
     await suite('Native node probe with hostile replies and interrupted sockets', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/lanplay_probe_test.py']);
     await suite('Pinned thread creation resource boundaries', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/thread_resource_boundary_test.py']);
     await suite('Startup worker resource ordering', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/startup_node_threads_test.py']);
+    await suite('Ultrahand overlay thread resource failure', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/ultra_thread_guard_test.py']);
+    await suite('Ultrahand overlay glyph memory budget', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/ultra_glyph_budget_test.py']);
+    await suite('Ultrahand overlay Chinese font fallback', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/ultra_font_fallback_test.py']);
+    await suite('Ultrahand overlay footer language', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/ultra_footer_locale_test.py']);
+    await suite('Ultrahand overlay global settings isolation', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/ultra_global_settings_test.py']);
     await suite('Room worker resource failure and retry', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/relay_worker_resource_test.py']);
     await suite('Native storage migration and fault recovery', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/storage_migration_test.py']);
+    await suite('Node configuration migration and conflict recovery', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_config_sync_test.py']);
+    await suite('Custom-node configuration error display', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_config_conflict_ui_test.py']);
     await suite('App authoritative storage IPC', process.env.PYTHON || 'python3', ['-B', 'app/tests/storage_ipc_test.py']);
+    await suite('Storage migration warnings and old backend fallback', process.env.PYTHON || 'python3', ['-B', 'app/tests/storage_health_test.py']);
     await suite('Saved hosting node label and unavailable state', process.env.PYTHON || 'python3', ['-B', 'app/tests/hosting_node_label_test.py']);
+    await suite('Picker current-node identity and stale IPC', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_host_info_test.py']);
     await suite('Signed entrypoint ownership', process.env.PYTHON || 'python3', ['-B', 'app/tests/entrypoint_identity_integration_test.py']);
     await suite('Custom node configuration', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/custom_nodes_test.py']);
     await suite('Selected node preference persistence', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_preferences_test.py']);
+    await suite('Overlay host selection identity IPC', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_identity_ipc_test.py']);
+    await suite('Sysmodule-owned asynchronous host selection', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_host_task_test.py']);
     await suite('Selected node recovery after network loss', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_restore_retry_test.py']);
+    await suite('Manual selection and automatic retry arbitration', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_manual_retry_test.py']);
     await suite('Node catalog refresh and active route preservation', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_catalog_refresh_test.py']);
     await suite('Current room route and reconnect status', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_active_route_test.py']);
     await suite('Room-specific endpoint latency', process.env.PYTHON || 'python3', ['-B', 'app/tests/room_node_probe_test.py']);
@@ -166,7 +178,7 @@ try {
     }
     await suite('Virtual UDP BSD descriptor semantics', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/udp_bsd_ipc_test.py']);
     await suite('Native fixed discovery route and configuration', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/discovery_route_test.py']);
-    await suite('Tesla overlay IPC and controls', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/overlay_test.py']);
+    await suite('Ultrahand overlay IPC and controls', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/overlay_test.py']);
     await suite('Tesla dependency lifecycle and rendering bounds', process.env.PYTHON || 'python3', ['-B', 'console/overlay/tests/tesla_dependency_test.py']);
     const lcidBinary = path.join(temp, 'lcid-policy-test');
     const lcidBuilt = await suite('Default game ID policy build', process.env.CXX || 'c++',

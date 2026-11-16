@@ -1,8 +1,8 @@
 # Included libraries and source references
 
 The original LANywhere/ldn_mitm GPL-2.0 notice is preserved in the project root.
-Atmosphere-libs and libtesla source, with their licenses, is included under `console/`.
-The libtesla header includes local lifecycle, focus, glyph-cache and Chinese-font fixes recorded in `UPSTREAM.json`.
+Atmosphere-libs, libtesla and libultrahand source, with their licenses, are included under `console/`.
+The overlay uses libultrahand v2.5.4 (ppkantorski and libtesla contributors); GPLv2 and CC BY 4.0 notices are in `licenses/libtesla-LICENSE.txt`. Its unused download module is excluded. Local lifecycle and bounded glyph-cache changes are recorded in `UPSTREAM.json`.
 
 The front end links the devkitPro builds of FreeType, HarfBuzz, libpng, bzip2, zlib,
 libjpeg-turbo and libnx, together with the devkitA64 runtime. Packaged license notices

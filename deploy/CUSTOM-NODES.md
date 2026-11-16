@@ -35,9 +35,9 @@ A Tuner package may include a prepared `RoomCircuit-nodes.ini` beside its packag
 ```ini
 [Install RoomCircuit node defaults]
 try:
-!path_exists /switch/RoomCircuit/nodes.ini
-mkdir /switch/RoomCircuit
-copy ./RoomCircuit-nodes.ini /switch/RoomCircuit/nodes.ini
+!path_exists /config/RoomCircuit/nodes.ini
+mkdir /config/RoomCircuit
+copy ./RoomCircuit-nodes.ini /config/RoomCircuit/nodes.ini
 ```
 
 To add entries to an existing file, use a parser that preserves every `[node]` section and merges by hostname and port. Reopen **Nodes** after saving. This is a package-author example; verify it with the target Tuner/Ultrahand version before distribution. Command syntax follows the [Ultrahand command reference](https://github.com/ppkantorski/Ultrahand-Overlay/wiki/Command-Reference).

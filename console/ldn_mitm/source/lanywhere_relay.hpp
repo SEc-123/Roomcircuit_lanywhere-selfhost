@@ -113,6 +113,10 @@ namespace ams::mitm::lanywhere {
     NodeActiveRouteInfo GetActiveNodeRoute();
     u32 GetHostNode();
     Result SetHostNode(u32 node);
+    Result SetHostNodeVerified(const NodeDynamicEntry &identity);
+    bool GetHostNodeIdentity(NodeDynamicEntry *out);
+    Result StartHostNodeTask(const NodeDynamicEntry &identity, u64 *task_id);
+    NodeHostTaskStatus GetHostNodeTask(u64 task_id);
     void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity, bool annotate = false);
     Result SelectNodeRoom(const NodeRoomSelection &request);
 

@@ -24,7 +24,7 @@ code = r'''
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
-using u8=uint8_t; using u64=uint64_t; using s32=int; using Result=int;
+using u8=uint8_t; using u32=uint32_t; using u64=uint64_t; using s32=int; using Result=int;
 #define R_FAILED(r) ((r)!=0)
 #define R_ABORT_UNLESS(r) assert((r)==0)
 namespace os {
@@ -42,6 +42,10 @@ constexpr size_t NumExtraThreads=2, ThreadStackSize=16384;
 static u8 g_extra_thread_stacks[NumExtraThreads][ThreadStackSize], g_catalog_stack[16384], g_retry_stack[16384];
 static os::ThreadType g_extra_threads[NumExtraThreads],g_catalog_thread,g_retry_thread;
 static std::mutex g_catalog_thread_lock,g_retry_lifecycle_lock;
+static std::mutex g_lock;
+static u64 g_manual_host_generation=0;
+static constexpr u32 NodeHostUnavailable=2, NODE_ID_INVALID=UINT32_MAX;
+static u32 g_selected_status=NodeHostUnavailable,g_host_node=0;
 static std::atomic<bool> g_catalog_running{false},g_retry_running{false};
 static std::atomic<u64> g_host_preference_generation{1};
 static bool g_catalog_created=false,g_retry_created=false,g_retry_requested=false;

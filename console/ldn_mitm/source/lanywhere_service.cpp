@@ -18,6 +18,11 @@ namespace ams::mitm::lanywhere {
         R_SUCCEED();
     }
 
+    Result LanywhereService::GetStorageHealth(sf::Out<u32> health) {
+        health.SetValue(storage::StorageHealth());
+        R_SUCCEED();
+    }
+
     namespace {
 
         // Copia un búfer de texto del cliente a una cadena terminada en cero.
@@ -71,6 +76,38 @@ namespace ams::mitm::lanywhere {
 
     Result LanywhereService::SetHostNode(u32 node) {
         R_RETURN(lanywhere::SetHostNode(node));
+    }
+
+    Result LanywhereService::SetHostNodeVerified(const sf::InBuffer &identity) {
+        if (identity.GetSize() != sizeof(NodeDynamicEntry) || !identity.GetPointer()) return ResultRelayFailed();
+        NodeDynamicEntry copy{};
+        std::memcpy(&copy, identity.GetPointer(), sizeof(copy));
+        R_RETURN(lanywhere::SetHostNodeVerified(copy));
+    }
+
+    Result LanywhereService::GetHostNodeIdentity(const sf::OutBuffer &identity) {
+        if (identity.GetSize() != sizeof(NodeDynamicEntry) || !identity.GetPointer()) return ResultRelayFailed();
+        NodeDynamicEntry copy{};
+        if (!lanywhere::GetHostNodeIdentity(&copy)) return ResultRelayFailed();
+        std::memcpy(identity.GetPointer(), &copy, sizeof(copy));
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::StartHostNodeTask(const sf::InBuffer &identity, sf::Out<u64> task_id) {
+        if (identity.GetSize() != sizeof(NodeDynamicEntry) || !identity.GetPointer()) return ResultRelayFailed();
+        NodeDynamicEntry copy{};
+        std::memcpy(&copy, identity.GetPointer(), sizeof(copy));
+        u64 id = 0;
+        R_TRY(lanywhere::StartHostNodeTask(copy, &id));
+        task_id.SetValue(id);
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::GetHostNodeTask(u64 task_id, const sf::OutBuffer &out) {
+        if (out.GetSize() != sizeof(NodeHostTaskStatus) || !out.GetPointer()) return ResultRelayFailed();
+        const auto status = lanywhere::GetHostNodeTask(task_id);
+        std::memcpy(out.GetPointer(), &status, sizeof(status));
+        R_SUCCEED();
     }
 
     namespace {

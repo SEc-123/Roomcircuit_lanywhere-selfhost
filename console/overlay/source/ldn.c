@@ -1,5 +1,6 @@
 /* Modified by LANywhere Self-host, 2026-11-07 to 2026-11-08. */
 #include "ldn.h"
+#include "../../../common/roomcircuit_paths.h"
 #include <switch/sf/tipc.h>
 #include <string.h>
 
@@ -65,8 +66,94 @@ Result lanywhereOverlayGetStorageSelection(Service *s, u32 *selection) {
     u32 value = 2;
     Result rc = serviceDispatchOut(s, 46, value);
     if (R_FAILED(rc)) return rc;
-    if (value > 1) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    if (value != 0 && value != 1 && value != 3) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     *selection = value;
+    return 0;
+}
+
+Result lanywhereOverlayGetStorageHealth(Service *s, u32 *health) {
+    *health = RC_STORAGE_HEALTH_LEGACY_UNCHECKED;
+    u32 value = 0;
+    Result rc = serviceDispatchOut(s, RC_STORAGE_HEALTH_IPC, value);
+    if (R_FAILED(rc)) return rc;
+    if (value & ~(RC_STORAGE_HEALTH_LEGACY_CHANGED | RC_STORAGE_HEALTH_LEGACY_UNCHECKED |
+                  RC_STORAGE_HEALTH_BOOTSTRAP_CONFLICT | RC_STORAGE_HEALTH_BOOTSTRAP_UNCHECKED))
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    *health = value;
+    return 0;
+}
+
+Result lanywhereOverlayGetNodeCatalog(Service *s, NodeDynamicCatalog *out) {
+    memset(out, 0, sizeof(*out));
+    Result rc = serviceDispatch(s, NODE_GET_CATALOG_IPC,
+        .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+        .buffers = { { out, sizeof(*out) } });
+    if (R_FAILED(rc)) { memset(out, 0, sizeof(*out)); return rc; }
+    if (out->version != 1 || out->count > sizeof(out->nodes) / sizeof(out->nodes[0])) goto invalid;
+    for (u32 i = 0; i < out->count; ++i) {
+        const NodeDynamicEntry *node = &out->nodes[i];
+        if (!((node->id >= 13 && node->id < NODE_SHARED_CAPACITY) ||
+              (node->id >= NODE_LOCAL_BASE && node->id < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY)) ||
+            node->protocol != 2 || node->region > 5 || node->flags > 1 || !node->port ||
+            node->reserved0[0] || node->reserved0[1] || !node->name[0] || !node->host[0] ||
+            !memchr(node->name, '\0', sizeof(node->name)) || !memchr(node->host, '\0', sizeof(node->host)))
+            goto invalid;
+        for (u32 j = 0; j < i; ++j)
+            if (out->nodes[j].id == node->id) goto invalid;
+    }
+    return 0;
+invalid:
+    memset(out, 0, sizeof(*out));
+    return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+}
+
+Result lanywhereOverlayStartNodeTask(Service *s, const NodeDynamicEntry *expected, u64 *task_id) {
+    if (!expected || !task_id) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    *task_id = 0;
+    Result rc = serviceDispatchOut(s, NODE_START_HOST_TASK_IPC, *task_id,
+        .buffer_attrs = { SfBufferAttr_In | SfBufferAttr_HipcMapAlias },
+        .buffers = { { (void *)expected, sizeof(*expected) } });
+    if (R_FAILED(rc)) { *task_id = 0; return rc; }
+    if (!*task_id) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    return 0;
+}
+
+Result lanywhereOverlayGetNodeTask(Service *s, u64 task_id, NodeHostTaskStatus *out) {
+    if (!out) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    memset(out, 0, sizeof(*out));
+    Result rc = serviceDispatchIn(s, NODE_GET_HOST_TASK_IPC, task_id,
+        .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+        .buffers = { { out, sizeof(*out) } });
+    if (R_FAILED(rc)) { memset(out, 0, sizeof(*out)); return rc; }
+    const NodeDynamicEntry *node = &out->identity;
+    if (out->version != 1 || out->state > NodeHostTaskExpired || out->reserved ||
+        ((out->state == NodeHostTaskWorking || out->state == NodeHostTaskFinished) &&
+         (!out->task_id || (task_id && out->task_id != task_id) ||
+          !((node->id < NODE_SHARED_CAPACITY) ||
+            (node->id >= NODE_LOCAL_BASE && node->id < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY)) ||
+          node->protocol > 2 || node->region > 5 || node->flags > 1 || !node->port ||
+          node->reserved0[0] || node->reserved0[1] || !node->name[0] || !node->host[0] ||
+          !memchr(node->name, '\0', sizeof(node->name)) || !memchr(node->host, '\0', sizeof(node->host))))) {
+        memset(out, 0, sizeof(*out));
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    }
+    return 0;
+}
+
+Result lanywhereOverlayGetHostIdentity(Service *s, NodeDynamicEntry *out) {
+    memset(out, 0, sizeof(*out));
+    Result rc = serviceDispatch(s, NODE_GET_HOST_IDENTITY_IPC,
+        .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+        .buffers = { { out, sizeof(*out) } });
+    if (R_FAILED(rc)) { memset(out, 0, sizeof(*out)); return rc; }
+    if (!((out->id < NODE_SHARED_CAPACITY) ||
+          (out->id >= NODE_LOCAL_BASE && out->id < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY)) ||
+        out->protocol > 2 || out->region > 5 || out->flags > 1 || !out->port ||
+        out->reserved0[0] || out->reserved0[1] || !out->name[0] || !out->host[0] ||
+        !memchr(out->name, '\0', sizeof(out->name)) || !memchr(out->host, '\0', sizeof(out->host))) {
+        memset(out, 0, sizeof(*out));
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    }
     return 0;
 }
 Result lanywhereOverlayGetStatus(Service *s, LanywhereOverlayStatus *out) {

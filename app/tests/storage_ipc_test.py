@@ -22,7 +22,7 @@ typedef uint8_t u8; typedef uint32_t u32; typedef int Result; typedef int Servic
 #define R_FAILED(x) ((x) != 0)
 #define R_SUCCEEDED(x) ((x) == 0)
 static int tipc_result, presence, get_result, dispatch_result, response, opens, closes, calls;
-static bool configured, current;
+static bool configured; static unsigned generation;
 static SmServiceName smEncodeName(const char *name){assert(!strcmp(name,"lanywhr"));return 7;}
 static int smGetServiceSessionTipc(void){return 8;}
 static int fake_tipc(int session,int command,int name,u8 *out){assert(session==8&&command==65100&&name==7);*out=presence;return tipc_result;}
@@ -31,18 +31,19 @@ static int smGetService(Service *s,const char *name){assert(!strcmp(name,"lanywh
 static int fake_dispatch(Service *s,int command,u32 *out){assert(*s==9&&command==46);calls++;*out=response;return dispatch_result;}
 #define serviceDispatchOut(s,c,o) fake_dispatch(s,c,&(o))
 static void serviceClose(Service *s){assert(*s==9);closes++;}
-static void roomcircuit_storage_set_authoritative(bool value){assert(!configured);configured=true;current=value;}
+static void roomcircuit_storage_set_generation(unsigned value){assert(!configured);configured=true;generation=value;}
 /* SELECTOR */
-static void reset(void){tipc_result=presence=get_result=dispatch_result=response=opens=closes=calls=0;configured=current=false;}
+static void reset(void){tipc_result=presence=get_result=dispatch_result=response=opens=closes=calls=0;configured=false;generation=99;}
 int main(void){
  reset();select_module_storage();assert(!configured&&!opens&&!calls&&!closes);
  reset();tipc_result=1;presence=1;select_module_storage();assert(!configured&&!opens);
  reset();presence=1;get_result=1;select_module_storage();assert(!configured&&opens==1&&!closes);
  reset();presence=1;dispatch_result=1;select_module_storage();assert(!configured&&calls==1&&closes==1);
  reset();presence=1;response=2;select_module_storage();assert(!configured&&closes==1);
- reset();presence=1;response=3;select_module_storage();assert(!configured&&closes==1);
- reset();presence=1;response=0;select_module_storage();assert(configured&&!current&&closes==1);
- reset();presence=1;response=1;select_module_storage();assert(configured&&current&&closes==1);
+ reset();presence=1;response=4;select_module_storage();assert(!configured&&closes==1);
+ reset();presence=1;response=0;select_module_storage();assert(configured&&generation==0&&closes==1);
+ reset();presence=1;response=1;select_module_storage();assert(configured&&generation==1&&closes==1);
+ reset();presence=1;response=3;select_module_storage();assert(configured&&generation==3&&closes==1);
  puts("PASS actual storage IPC selector: absent service, failure, unsupported IPC, invalid selection, legacy and current");
 }
 '''.replace('/* SELECTOR */', selector)

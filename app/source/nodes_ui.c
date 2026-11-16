@@ -41,7 +41,7 @@
 typedef struct {
     NodeMeasurement measurements[NODE_TOTAL_CAPACITY];
     uint32_t enabled, available;
-    bool catalog_ok, probe_start_failed, changed;
+    bool catalog_ok, probe_start_failed, changed, local_config_invalid;
 } NodeView;
 static NodeView view;
 static NodeDynamicEntry dynamic_nodes[NODE_TOTAL_CAPACITY];
@@ -75,8 +75,17 @@ static bool language_save_failed;
 static const char *keyboard_error;
 static NodeHostInfo current_host_info;
 static bool current_host_valid;
+static NodeDynamicEntry current_host_identity;
+static bool current_host_identity_valid;
+/* A selection must refer to the exact identity displayed in the last frame. */
+static NodeDynamicEntry picker_rendered_nodes[NODE_TOTAL_CAPACITY];
+static bool picker_rendered_valid[NODE_TOTAL_CAPACITY];
 static void refresh_host_info(Service *service)
 {
+    current_host_valid = false;
+    current_host_identity_valid = false;
+    memset(&current_host_info, 0, sizeof(current_host_info));
+    memset(&current_host_identity, 0, sizeof(current_host_identity));
     NodeHostInfo info = {0};
     Result result = serviceDispatch(service, NODE_GET_HOST_INFO_IPC,
         .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
@@ -85,7 +94,23 @@ static void refresh_host_info(Service *service)
         !info.reserved && memchr(info.name, 0, sizeof(info.name)) && memchr(info.host, 0, sizeof(info.host))) {
         current_host_info = info;
         current_host_valid = true;
+        NodeDynamicEntry identity = {0};
+        const Result identity_result = serviceDispatch(service, NODE_GET_HOST_IDENTITY_IPC,
+            .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+            .buffers = { { &identity, sizeof(identity) } });
+        if (R_SUCCEEDED(identity_result) && identity.id == info.node_id &&
+            memchr(identity.name, 0, sizeof(identity.name)) && memchr(identity.host, 0, sizeof(identity.host))) {
+            current_host_identity = identity;
+            current_host_identity_valid = true;
+        }
     }
+}
+
+static bool node_matches_current(const NodeDynamicEntry *node, uint32_t current)
+{
+    return node && current_host_valid && current_host_identity_valid &&
+        current_host_info.status != NodeHostUnavailable && current_host_info.node_id == current &&
+        node->id == current && !memcmp(&current_host_identity, node, sizeof(*node));
 }
 static uint32_t node_slot(uint32_t id)
 {
@@ -440,12 +465,15 @@ bool nodes_ui_refresh_catalog(Service *service)
         if (slot < NODE_SHARED_CAPACITY && (catalog.available & (1u << slot))) available |= 1u << slot;
     }
     mutexLock(&view_lock);
+    const bool local_invalid = (catalog.enabled & NODE_LOCAL_CONFIG_INVALID) != 0;
     if (memcmp(dynamic_nodes, next, sizeof(next)) || memcmp(dynamic_present, present, sizeof(present)) ||
-        dynamic_enabled != enabled || dynamic_available != available)
+        dynamic_enabled != enabled || dynamic_available != available || view.local_config_invalid != local_invalid)
         ++dynamic_generation;
     memcpy(dynamic_nodes, next, sizeof(next));
     memcpy(dynamic_present, present, sizeof(present));
     dynamic_enabled = enabled; dynamic_available = available;
+    if (view.local_config_invalid != local_invalid) view.changed = true;
+    view.local_config_invalid = local_invalid;
     mutexUnlock(&view_lock);
     return true;
 }
@@ -785,6 +813,7 @@ static void node_location(const LanywhereNode *node, char location[96])
 static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *order, unsigned count,
                         unsigned selected, uint32_t current, bool region_focus, const bool *recommended)
 {
+    memset(picker_rendered_valid, 0, sizeof(picker_rendered_valid));
     begin_screen("Choose hosting node");
     const unsigned first = selected / NODE_ROWS * NODE_ROWS;
     char text[180];
@@ -809,13 +838,12 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
         const uint32_t id = order[i];
         NodeDynamicEntry node;
         if (!node_copy(node_id(id), &node)) continue;
+        picker_rendered_nodes[id] = node;
+        picker_rendered_valid[id] = true;
         const NodeMeasurement *m = &copy->measurements[id];
         const bool enabled = copy->catalog_ok && (copy->enabled & (1u << id));
         const bool available = copy->catalog_ok && (copy->available & (1u << id));
-        const bool current_row = node_id(id) == current && (!current_host_valid ||
-            (current_host_info.status != NodeHostUnavailable && current_host_info.node_id == current &&
-             (id < NODE_CATALOG_COUNT || (!strcmp(current_host_info.name, node.name) &&
-              !strcmp(current_host_info.host, node.host) && current_host_info.port == node.port))));
+        const bool current_row = node_matches_current(&node, current);
         const int y = NODE_LIST_Y + (int)(i - first) * NODE_ROW_HEIGHT;
         if (i == selected) {
             gfx_rect(NODE_TABLE_X, y, 879, NODE_ROW_HEIGHT - 1, NODE_COLOR_SELECT);
@@ -823,8 +851,10 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
                 gfx_round_rect(360, y + 7, 4, NODE_ROW_HEIGHT - 15, 2, NODE_COLOR_ACCENT);
         }
         gfx_rect(NODE_TABLE_X, y + NODE_ROW_HEIGHT - 1, 879, 1, NODE_COLOR_LINE);
+        const char *name = id == 0 ? ui_text("Main server") : id < NODE_CATALOG_COUNT ?
+            (ui_chinese() ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en) : node.name;
         gfx_text_fit(379, y + (recommended[id] ? 7 : 16), 19, enabled ? NODE_COLOR_TEXT : NODE_COLOR_DIM,
-                     nodes_ui_name(node_id(id)), 305);
+                     name, 305);
         if (recommended[id]) {
             const char *recommendation = group_code[0] ? " (Recommended)" : " (Recommended for you)";
             gfx_text_fit(379, y + 31, 15, NODE_COLOR_ACCENT, ui_text(recommendation), 305);
@@ -870,6 +900,8 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
         gfx_text(379, 306, 23, NODE_COLOR_DIM, ui_text("No nodes in this region."));
     if (copy->probe_start_failed)
         gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text("Could not start node tests. Try again."), 1200);
+    else if (copy->local_config_invalid)
+        gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text("Custom nodes unavailable. Check nodes.ini."), 1200);
     else if (notice)
         gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text(notice), 1200);
     else if (group_code[0] && group.reported_participants < group.participants)
@@ -1214,13 +1246,17 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
                     selected_id = id;
                     moved = true;
                     const NodeMeasurement *m = &copy.measurements[id];
-                    if (!copy.catalog_ok || !(copy.enabled & (1u << id)) || m->state != NodeMeasureReady) {
+                    if (!copy.catalog_ok || !(copy.enabled & (1u << id)) || m->state != NodeMeasureReady ||
+                        !picker_rendered_valid[id]) {
                         notice = "This node is not ready. Refresh or choose another.";
                     } else {
                         const uint32_t selected_node_id = node_id(id);
                         node_selection_trace_begin(selected_node_id);
                         node_selection_trace_phase(NodeSelectionBeforeIpc, 0);
-                        const uint32_t result = serviceDispatchIn(service, 36, selected_node_id);
+                        const NodeDynamicEntry identity = picker_rendered_nodes[id];
+                        const uint32_t result = serviceDispatch(service, NODE_SET_HOST_IDENTITY_IPC,
+                            .buffer_attrs = { SfBufferAttr_In | SfBufferAttr_HipcMapAlias },
+                            .buffers = { { &identity, sizeof(identity) } });
                         node_selection_trace_phase(NodeSelectionAfterIpc, result);
                         if (R_SUCCEEDED(result)) {
                             *selected_node = selected_node_id;

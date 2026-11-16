@@ -12,6 +12,6 @@ assert major==int(re.search(r'LANYWHERE_IPC_MAJOR (\d+)',app)[1])==int(re.search
 with tempfile.TemporaryDirectory(prefix='lanywhere-overlay-test-') as d:
  d=Path(d);obj=d/'ldn.o';exe=d/'test'
  subprocess.run(shlex.split(os.environ.get('CC','cc'))+['-std=c11','-Wall','-Wextra','-Werror','-I'+str(HERE),'-c',str(HERE.parent/'source/ldn.c'),'-o',str(obj)],check=True,timeout=30)
- subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++20','-Wall','-Wextra','-Werror','-I'+str(HERE),'-DGITDESCVER="host-test"',str(HERE/'overlay_test.cpp'),str(obj),'-o',str(exe)],check=True,timeout=30)
- subprocess.run([str(exe)],check=True,timeout=10)
+ subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++20','-Wall','-Wextra','-Werror','-pthread','-I'+str(HERE),'-DGITDESCVER="host-test"',str(HERE/'overlay_test.cpp'),str(obj),'-o',str(exe)],check=True,timeout=30)
+ subprocess.run([str(exe)],check=True,timeout=10,cwd=d)
 print('Host doubles exercise actual source; this is not Tesla/hardware rendering or game acceptance.')

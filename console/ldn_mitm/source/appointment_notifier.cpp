@@ -12,10 +12,10 @@ namespace ams::mitm::lanywhere {
         constexpr char NotificationDir[] = "sdmc:/config/ultrahand/notifications";
         constexpr char NotificationPath[] = "sdmc:/config/ultrahand/notifications/LANywhere-room.notify";
         constexpr char TemporaryPath[] = "sdmc:/config/ultrahand/notifications/LANywhere-room.tmp";
-        const char *LocalePath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("language.ini"), RC_CURRENT_PATH("language.ini")); }
-        const char *SubscriptionsPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("appointment-subscriptions.bin"), RC_CURRENT_PATH("appointment-subscriptions.bin")); }
-        const char *PreviousSubscriptionsPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("appointment-subscriptions.bin.previous"), RC_CURRENT_PATH("appointment-subscriptions.bin.previous")); }
-        const char *TemporarySubscriptionsPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("appointment-subscriptions.bin.tmp"), RC_CURRENT_PATH("appointment-subscriptions.bin.tmp")); }
+        const char *LocalePath() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("language.ini"), RC_V1_PATH("language.ini"), RC_CURRENT_PATH("language.ini")); }
+        const char *SubscriptionsPath() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("appointment-subscriptions.bin"), RC_V1_PATH("appointment-subscriptions.bin"), RC_CURRENT_PATH("appointment-subscriptions.bin")); }
+        const char *PreviousSubscriptionsPath() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("appointment-subscriptions.bin.previous"), RC_V1_PATH("appointment-subscriptions.bin.previous"), RC_CURRENT_PATH("appointment-subscriptions.bin.previous")); }
+        const char *TemporarySubscriptionsPath() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("appointment-subscriptions.bin.tmp"), RC_V1_PATH("appointment-subscriptions.bin.tmp"), RC_CURRENT_PATH("appointment-subscriptions.bin.tmp")); }
         constexpr u32 SubscriptionMagic = 0x53414e4c; // LNAS
         constexpr u32 SubscriptionVersion = 1;
         constexpr u64 MaxScheduleAhead = 7 * 24 * 60 * 60;
@@ -100,7 +100,7 @@ namespace ams::mitm::lanywhere {
         bool Chinese() {
             fs::FileHandle file;
             if (R_FAILED(fs::OpenFile(&file, LocalePath(), fs::OpenMode_Read)) &&
-                R_FAILED(fs::OpenFile(&file, rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("language.ini.previous"), RC_CURRENT_PATH("language.ini.previous")), fs::OpenMode_Read))) return false;
+                R_FAILED(fs::OpenFile(&file, rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("language.ini.previous"), RC_V1_PATH("language.ini.previous"), RC_CURRENT_PATH("language.ini.previous")), fs::OpenMode_Read))) return false;
             char text[32]{};
             size_t size = 0;
             const Result result = fs::ReadFile(&size, file, 0, text, sizeof(text) - 1);

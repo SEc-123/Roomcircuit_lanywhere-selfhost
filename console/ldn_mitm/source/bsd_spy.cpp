@@ -24,7 +24,7 @@ namespace ams::mitm::bsd {
 
     namespace {
 
-        const char *LogPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("bsd.log"), RC_CURRENT_PATH("bsd.log")); }
+        const char *LogPath() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("bsd.log"), RC_V1_PATH("bsd.log"), RC_CURRENT_PATH("bsd.log")); }
         constexpr TimeSpan SummaryInterval = TimeSpan::FromSeconds(5);
         constexpr size_t MaxSockets = 64, MaxDestinations = 8;
 
@@ -63,7 +63,7 @@ namespace ams::mitm::bsd {
             static int enabled = -1;
             if (enabled < 0) {
                 fs::DirectoryEntryType type;
-                enabled = R_SUCCEEDED(fs::GetEntryType(std::addressof(type), rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("debug.flag"), RC_CURRENT_PATH("debug.flag")))) ? 1 : 0;
+                enabled = R_SUCCEEDED(fs::GetEntryType(std::addressof(type), rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("debug.flag"), RC_V1_PATH("debug.flag"), RC_CURRENT_PATH("debug.flag")))) ? 1 : 0;
             }
             return enabled == 1;
         }
@@ -85,7 +85,7 @@ namespace ams::mitm::bsd {
 
             fs::FileHandle file;
             if (R_FAILED(fs::OpenFile(std::addressof(file), LogPath(), fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
-                static_cast<void>(fs::CreateDirectory(rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_DIR, RC_CURRENT_DIR)));  // puede existir ya
+                static_cast<void>(fs::CreateDirectory(rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_DIR, RC_V1_DIR, RC_CURRENT_DIR)));  // puede existir ya
                 if (R_FAILED(fs::CreateFile(LogPath(), 0)) || R_FAILED(fs::OpenFile(std::addressof(file), LogPath(), fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
                     return;
                 }

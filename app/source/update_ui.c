@@ -291,9 +291,9 @@ bool update_ui_initialize(const char *running_path)
         }
         if ((pending == UPDATE_INSTALLED || pending == UPDATE_RECOVERED) && running_version_matches(version) &&
             update_acknowledge(UpdateRoot) == UPDATE_OK) {
-            /* A new module must re-open storage after the old v1 journal was
-             * acknowledged. Also return to the renamed app entry. */
-            if (legacy_path && pending == UPDATE_INSTALLED) {
+            /* Reopen storage after acknowledging the legacy update journal.
+             * The module chooses its data generation only during boot. */
+            if (pending == UPDATE_INSTALLED && (legacy_path || roomcircuit_storage_generation() != 3)) {
                 must_exit = true;
                 set_state(UpdateRestart, NULL);
                 return true;

@@ -6,6 +6,7 @@
 #include "lobby_model.h"
 #include "relay_config.h"
 bool roomcircuit_storage_current(void) { return false; }
+unsigned roomcircuit_storage_generation(void) { return 0; }
 bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || id == 13; }
 bool roomcircuit_storage_available(void) { return true; }
 const char *nodes_ui_provider(uint32_t id) { return id == 13 ? "custom-13" : LanywhereNodes[id].provider; }

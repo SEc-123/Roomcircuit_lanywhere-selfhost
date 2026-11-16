@@ -15,7 +15,7 @@ source=here.parents[1]/'source'
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',type=Path,required=True);args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
 spec=importlib.util.spec_from_file_location('routes',here.parent/'input_routing_test.py');routes=importlib.util.module_from_spec(spec);spec.loader.exec_module(routes)
 text=(source/'nodes_ui.c').read_text()
-functions=['const char *nodes_ui_name(','const char *nodes_ui_region(','const char *nodes_ui_country(','static void rank_nodes(','static void measurement_label(','static uint8_t region_for_row(','static void begin_screen(','static void node_footer(','static void node_panel(','static void draw_regions(','static void node_location(','static void draw_picker(','static void draw_friend_panel(','static bool room_probe_can_retry(','static void draw_room_check(','static void draw_filters(']
+functions=['const char *nodes_ui_name(','const char *nodes_ui_region(','const char *nodes_ui_country(','static bool node_matches_current(','static void rank_nodes(','static void measurement_label(','static uint8_t region_for_row(','static void begin_screen(','static void node_footer(','static void node_panel(','static void draw_regions(','static void node_location(','static void draw_picker(','static void draw_friend_panel(','static bool room_probe_can_retry(','static void draw_room_check(','static void draw_filters(']
 code='''#include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +32,10 @@ static const char *keyboard_error;
 static bool language_save_failed;
 static NodeHostInfo current_host_info;
 static bool current_host_valid;
+static NodeDynamicEntry current_host_identity;
+static bool current_host_identity_valid;
+static NodeDynamicEntry picker_rendered_nodes[NODE_TOTAL_CAPACITY];
+static bool picker_rendered_valid[NODE_TOTAL_CAPACITY];
 static uint32_t node_id(uint32_t slot) { return slot < NODE_SHARED_CAPACITY ? slot : NODE_LOCAL_BASE + slot - NODE_SHARED_CAPACITY; }
 static bool node_copy(uint32_t id, NodeDynamicEntry *node) {
  if (id >= NODE_CATALOG_COUNT) return false;

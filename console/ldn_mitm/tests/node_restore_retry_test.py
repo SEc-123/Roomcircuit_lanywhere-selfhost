@@ -28,6 +28,7 @@ namespace util {static void Strlcpy(char*a,const char*b,size_t n){std::snprintf(
 namespace custom_nodes {static bool SameEndpoint(const NodeDynamicEntry&a,const NodeDynamicEntry&b){return a.port==b.port&&!strcmp(a.host,b.host);}}
 enum class NodePreferenceRead{Missing,Valid,Invalid};
 static std::atomic<u64> g_host_preference_generation{1};static std::atomic<bool> g_preference_loaded{false},g_retry_running{false};
+static u64 g_manual_host_generation=0;
 static std::mutex g_lock,g_catalog_lock,g_restore_lock,g_retry_lifecycle_lock;
 static bool g_retry_requested=false,queue_retry=false;
 static NodeDynamicCatalog g_dynamic_nodes{};static NodeDynamicEntry g_selected_node{},saved{};
@@ -43,7 +44,7 @@ static Result SetHostNodeInternal(u32 node,u64 generation){attempts++;if(active_
 static void StartPreferenceRetry(){scheduled++;}
 namespace os {static void SleepThread(int){sleeps++;if(manual_change){++g_host_preference_generation;manual_change=false;if(queue_retry){g_retry_requested=true;online=true;}}else online=true;}}
 ''' + worker + '\n' + restore + r'''
-static void reset(){g_preference_loaded=false;g_retry_running=false;g_retry_requested=queue_retry=false;g_host_preference_generation=1;g_host_node=0;g_selected_status=NodeHostSelected;scheduled=attempts=sleeps=0;online=manual_change=active_game=false;saved={};g_selected_node={};read_status=NodePreferenceRead::Missing;}
+static void reset(){g_preference_loaded=false;g_retry_running=false;g_retry_requested=queue_retry=false;g_manual_host_generation=0;g_host_preference_generation=1;g_host_node=0;g_selected_status=NodeHostSelected;scheduled=attempts=sleeps=0;online=manual_change=active_game=false;saved={};g_selected_node={};read_status=NodePreferenceRead::Missing;}
 int main(){
  reset();RestoreHostPreference();assert(g_host_node==0&&g_selected_status==NodeHostSelected&&scheduled==0);
  reset();read_status=NodePreferenceRead::Invalid;RestoreHostPreference();assert(g_host_node==NODE_ID_INVALID&&g_selected_status==NodeHostUnavailable&&scheduled==0);

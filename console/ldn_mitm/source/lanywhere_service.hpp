@@ -62,7 +62,12 @@
     AMS_SF_METHOD_INFO(C, H, 42, Result, GetDynamicNodeCatalog, (const ams::sf::OutBuffer &out), (out)) \
     AMS_SF_METHOD_INFO(C, H, 44, Result, GetHostNodeInfo, (const ams::sf::OutBuffer &out), (out)) \
     AMS_SF_METHOD_INFO(C, H, 45, Result, GetActiveNodeRoute, (const ams::sf::OutBuffer &out), (out)) \
-    AMS_SF_METHOD_INFO(C, H, 46, Result, GetStorageSelection, (ams::sf::Out<u32> selection), (selection))
+    AMS_SF_METHOD_INFO(C, H, 46, Result, GetStorageSelection, (ams::sf::Out<u32> selection), (selection)) \
+    AMS_SF_METHOD_INFO(C, H, 47, Result, SetHostNodeVerified, (const ams::sf::InBuffer &identity), (identity)) \
+    AMS_SF_METHOD_INFO(C, H, 48, Result, GetStorageHealth, (ams::sf::Out<u32> health), (health)) \
+    AMS_SF_METHOD_INFO(C, H, 49, Result, GetHostNodeIdentity, (const ams::sf::OutBuffer &identity), (identity)) \
+    AMS_SF_METHOD_INFO(C, H, 50, Result, StartHostNodeTask, (const ams::sf::InBuffer &identity, ams::sf::Out<u64> task_id), (identity, task_id)) \
+    AMS_SF_METHOD_INFO(C, H, 51, Result, GetHostNodeTask, (u64 task_id, const ams::sf::OutBuffer &out), (task_id, out))
 
 AMS_SF_DEFINE_INTERFACE(ams::mitm::lanywhere, ILanywhereService, AMS_ILANYWHERE_SERVICE, 0x594E414C)
 
@@ -85,6 +90,11 @@ namespace ams::mitm::lanywhere {
             Result GetActiveNodeRoute(const sf::OutBuffer &out);
             Result GetStorageSelection(sf::Out<u32> selection);
             Result GetHostNode(sf::Out<u32> node);
+            Result SetHostNodeVerified(const sf::InBuffer &identity);
+            Result GetStorageHealth(sf::Out<u32> health);
+            Result GetHostNodeIdentity(const sf::OutBuffer &identity);
+            Result StartHostNodeTask(const sf::InBuffer &identity, sf::Out<u64> task_id);
+            Result GetHostNodeTask(u64 task_id, const sf::OutBuffer &out);
             Result SetHostNode(u32 node);
             Result ListNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out);
             Result SelectNodeRoom(NodeRoomSelection request);

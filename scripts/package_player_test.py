@@ -106,6 +106,10 @@ def main():
         assert entries['switch/RoomCircuit/RoomCircuit.nro'] == nro + address.encode('ascii') + b'\0' + community
         assert 'README.txt' in entries and 'GAMES.txt' in entries
         assert 'switch/RoomCircuit/config.ini' not in entries
+        assert 'config/RoomCircuit/config.ini' not in entries
+        custom = package.package_files('fixture', '203.0.113.10', 11460, None)
+        assert custom['config/RoomCircuit/config.ini'] == b'server=203.0.113.10\nport=11460\npublic=1\n'
+        assert 'switch/RoomCircuit/config.ini' not in custom
         assert all(not name.startswith('/') and '..' not in pathlib.PurePosixPath(name).parts for name in entries)
         guide = entries['README.txt'].decode('utf-8')
         assert '@CONNECTION_' not in guide and '无需输入地址或端口' in guide

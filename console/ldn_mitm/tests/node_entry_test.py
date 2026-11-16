@@ -94,6 +94,7 @@ static bool MatchArmed(){return false;}
 static void ReleaseTicket(MatchTicket){}
 static NodeDynamicEntry g_selected_node{};
 static std::atomic<u64> g_host_preference_generation{1};
+static u64 g_manual_host_generation=0;
 static size_t NodeSlot(u32 id){return id<NODE_SHARED_CAPACITY?id:(id>=NODE_LOCAL_BASE&&id<NODE_LOCAL_BASE+NODE_LOCAL_CAPACITY?NODE_SHARED_CAPACITY+id-NODE_LOCAL_BASE:NODE_TOTAL_CAPACITY);}
 static bool DirectNodeId(u32 id){return id>=2&&NodeSlot(id)<NODE_TOTAL_CAPACITY;}
 static void NodeProvider(u32 id,char out[33]){if(id<NODE_CATALOG_COUNT)util::Strlcpy(out,LanywhereNodes[id].provider,33);else std::snprintf(out,33,"custom-%u",id);}
@@ -124,7 +125,7 @@ static void CancelMatch(){ClearSelectionLocked();}
 ''' + ''.join(actual(s) for s in (
     'bool CaptureDiscoveryRoute(', 'bool CaptureGameRoute(', 'bool CaptureHostGameRoute(',
     'bool GameRouteStillCurrent(', 'bool DiscoveryRouteStillSelected(const DiscoveryRoute &route) {',
-    'Result EnterDirectNode(', 'u32 GetHostNode(', 'Result SetHostNodeInternal(u32 node, u64 expected_generation) {', 'Result SetHostNode(', 'Result SelectNodeRoom(',
+    'Result EnterDirectNode(', 'u32 GetHostNode(', 'bool GetHostNodeIdentity(', 'Result SetHostNodeInternalExpected(', 'Result SetHostNodeInternal(u32 node, u64 expected_generation) {', 'u64 BeginManualHostSelection(', 'void FinishManualHostSelection(', 'Result SetHostNode(', 'Result SetHostNodeVerified(', 'Result SelectNodeRoom(',
 )) + r'''
 static int central_entries=0;
 static Result Enter(u8,const u8*,size_t,const sockaddr_in*,u8*,const u8*,const DiscoveryRoute*,GameRoute*){central_entries++;return 0;}
@@ -134,6 +135,11 @@ static Result Enter(u8,const u8*,size_t,const sockaddr_in*,u8*,const u8*,const D
 static void found(const char*,const void*,void*){}
 int main(){
  unsigned cases=0;
+ NodeDynamicEntry selected{};assert(LookupNode(2,&selected));
+ assert(SetHostNodeVerified(selected)==0&&GetHostNode()==2);
+ NodeDynamicEntry actual{};assert(GetHostNodeIdentity(&actual)&&!std::memcmp(&actual,&selected,sizeof(actual)));
+ assert(!GetHostNodeIdentity(nullptr));
+ selected.port++;assert(SetHostNodeVerified(selected)!=0&&GetHostNode()==2);cases++;
  assert(SetHostNode(2)==0&&GetHostNode()==2);GameRoute host{};
  assert(CaptureHostGameRoute(&host)&&host.discovery.node_id==2);
  assert(host.discovery.ipv4==htonl(0x0808080a)&&!strcmp(host.discovery.provider,"lanplay-nl"));
@@ -182,6 +188,12 @@ int main(){
  assert(SetHostNode(13)==ResultRelayFailed()&&GetHostNode()==prior_node);
  assert(g_node_endpoints[3].sin_addr.s_addr==prior_endpoint.sin_addr.s_addr);
  assert(!g_node_endpoints[13].sin_addr.s_addr);
+ lanplay::probe_hook=nullptr;shared_pin[3]=8;cases++;
+ // An overlay must never select a reused slot after the user saw another endpoint.
+ NodeDynamicEntry displayed{};assert(LookupNode(13,&displayed));
+ shared_pin[3]=9;assert(SetHostNodeVerified(displayed)==ResultRelayFailed()&&GetHostNode()==prior_node);
+ shared_pin[3]=8;lanplay::probe_hook=+[]{shared_pin[3]=9;};
+ assert(SetHostNodeVerified(displayed)==ResultRelayFailed()&&GetHostNode()==prior_node);
  lanplay::probe_hook=nullptr;shared_pin[3]=8;cases++;
  // Self/original-public rows keep the established selector, not LAN Play synthetic codes.
  request={};request.node_id=0;request.game_id=42;strcpy(request.locator.code,"ABC234");assert(SelectNodeRoom(request)==0&&gateway_joins==1);

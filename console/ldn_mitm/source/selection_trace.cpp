@@ -9,7 +9,7 @@
 
 namespace ams::mitm::selection_trace {
 namespace {
-const char *Path() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("node-selection.log"), RC_CURRENT_PATH("node-selection.log")); }
+const char *Path() { return rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_PATH("node-selection.log"), RC_V1_PATH("node-selection.log"), RC_CURRENT_PATH("node-selection.log")); }
 constexpr s64 MaxBytes = 8192;
 os::SdkMutex g_trace_lock;
 Handle g_operation = 0;
@@ -55,7 +55,7 @@ Handle Begin(std::uint32_t node, const char *stage) {
     g_sequence = 0;
     g_offset = 0;
     g_writable = false;
-    static_cast<void>(fs::CreateDirectory(rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_DIR, RC_CURRENT_DIR)));
+    static_cast<void>(fs::CreateDirectory(rc_storage_path_gen(storage::StorageGeneration(), RC_LEGACY_DIR, RC_V1_DIR, RC_CURRENT_DIR)));
     bool exists = false;
     if (R_FAILED(fs::HasFile(&exists, Path()))) return g_operation;
     if (!exists && R_FAILED(fs::CreateFile(Path(), 0))) return g_operation;

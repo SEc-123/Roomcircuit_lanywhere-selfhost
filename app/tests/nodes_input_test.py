@@ -50,6 +50,8 @@ static int view_lock;
 static uint32_t dynamic_generation;
 static bool initialized=true, friend_created, reverse_after_draw;
 static NodeHostInfo current_host_info;static bool current_host_valid;
+static NodeDynamicEntry picker_rendered_nodes[NODE_TOTAL_CAPACITY];
+static bool picker_rendered_valid[NODE_TOTAL_CAPACITY];
 static void refresh_host_info(Service *service){(void)service;}
 static bool nodes_ui_refresh_catalog(Service *service){(void)service;return true;}
 static uint32_t node_id(uint32_t slot){return slot < NODE_SHARED_CAPACITY ? slot : NODE_LOCAL_BASE + slot - NODE_SHARED_CAPACITY;}
@@ -76,7 +78,8 @@ static void friend_panel(PadState *pad){(void)pad;}
 static NodeView snapshot(void){return view;}
 static void mutexLock(int *lock){(void)lock;}
 static void mutexUnlock(int *lock){(void)lock;}
-static int serviceDispatchIn(Service *svc,int command,uint32_t id){(void)svc;assert(command==36);assert(trace_count==1&&trace_phases[0]==NodeSelectionBeforeIpc);picked=id;return (int)ipc_result;}
+static int mock_dispatch(Service *svc,int command,const NodeDynamicEntry *identity){(void)svc;assert(command==NODE_SET_HOST_IDENTITY_IPC);assert(trace_count==1&&trace_phases[0]==NodeSelectionBeforeIpc);picked=identity->id;return (int)ipc_result;}
+#define serviceDispatch(s,c,...) mock_dispatch((s),(c),&identity)
 #define R_SUCCEEDED(result) ((result)==0)
 static void rank_nodes(const NodeView *copy,uint8_t region,uint32_t *order,unsigned *count,bool *recommended)
 {
@@ -92,8 +95,9 @@ static void draw_picker(const NodeView *copy,uint8_t region,const uint32_t *orde
  unsigned selected,uint32_t current,bool region_focus,const bool *recommended)
 {
  (void)copy;(void)region;(void)current;(void)region_focus;(void)recommended;
+ memset(picker_rendered_valid,0,sizeof(picker_rendered_valid));
  const unsigned first=selected/NODE_ROWS*NODE_ROWS;
- for(unsigned i=first;i<count&&i<first+NODE_ROWS;i++)visits|=1u<<order[i];
+ for(unsigned i=first;i<count&&i<first+NODE_ROWS;i++){visits|=1u<<order[i];picker_rendered_valid[order[i]]=true;picker_rendered_nodes[order[i]].id=node_id(order[i]);}
 }
 ''' + '\n'.join(routes.function(source, name) for name in (
     'static uint8_t region_for_row(', 'static unsigned region_row(', 'static u64 picker_touch(',

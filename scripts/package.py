@@ -136,7 +136,7 @@ def package_files(version, server, port, embedded):
     elif optional_profile('EU') is not None:
         raise ValueError('Europe relay selection requires the managed fixed relay profile')
     elif server is not None:
-        entries["switch/RoomCircuit/config.ini"] = f"server={server}\nport={port}\npublic=1\n".encode("ascii")
+        entries["config/RoomCircuit/config.ini"] = f"server={server}\nport={port}\npublic=1\n".encode("ascii")
     notices = ROOT / "third_party"
     if notices.is_dir():
         for notice in sorted(notices.rglob("*")):
@@ -153,7 +153,7 @@ def package_files(version, server, port, embedded):
         setup = f"打开应用，确认服务器显示为 {server}:{port}。"
     entries["switch/RoomCircuit/INSTALL.zh-CN.txt"] = (
         f"RoomCircuit {version}\n\n"
-        "安装：将 atmosphere 和 switch 合并到 SD 卡根目录，再重启进入虚拟系统。\n"
+        "安装：将 atmosphere、switch 及存在的 config 合并到 SD 卡根目录，再重启进入虚拟系统。\n"
         "从相册打开 RoomCircuit。按 − 或点「约局」可预约。\n"
         "有新版时，应用顶部高亮提示。按 LS 可检查更新。关闭游戏后安装，完成后重启虚拟系统。\n"
         "安装中断时，从自制软件菜单打开 RoomCircuit Recovery。\n"
@@ -171,8 +171,8 @@ def package_files(version, server, port, embedded):
         connection_zh = "   服务器地址已内置，无需输入地址或端口。原有网络设置会保留。"
         connection_en = "   The server is built in; no address or port setup is needed. Existing preferences are kept."
     elif server is not None:
-        connection_zh = "   如无原有配置，将随包的 switch/RoomCircuit/config.ini 复制到卡上。"
-        connection_en = "   If you have no existing configuration, also copy the included switch/RoomCircuit/config.ini."
+        connection_zh = "   如无原有配置，将随包的 config/RoomCircuit/config.ini 复制到卡上。"
+        connection_en = "   If you have no existing configuration, also copy the included config/RoomCircuit/config.ini."
     else:
         connection_zh = "   请先在应用中设置服务器地址和端口。"
         connection_en = "   Configure a server address and port in the app first."

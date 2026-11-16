@@ -39,7 +39,7 @@ def read_app_metadata(data):
     }
 
 
-def inspect_elf(path, expected_symbol=None, expected_version=None, strong_functions=()):
+def inspect_elf(path, expected_symbol=None, expected_version=None, strong_functions=(), forbidden_functions=()):
     """Read Switch ELF section metadata without requiring a host readelf."""
     data = path.read_bytes()
     if len(data) < 64 or data[:7] != b'\x7fELF\x02\x01\x01' or struct.unpack_from('<H', data, 0x12)[0] != 183:
@@ -68,7 +68,7 @@ def inspect_elf(path, expected_symbol=None, expected_version=None, strong_functi
     if not 0 < id_size <= 32 or 16 + id_size > len(note):
         raise ValueError(f'Invalid GNU build-ID length in {path}')
 
-    if expected_symbol is not None or strong_functions:
+    if expected_symbol is not None or strong_functions or forbidden_functions:
         symbol_table = by_name[b'.symtab']
         strings = contents(sections[symbol_table[6]])
         symbols = [(c_string(strings, name), info >> 4)
@@ -80,6 +80,9 @@ def inspect_elf(path, expected_symbol=None, expected_version=None, strong_functi
         for name in strong_functions:
             if name not in globals_:
                 raise ValueError(f'Missing strong {name.decode()} function in {path}')
+        for fragment in forbidden_functions:
+            if any(fragment in name for name, _ in symbols):
+                raise ValueError(f'Forbidden linked function containing {fragment.decode()} in {path}')
     if expected_version is not None and expected_version.encode('ascii') + b'\0' not in contents(by_name[b'.rodata']):
         raise ValueError(f'Sysmodule ELF is missing build version {expected_version!r} in .rodata')
 
@@ -126,6 +129,10 @@ def native_sources(source, elf_paths):
         module = elf.parent
         files = [module / 'Makefile', *sorted((source / 'common').glob('*.h'))]
         files.extend(path for path in (module / 'source').rglob('*') if path.is_file())
+        if name == 'overlay':
+            files.extend(path for path in (module / 'include').rglob('*') if path.is_file())
+            vendor = source / 'console/libultrahand'
+            files.extend(path for path in vendor.rglob('*') if path.is_file())
         if name == 'sysmodule':
             vendor = source / 'console/lanplay-lwip'
             files.extend(path for part in ('src', 'include') for path in (vendor / part).rglob('*') if path.is_file())
@@ -212,7 +219,7 @@ def main():
     parser.add_argument('source', type=pathlib.Path)
     parser.add_argument('--app-title', help='expected NRO display title')
     parser.add_argument('--app-version', help='expected NRO display version')
-    parser.add_argument('--overlay-title', default='RoomCircuit', help='expected Tesla overlay display title')
+    parser.add_argument('--overlay-title', default='RoomCircuit', help='expected Ultrahand overlay display title')
     parser.add_argument('--require-capabilities', action='store_true',
                         help='require the linked sysmodule capability IPC function')
     parser.add_argument('--ipc-abi', type=int, help='expected app/sysmodule IPC capability major')
@@ -232,17 +239,26 @@ def main():
     overlay = console / 'switch/.overlays/lanywhere.ovl'
     overlay_hash = verify_nro(overlay)
     overlay_data = overlay.read_bytes()
+    if not overlay_data.endswith(b'ULTR'):
+        raise ValueError('Ultrahand overlay is missing its ULTR signature')
     overlay_leaf = source / 'console/overlay/overlay.ovl'
     overlay_elf = overlay_leaf.with_suffix('.elf')
     if overlay_data != overlay_leaf.read_bytes():
-        raise ValueError('Packaged Tesla overlay differs from the leaf artifact')
-    overlay_id, overlay_bss = inspect_elf(overlay_elf)
+        raise ValueError('Packaged Ultrahand overlay differs from the leaf artifact')
+    overlay_id, overlay_bss = inspect_elf(overlay_elf, strong_functions=(
+        b'_ZN3tsl4impl20parseOverlaySettingsEv', b'_ZN3tsl19initializeThemeVarsEv',
+        b'_ZN3ult5Audio10initializeEv', b'_ZN3ult5Audio9playSoundENS0_9SoundTypeE'),
+        forbidden_functions=(b'curl_', b'mbedtls_', b'downloadFile', b'downloadFromURL'))
+    overlay_elf_bytes = overlay_elf.read_bytes()
+    for key in (b'right_alignment\0', b'sound_effects\0', b'theme.ini\0'):
+        if key not in overlay_elf_bytes:
+            raise ValueError(f'Ultrahand overlay is missing setting {key!r}')
     verify_build_id(overlay_data, overlay_id, overlay)
     overlay_metadata = read_app_metadata(overlay_data)
     if overlay_metadata['title'] != args.overlay_title:
-        raise ValueError(f'Tesla overlay title is {overlay_metadata["title"]!r}, expected {args.overlay_title!r}')
+        raise ValueError(f'Ultrahand overlay title is {overlay_metadata["title"]!r}, expected {args.overlay_title!r}')
     print(overlay_hash, overlay, f'({overlay.stat().st_size} bytes)')
-    print(f'  Tesla overlay {overlay_metadata["title"]} / {overlay_metadata["version"]}')
+    print(f'  Ultrahand overlay {overlay_metadata["title"]} / {overlay_metadata["version"]}')
     app_data = app.read_bytes()
     app_metadata = read_app_metadata(app_data)
     for field, expected in [('title', args.app_title), ('version', args.app_version)]:
@@ -265,7 +281,7 @@ def main():
     provenance = json.loads((source / 'UPSTREAM.json').read_text())
     version = provenance['derived_version']
     if overlay_metadata['version'] != version:
-        raise ValueError('Tesla overlay NACP version differs from the release version')
+        raise ValueError('Ultrahand overlay NACP version differs from the release version')
     capabilities = None
     if args.require_capabilities or args.ipc_abi is not None:
         capabilities = b'LanywhereService23GetProtocolCapabilities'
@@ -286,7 +302,7 @@ def main():
         app_report.update({'format': 'NRO0 with ASET', 'nacp': app_metadata,
                            'elf_build_id': app_id.hex(), 'static_bss_bytes': app_bss})
         overlay_report = describe_artifact(source, overlay, overlay_hash)
-        overlay_report.update({'format': 'Tesla NRO0 with ASET', 'nacp': overlay_metadata,
+        overlay_report.update({'format': 'Ultrahand NRO0 with ASET', 'nacp': overlay_metadata,
                                'elf_build_id': overlay_id.hex(), 'static_bss_bytes': overlay_bss})
         module_report = describe_artifact(source, exefs, digest)
         module_report.update({'format': 'PFS0 ExeFS', 'embedded_version': version,

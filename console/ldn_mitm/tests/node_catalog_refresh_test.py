@@ -40,7 +40,7 @@ enum class RelayState{Idle,InRoom,Connecting};static RelayState g_state=RelaySta
 struct DiscoveryRoute{};static bool online=true;static u8 pin[4]={8,8,8,8};static unsigned requests=0;
 static u64 SelectionNowMs(){return 100;}
 static void ClearSelectionLocked(){g_selection={};}
-static size_t NodeSlot(u32 id){return id<NODE_SHARED_CAPACITY?id:NODE_TOTAL_CAPACITY;}
+static size_t NodeSlot(u32 id){return id<NODE_SHARED_CAPACITY?id:id>=NODE_LOCAL_BASE&&id<NODE_LOCAL_BASE+NODE_LOCAL_CAPACITY?NODE_SHARED_CAPACITY+(id-NODE_LOCAL_BASE):NODE_TOTAL_CAPACITY;}
 static bool CaptureAppointmentRoute(DiscoveryRoute*){return online;}
 static bool ResolveDiscoveryRoute(const DiscoveryRoute&,sockaddr_in*,char*){return online;}
 static int ConnectServer(const sockaddr_in&,const char**,int,const char*){return dup(STDOUT_FILENO);}
@@ -52,7 +52,7 @@ static ssize_t ReadListFrame(int,u8*t,u8*out,size_t n,int,u32*){
  strcpy((char*)out+52,"shared.example");strcpy((char*)out+180,"Shared");memcpy(out+228,pin,4);
  *t=NODE_DYNAMIC_CATALOG_RESPONSE;return 232;
 }
-static bool ReadLocalNodes(char*,size_t,size_t*n){*n=0;return true;}
+static bool local_ok=true;static bool ReadLocalNodes(char*,size_t,size_t*n){*n=0;return local_ok;}
 static void RequestCatalogRefresh(){requests++;}
 ''' + refresh + '\n' + get + r'''
 static void seed(){
@@ -61,7 +61,7 @@ static void seed(){
  e.ipv4[0]=8;e.ipv4[1]=8;e.ipv4[2]=8;e.ipv4[3]=8;g_dynamic_nodes.enabled=g_dynamic_nodes.available=1u<<13;
  g_selected_node=e;g_host_node=13;g_selected_status=NodeHostReady;g_node_endpoints[13]={};
  memcpy(&g_node_endpoints[13].sin_addr.s_addr,e.ipv4,4);g_node_endpoints[13].sin_port=htons(e.port);
- g_state=RelayState::Idle;g_selection={};g_direct_session=false;online=true;
+ g_state=RelayState::Idle;g_selection={};g_direct_session=false;online=true;local_ok=true;
 }
 int main(){
  seed();NodeDynamicCatalog snapshot{};assert(GetDynamicNodeCatalog(&snapshot)&&requests==1&&snapshot.count==1);
@@ -72,6 +72,14 @@ int main(){
  seed();online=false;assert(RefreshDynamicNodes());assert(g_selected_status==NodeHostUnavailable&&!g_node_endpoints[13].sin_addr.s_addr);
  assert(!g_dynamic_nodes.available&&g_dynamic_nodes.nodes[0].ipv4[0]==0);
  online=true;assert(RefreshDynamicNodes());assert(g_dynamic_nodes.nodes[0].ipv4[3]==9);
+ seed();local_ok=false;assert(RefreshDynamicNodes());assert((g_dynamic_nodes.enabled&NODE_LOCAL_CONFIG_INVALID)&&g_dynamic_nodes.count==1&&g_dynamic_nodes.nodes[0].id==13);
+ local_ok=true;assert(RefreshDynamicNodes());assert(!(g_dynamic_nodes.enabled&NODE_LOCAL_CONFIG_INVALID));
+ seed();online=false;local_ok=false;assert(RefreshDynamicNodes());assert(g_dynamic_nodes.enabled&NODE_LOCAL_CONFIG_INVALID);
+ local_ok=true;assert(RefreshDynamicNodes());assert(!(g_dynamic_nodes.enabled&NODE_LOCAL_CONFIG_INVALID));
+ seed();g_dynamic_nodes.nodes[1]=g_dynamic_nodes.nodes[0];g_dynamic_nodes.nodes[1].id=NODE_LOCAL_BASE;g_dynamic_nodes.count=2;g_dynamic_nodes.enabled|=1u<<NODE_SHARED_CAPACITY;
+ g_selected_node=g_dynamic_nodes.nodes[1];g_host_node=NODE_LOCAL_BASE;g_direct_session=true;local_ok=false;
+ assert(RefreshDynamicNodes());assert(g_direct_session&&g_host_node==NODE_LOCAL_BASE&&g_dynamic_nodes.count==1&&(g_dynamic_nodes.enabled&NODE_LOCAL_CONFIG_INVALID));
+ assert(!(g_dynamic_nodes.enabled&(1u<<NODE_SHARED_CAPACITY)));
  puts("PASS cached nonblocking IPC, DNS A-to-B revalidation, active-room pin and offline refresh");
 }
 '''

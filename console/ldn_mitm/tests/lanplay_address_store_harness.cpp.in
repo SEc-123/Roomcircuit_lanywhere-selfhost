@@ -1,6 +1,6 @@
 #include "@CODEC@"
 #include "roomcircuit_paths.h"
-namespace ams::mitm::storage { bool current = false; inline bool StorageUseCurrent(){ return current; } }
+namespace ams::mitm::storage { unsigned generation = 0; unsigned StorageGeneration(){ return generation; } }
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -32,7 +32,7 @@ int ReadFile(size_t *bytes, FileHandle file, int64_t offset, void *out, size_t c
     const auto &data = files[file.path]; *bytes = std::min(capacity, data.size());
     std::memcpy(out, data.data(), *bytes); return 0;
 }
-int CreateDirectory(const char *path) { assert(std::string(path) == (ams::mitm::storage::current ? RC_CURRENT_DIR : RC_LEGACY_DIR));return read_only ? 3 : 0; }
+int CreateDirectory(const char *path) { assert(std::string(path) == rc_storage_path_gen(ams::mitm::storage::generation, RC_LEGACY_DIR, RC_V1_DIR, RC_CURRENT_DIR));return read_only ? 3 : 0; }
 int DeleteFile(const char *path) { if(read_only)return 3;return files.erase(path) ? 0 : 1; }
 int CreateFile(const char *path, size_t size) {
     if (read_only) return 3;
@@ -65,15 +65,24 @@ static const char *Path;
 static const char *TemporaryPath;
 static const char *PreviousPath;
 std::vector<uint8_t> Record(uint32_t address) { std::vector<uint8_t> out(8);std::memcpy(out.data(),"LPIP",4);Put32(out.data()+4,address);return out; }
-int main(int argc, char **) {
-    ams::mitm::storage::current = argc > 1;
-    Path = rc_storage_path(ams::mitm::storage::current, RC_LEGACY_PATH("lanplay-ip.bin"), RC_CURRENT_PATH("lanplay-ip.bin"));
-    TemporaryPath = rc_storage_path(ams::mitm::storage::current, RC_LEGACY_PATH("lanplay-ip.bin.tmp"), RC_CURRENT_PATH("lanplay-ip.bin.tmp"));
-    PreviousPath = rc_storage_path(ams::mitm::storage::current, RC_LEGACY_PATH("lanplay-ip.bin.previous"), RC_CURRENT_PATH("lanplay-ip.bin.previous"));
+int main(int argc, char **argv) {
+    if (argc > 1) {
+        assert(argc == 2);
+        ams::mitm::storage::generation = !std::strcmp(argv[1], "v1") ? 1 : !std::strcmp(argv[1], "current") ? 3 : 99;
+        assert(ams::mitm::storage::generation != 99);
+    }
+    const auto gen = ams::mitm::storage::generation;
+    Path = rc_storage_path_gen(gen, RC_LEGACY_PATH("lanplay-ip.bin"), RC_V1_PATH("lanplay-ip.bin"), RC_CURRENT_PATH("lanplay-ip.bin"));
+    TemporaryPath = rc_storage_path_gen(gen, RC_LEGACY_PATH("lanplay-ip.bin.tmp"), RC_V1_PATH("lanplay-ip.bin.tmp"), RC_CURRENT_PATH("lanplay-ip.bin.tmp"));
+    PreviousPath = rc_storage_path_gen(gen, RC_LEGACY_PATH("lanplay-ip.bin.previous"), RC_V1_PATH("lanplay-ip.bin.previous"), RC_CURRENT_PATH("lanplay-ip.bin.previous"));
     namespace fs=ams::fs;
+    // An address in another storage generation must never be read or replaced.
+    const char *other = gen == 1 ? RC_CURRENT_PATH("lanplay-ip.bin") : RC_V1_PATH("lanplay-ip.bin");
+    fs::files[other] = Record(0x0a0daaaa);
     random_values={0,0xffff,0x2501,0xfefe,0x1234};
     assert(VirtualAddress(false)==0x0a0d1234 && random_values.empty());
     assert(fs::files[Path]==Record(0x0a0d1234) && !fs::files.count(TemporaryPath));
+    assert(fs::files[other]==Record(0x0a0daaaa));fs::files.erase(other);
     const auto writes=fs::writes;
     assert(VirtualAddress(false)==0x0a0d1234 && fs::writes==writes);
     random_values={0x1234,0x5678};
