@@ -14,6 +14,6 @@ with tempfile.TemporaryDirectory(prefix='lanywhere-appointments-') as temporary:
         '-std=c11', '-Wall', '-Wextra', '-Werror', '-Iapp/tests/appointments_mock', '-Iapp/source',
         'app/tests/appointments_view_test.c', 'app/source/appointments_view.c',
         'app/source/appointments_model.c', 'app/source/game_catalog.c',
-        'app/source/ui_text.c', '-o', str(executable)
+        'app/source/ui_text.c', 'app/source/roomcircuit_storage.c', '-o', str(executable)
     ], cwd=root, check=True, timeout=30)
     subprocess.run([str(executable)], cwd=directory, check=True, timeout=10)

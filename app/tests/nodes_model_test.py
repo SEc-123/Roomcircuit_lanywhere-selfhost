@@ -45,6 +45,10 @@ static NodeFriendRequest friend_request;
 static NodeFriendResponse group;
 static char group_code[8];
 static const char *notice;
+static uint32_t node_id(uint32_t slot){return slot<NODE_SHARED_CAPACITY?slot:NODE_LOCAL_BASE+slot-NODE_SHARED_CAPACITY;}
+static bool nodes_ui_valid(uint32_t id){return id<NODE_CATALOG_COUNT;}
+static uint8_t nodes_ui_region_for(uint32_t id){return id<NODE_CATALOG_COUNT?LanywhereNodes[id].region:0;}
+static bool node_copy(uint32_t id,NodeDynamicEntry *out){if(id>=NODE_CATALOG_COUNT)return false;*out=(NodeDynamicEntry){.id=id,.port=LanywhereNodes[id].port};snprintf(out->host,sizeof(out->host),"%s",LanywhereNodes[id].host);return true;}
 static void mutexInit(int *p){(void)p;}
 static void mutexLock(int *p){(void)p;}static void mutexUnlock(int *p){(void)p;}
 static NodeView snapshot(void){return input;}
@@ -114,7 +118,7 @@ int main(void){
  NodeView v={.enabled=(1u<<NODE_CATALOG_COUNT)-1,.catalog_ok=true};
  for(unsigned i=0;i<NODE_CATALOG_COUNT;i++)v.measurements[i]=(NodeMeasurement){.node_id=i,.state=NodeMeasureReady,.sent=5,.received=5,.kind=NodeProbeUdp,.median_ms=(uint16_t)(50+i),.jitter_ms=2};
  v.measurements[2].median_ms=5;v.measurements[4].median_ms=4;v.measurements[5].median_ms=6;v.measurements[6].median_ms=7;v.measurements[8].median_ms=8;
- uint32_t order[NODE_CATALOG_COUNT];bool recommended[NODE_CATALOG_COUNT];unsigned count;
+ uint32_t order[NODE_TOTAL_CAPACITY];bool recommended[NODE_TOTAL_CAPACITY];unsigned count;
  rank_nodes(&v,NodeRegionEurope,order,&count,recommended);assert(count==5&&order[0]==4&&recommended[4]&&recommended[5]&&recommended[8]&&!recommended[2]&&!recommended[6]);
  v.measurements[4].received=2;rank_nodes(&v,NodeRegionEurope,order,&count,recommended);assert(!recommended[4]&&recommended[2]);
  rank_nodes(&v,NodeRegionOceania,order,&count,recommended);assert(count==0);

@@ -341,7 +341,7 @@ class Tcp {
 // --- La pasarela -------------------------------------------------------------------------------------------------
 function create({ port, log, rooms, count, paused, frame, forwardData, memberAt, isOpen,
                   dataBytes = 512 * 1024, dataPackets = 1000, upstream = null, onReady = () => {}, onFailure = () => {},
-                  dataUnsupported = () => {}, onFirstScanSent = () => {} }) {
+                  dataUnsupported = () => {}, onFirstScanSent = () => {}, onEndpoint = () => {} }) {
     if (!port && !upstream) return null;
     const sock = dgram.createSocket('udp4');
     // A client transport has exactly one pinned, allowlisted relay endpoint.
@@ -1112,7 +1112,9 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             const privateAddress = octets[0] === 0 || octets[0] === 10 || octets[0] === 127 || octets[0] >= 224 ||
                 (octets[0] === 169 && octets[1] === 254) || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
                 (octets[0] === 192 && octets[1] === 168) || (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127);
-            if (privateAddress && !upstream.allowPrivate) throw new Error('LAN Play upstream resolved to a non-public address');
+            if (!upstream.allowPrivate && (privateAddress || !require('./custom-node-registry').publicIPv4(address)))
+                throw new Error('LAN Play upstream resolved to a non-public address');
+            onEndpoint(address);
             upstreamClient = { id: nextClientId++, address, port: upstream.port, seen: Date.now(), ips: new Set() };
             clients.set(`${address}:${upstream.port}`, upstreamClient);
             perIp.set(address, 1);

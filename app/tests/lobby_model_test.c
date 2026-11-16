@@ -66,6 +66,8 @@ int main(void)
     assert(!strcmp(lobby_provider_id(11),"lanplay-cn-olunira") && !strcmp(lobby_provider_id(12),"lanplay-cn-shanghai"));
     for (int i=9;i<=12;i++) assert(lobby_provider_is_lanplay(lobby_provider_id(i)));
     assert(!lobby_provider_is_lanplay("lanplay-unknown"));
+    assert(lobby_provider_is_lanplay("custom-13") && lobby_provider_is_lanplay("custom-23"));
+    assert(!lobby_provider_is_lanplay("custom-12") && !lobby_provider_is_lanplay("custom-24") && !lobby_provider_is_lanplay("custom-13x"));
     puts("LANywhere lobby selection tests passed");
     return 0;
 }

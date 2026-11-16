@@ -4,6 +4,7 @@ const { performance } = require('node:perf_hooks');
 const catalog = require('./node-catalog');
 const locator = require('./node-locator');
 const directRoomMetadata = require('./direct-room-metadata');
+const customNodes = require('./custom-node-registry');
 const CAPABILITY = 32768, CATALOG_REQUEST = 0x32, CATALOG_RESPONSE = 0xb2;
 const REQUEST = 0x33, RESPONSE = 0xb3, REALM_REQUEST = 0x35, REALM_RESPONSE = 0xb5;
 const ANNOTATED_REQUEST = 0x37, ANNOTATED_RESPONSE = 0xb7;
@@ -11,13 +12,12 @@ const PAGE_SIZE = 6, HEADER_BYTES = 16, ROW_BYTES = 408, END = 0xffffffff;
 const DIRECT = 1, GATEWAY = 2;
 
 function create({ source, providerIds, communityDirect, nodes = catalog.nodes, hash = catalog.hash,
-    now = () => performance.now() }) {
+    now = () => performance.now(), metadata = directRoomMetadata.create({ now }) }) {
     const enabled = new Set(['self', ...providerIds]);
-    const allowedMask = (1 << nodes.length) - 1;
+    const allowedMask = nodes.reduce((mask, node) => mask | (1 << node.id), 0) >>> 0;
     const hostMask = nodes.reduce((mask, node) => mask | ((enabled.has(node.provider) &&
         (node.protocol !== 1 || communityDirect)) ? 1 << node.id : 0), 0);
     const directMask = nodes.reduce((mask, node) => mask | (node.protocol === 2 ? (1 << node.id) : 0), 0) & hostMask;
-    const metadata = directRoomMetadata.create({ now });
     const snapshots = new Map();
     let generation = 0;
 
@@ -39,19 +39,26 @@ function create({ source, providerIds, communityDirect, nodes = catalog.nodes, h
         let direct = node.protocol === 0;
         if (node.protocol === 1) direct = communityDirect && game !== 0xffffffffffffffffn;
         if (node.protocol === 2) direct = locator.valid(item.locator, game, code, true);
+        if (node.id >= customNodes.FIRST && !direct) return null;
         data.writeUInt32LE(direct ? DIRECT : GATEWAY, 340);
-        if (direct && item.locator) item.locator.copy(data, 344);
+        if (direct && item.locator) {
+            item.locator.copy(data, 344);
+            if (node.id >= customNodes.FIRST) {
+                if (!customNodes.publicIPv4(item.upstreamAddress)) return null;
+                Buffer.from(item.upstreamAddress.split('.').map(Number)).copy(data, 344 + 52);
+            }
+        }
         else data.write(code, 344 + 44, 6, 'ascii');
         return data;
     }
 
-    function isLive(sources, nodeId, hostIp, identity) {
+    function isLive(sources, nodeId, hostIp, identity, expectedEndpoint = null) {
         if (!(directMask & (1 << nodeId))) return false;
         const provider = nodes.find(node => node.id === nodeId)?.provider;
         if (!provider) return false;
         let matches = 0;
-        for (const { summary, locator: candidate } of sources.get(provider) || []) {
-            if (locator.valid(candidate, summary.readBigUInt64LE(8), summary.toString('ascii', 0, 6), true) &&
+        for (const { summary, locator: candidate, upstreamAddress } of sources.get(provider) || []) {
+            if ((!expectedEndpoint || upstreamAddress === expectedEndpoint) && locator.valid(candidate, summary.readBigUInt64LE(8), summary.toString('ascii', 0, 6), true) &&
                 candidate.readUInt32LE(40) === hostIp && candidate.subarray(0, 38).equals(identity)) {
                 if (++matches > 1) return false;
             }
@@ -79,7 +86,10 @@ function create({ source, providerIds, communityDirect, nodes = catalog.nodes, h
             const rows = [], selected = nodes.filter(node => selectedMask & (1 << node.id));
             for (const node of selected) {
                 for (const item of sources.get(node.provider) || []) {
-                    if (!game || item.summary.readBigUInt64LE(8) === game) rows.push(room(node, item));
+                    if (!game || item.summary.readBigUInt64LE(8) === game) {
+                        const row = room(node, item);
+                        if (row) rows.push(row);
+                    }
                 }
             }
             rows.sort((a, b) => {
@@ -116,7 +126,8 @@ function create({ source, providerIds, communityDirect, nodes = catalog.nodes, h
             if (row.readUInt32LE(340) !== DIRECT) return row;
             const node = row.readUInt32LE(336), hostIp = row.readUInt32LE(384);
             const identity = row.subarray(344, 382);
-            return isLive(sources, node, hostIp, identity) ? metadata.decorate(row, node, hostIp, identity) : row;
+            const endpoint = node >= customNodes.FIRST ? [...row.subarray(396, 400)].join('.') : null;
+            return isLive(sources, node, hostIp, identity, endpoint) ? metadata.decorate(row, node, hostIp, identity) : row;
         });
         return Buffer.concat([header, ...annotatedRows]);
     }

@@ -39,11 +39,20 @@
 #define NODE_FILTER_ROW_HEIGHT 50
 
 typedef struct {
-    NodeMeasurement measurements[NODE_CATALOG_COUNT];
+    NodeMeasurement measurements[NODE_TOTAL_CAPACITY];
     uint32_t enabled, available;
     bool catalog_ok, probe_start_failed, changed;
 } NodeView;
 static NodeView view;
+static NodeDynamicEntry dynamic_nodes[NODE_TOTAL_CAPACITY];
+static bool dynamic_present[NODE_TOTAL_CAPACITY];
+static uint32_t dynamic_enabled, dynamic_available;
+static uint32_t dynamic_generation;
+/* Set only after stopping probe workers; a room snapshot owns this pin. */
+static bool room_probe_pin_valid;
+static uint32_t room_probe_node;
+static uint8_t room_probe_pin[4];
+
 static Mutex view_lock;
 static Thread probe_threads[3], friend_thread;
 static bool probe_created[3], friend_created, initialized, socket_ready;
@@ -64,6 +73,51 @@ static uint64_t next_friend_poll;
 static const char *notice;
 static bool language_save_failed;
 static const char *keyboard_error;
+static NodeHostInfo current_host_info;
+static bool current_host_valid;
+static void refresh_host_info(Service *service)
+{
+    NodeHostInfo info = {0};
+    Result result = serviceDispatch(service, NODE_GET_HOST_INFO_IPC,
+        .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+        .buffers = { { &info, sizeof(info) } });
+    if (R_SUCCEEDED(result) && info.version == 1 && info.status <= NodeHostSelected &&
+        !info.reserved && memchr(info.name, 0, sizeof(info.name)) && memchr(info.host, 0, sizeof(info.host))) {
+        current_host_info = info;
+        current_host_valid = true;
+    }
+}
+static uint32_t node_slot(uint32_t id)
+{
+    if (id < NODE_SHARED_CAPACITY) return id;
+    if (id >= NODE_LOCAL_BASE && id < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY)
+        return NODE_SHARED_CAPACITY + id - NODE_LOCAL_BASE;
+    return NODE_ID_INVALID;
+}
+static uint32_t node_id(uint32_t slot)
+{
+    return slot < NODE_SHARED_CAPACITY ? slot : NODE_LOCAL_BASE + slot - NODE_SHARED_CAPACITY;
+}
+static bool node_copy(uint32_t id, NodeDynamicEntry *out)
+{
+    const uint32_t slot = node_slot(id);
+    if (slot < NODE_CATALOG_COUNT) {
+        const LanywhereNode *built = &LanywhereNodes[slot];
+        *out = (NodeDynamicEntry){.id = id, .protocol = built->protocol, .region = built->region,
+                                  .port = built->port, .flags = 1};
+        snprintf(out->host, sizeof(out->host), "%s", built->host);
+        snprintf(out->name, sizeof(out->name), "%s", built->name_en);
+        return true;
+    }
+    if (slot >= NODE_TOTAL_CAPACITY || !initialized) return false;
+    mutexLock(&view_lock);
+    bool present = dynamic_present[slot];
+    if (present) *out = dynamic_nodes[slot];
+    mutexUnlock(&view_lock);
+    return present;
+}
+
+
 
 static uint32_t read32(const uint8_t *bytes)
 {
@@ -81,9 +135,24 @@ const char *nodes_ui_name(uint32_t id)
     // The display label is independent of the server-verified catalog bytes.
     if (id == 0)
         return ui_text("Main server");
-    if (id >= NODE_CATALOG_COUNT)
-        return ui_text("Unknown node");
-    return ui_chinese() ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en;
+    if (id < NODE_CATALOG_COUNT)
+        return ui_chinese() ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en;
+    static __thread char name[48];
+    NodeDynamicEntry node;
+    if (!node_copy(id, &node)) return ui_text("Unknown node");
+    snprintf(name, sizeof(name), "%s", node.name);
+    return name;
+}
+bool nodes_ui_valid(uint32_t id) { NodeDynamicEntry entry; return node_copy(id, &entry); }
+uint8_t nodes_ui_region_for(uint32_t id) { NodeDynamicEntry entry; return node_copy(id, &entry) ? entry.region : NodeRegionUnknown; }
+const char *nodes_ui_provider(uint32_t id)
+{
+    if (id < NODE_CATALOG_COUNT) return LanywhereNodes[id].provider;
+    static __thread char provider[33];
+    if (!nodes_ui_valid(id)) return "";
+    if (id < NODE_SHARED_CAPACITY) snprintf(provider, sizeof(provider), "custom-%u", id);
+    else snprintf(provider, sizeof(provider), "local-%u", id - NODE_LOCAL_BASE);
+    return provider;
 }
 const char *nodes_ui_region(uint8_t region)
 {
@@ -107,8 +176,8 @@ const char *nodes_ui_country(const char *country)
 uint32_t nodes_ui_region_mask(uint8_t region)
 {
     uint32_t mask = 0;
-    for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++)
-        if (region == NODE_ALL_REGIONS || LanywhereNodes[i].region == region)
+    for (unsigned i = 0; i < NODE_SHARED_CAPACITY; i++)
+        if (nodes_ui_valid(i) && (region == NODE_ALL_REGIONS || nodes_ui_region_for(i) == region))
             mask |= 1u << i;
     return mask;
 }
@@ -117,12 +186,23 @@ static bool fetch_catalog(uint32_t *enabled, uint32_t *available)
     uint8_t response[40];
     if (!node_protocol_exchange(RELAY_PROFILE_IPV4, RELAY_PROFILE_PORT, NODE_CATALOG_REQUEST, NULL, 0,
                                 NODE_CATALOG_RESPONSE, response, sizeof(response), &cancel_probe) ||
-        memcmp(response, LanywhereNodeCatalogHash, 32))
-        return false;
+        memcmp(response, LanywhereNodeCatalogHash, 32)) {
+        // Local-only nodes remain usable while the central directory is down.
+        mutexLock(&view_lock);
+        *enabled = dynamic_enabled & ~((1u << NODE_SHARED_CAPACITY) - 1);
+        *available = 0;
+        mutexUnlock(&view_lock);
+        return *enabled != 0;
+    }
     *enabled = read32(response + 32);
     *available = read32(response + 36);
     const uint32_t all = (1u << NODE_CATALOG_COUNT) - 1;
-    return !((*enabled | *available) & ~all);
+    if ((*enabled | *available) & ~all) return false;
+    mutexLock(&view_lock);
+    *enabled |= dynamic_enabled;
+    *available |= dynamic_available;
+    mutexUnlock(&view_lock);
+    return true;
 }
 static void probe_worker(void *argument)
 {
@@ -140,23 +220,29 @@ static void probe_worker(void *argument)
     }
     while (!atomic_load(&cancel_probe)) {
         mutexLock(&view_lock);
-        while (next_probe < NODE_CATALOG_COUNT && !(probe_mask & (1u << next_probe)))
+        while (next_probe < NODE_TOTAL_CAPACITY && !(probe_mask & (1u << next_probe)))
             next_probe++;
         const unsigned id = next_probe++;
-        if (id < NODE_CATALOG_COUNT) {
+        if (id < NODE_TOTAL_CAPACITY) {
             view.measurements[id].state = NodeMeasureMeasuring;
             view.changed = true;
         }
         mutexUnlock(&view_lock);
-        if (id >= NODE_CATALOG_COUNT)
+        if (id >= NODE_TOTAL_CAPACITY)
             break;
         NodeMeasurement result;
-        const LanywhereNode *node = &LanywhereNodes[id];
-        const char *host = id == 0 ? RELAY_PROFILE_IPV4 : id == 1 ? RELAY_PROFILE_COMMUNITY_IPV4 : node->host;
-        const uint16_t port = id == 0   ? RELAY_PROFILE_PORT
-                              : id == 1 ? RELAY_PROFILE_COMMUNITY_PORT
-                                        : node->port;
-        node_probe(host, port, node->protocol == NodeProtocolLanPlay ? NodeProbeUdp : NodeProbeTcp, id,
+        NodeDynamicEntry node;
+        if (!node_copy(node_id(id), &node)) continue;
+        char pinned[16];
+        const char *host = id == 0 ? RELAY_PROFILE_IPV4 : id == 1 ? RELAY_PROFILE_COMMUNITY_IPV4 : node.host;
+        if (id >= NODE_CATALOG_COUNT && id < NODE_SHARED_CAPACITY) {
+            if (room_probe_pin_valid && room_probe_node == id)
+                memcpy(node.ipv4, room_probe_pin, sizeof(node.ipv4));
+            snprintf(pinned, sizeof(pinned), "%u.%u.%u.%u", node.ipv4[0], node.ipv4[1], node.ipv4[2], node.ipv4[3]);
+            host = pinned;
+        }
+        const uint16_t port = id == 0 ? RELAY_PROFILE_PORT : id == 1 ? RELAY_PROFILE_COMMUNITY_PORT : node.port;
+        node_probe(host, port, node.protocol == NodeProtocolLanPlay ? NodeProbeUdp : NodeProbeTcp, node_id(id),
                    &cancel_probe, &resolver_guards[worker], &result);
         if (atomic_load(&cancel_probe))
             result.measured_at_ms = 0;
@@ -235,7 +321,7 @@ static void start_probes(uint32_t mask, bool force)
     mutexLock(&view_lock);
     probe_mask = 0;
     next_probe = 0;
-    for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++) {
+    for (unsigned i = 0; i < NODE_TOTAL_CAPACITY; i++) {
         if (!(mask & (1u << i)))
             continue;
         const NodeMeasurement *m = &view.measurements[i];
@@ -258,7 +344,7 @@ static void start_probes(uint32_t mask, bool force)
         } else
             started = true;
     }
-    for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++) {
+    for (unsigned i = 0; i < NODE_TOTAL_CAPACITY; i++) {
         if (!(probe_mask & (1u << i)))
             continue;
         NodeMeasurement *m = &view.measurements[i];
@@ -266,7 +352,7 @@ static void start_probes(uint32_t mask, bool force)
             m->state = NodeMeasurePending;
         else if (!m->measured_at_ms || now - m->measured_at_ms >= 60000 ||
                  m->state == NodeMeasurePending || m->state == NodeMeasureMeasuring)
-            *m = (NodeMeasurement){.node_id = i, .median_ms = NODE_PROBE_UNKNOWN,
+            *m = (NodeMeasurement){.node_id = node_id(i), .median_ms = NODE_PROBE_UNKNOWN,
                                    .jitter_ms = NODE_PROBE_UNKNOWN, .state = NodeMeasureFailed};
     }
     view.probe_start_failed = !started;
@@ -300,7 +386,7 @@ static void maintain_probes(NodeProbeLoop *loop, uint32_t mask)
     if (probe_created[0] || probe_created[1] || probe_created[2])
         return;
     const NodeView previous = snapshot();
-    for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++) {
+    for (unsigned i = 0; i < NODE_TOTAL_CAPACITY; i++) {
         if ((mask & (1u << i)) && previous.measurements[i].measured_at_ms &&
             now - previous.measurements[i].measured_at_ms >= 60000) {
             start_probes(mask, false);
@@ -313,7 +399,7 @@ void nodes_ui_network_changed(void)
     if (!initialized)
         return;
     mutexLock(&view_lock);
-    for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++)
+    for (unsigned i = 0; i < NODE_TOTAL_CAPACITY; i++)
         view.measurements[i].measured_at_ms = 0;
     mutexUnlock(&view_lock);
 }
@@ -323,19 +409,51 @@ void nodes_ui_initialize(void)
         return;
     mutexInit(&view_lock);
     initialized = true;
-    for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++)
+    for (unsigned i = 0; i < NODE_TOTAL_CAPACITY; i++)
         view.measurements[i] =
-            (NodeMeasurement){.node_id = i, .median_ms = NODE_PROBE_UNKNOWN, .jitter_ms = NODE_PROBE_UNKNOWN};
+            (NodeMeasurement){.node_id = node_id(i), .median_ms = NODE_PROBE_UNKNOWN, .jitter_ms = NODE_PROBE_UNKNOWN};
     (void)ensure_socket();
     nifm_ready = R_SUCCEEDED(nifmInitialize(NifmServiceType_User));
     do {
         randomGet(participant, sizeof(participant));
     } while (!memcmp(participant, (uint8_t[16]){0}, 16));
 }
+bool nodes_ui_refresh_catalog(Service *service)
+{
+    NodeDynamicCatalog catalog = {0};
+    Result result = serviceDispatch(service, NODE_GET_CATALOG_IPC,
+        .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+        .buffers = { { &catalog, sizeof(catalog) } });
+    if (R_FAILED(result) || catalog.version != 1 || catalog.count > 18) return false;
+    NodeDynamicEntry next[NODE_TOTAL_CAPACITY] = {0};
+    bool present[NODE_TOTAL_CAPACITY] = {0};
+    uint32_t enabled = 0, available = 0;
+    for (unsigned i = 0; i < catalog.count; ++i) {
+        const NodeDynamicEntry *entry = &catalog.nodes[i];
+        const uint32_t slot = node_slot(entry->id);
+        if (slot < NODE_CATALOG_COUNT || slot >= NODE_TOTAL_CAPACITY || present[slot] ||
+            entry->protocol != NodeProtocolLanPlay || entry->region > NodeRegionAfrica ||
+            !entry->port || entry->flags > 1 || !memchr(entry->name, 0, sizeof(entry->name)) ||
+            !memchr(entry->host, 0, sizeof(entry->host))) return false;
+        next[slot] = *entry; present[slot] = true;
+        if (entry->flags & 1) enabled |= 1u << slot;
+        if (slot < NODE_SHARED_CAPACITY && (catalog.available & (1u << slot))) available |= 1u << slot;
+    }
+    mutexLock(&view_lock);
+    if (memcmp(dynamic_nodes, next, sizeof(next)) || memcmp(dynamic_present, present, sizeof(present)) ||
+        dynamic_enabled != enabled || dynamic_available != available)
+        ++dynamic_generation;
+    memcpy(dynamic_nodes, next, sizeof(next));
+    memcpy(dynamic_present, present, sizeof(present));
+    dynamic_enabled = enabled; dynamic_available = available;
+    mutexUnlock(&view_lock);
+    return true;
+}
 bool nodes_ui_supported(Service *service, uint32_t *selected)
 {
-    return RELAY_PROFILE_FIXED && R_SUCCEEDED(serviceDispatchOut(service, 35, *selected)) &&
-           *selected < NODE_CATALOG_COUNT;
+    if (!RELAY_PROFILE_FIXED || R_FAILED(serviceDispatchOut(service, 35, *selected))) return false;
+    (void)nodes_ui_refresh_catalog(service); // Old modules and unavailable registries retain built-in nodes.
+    return *selected == NODE_ID_INVALID || node_slot(*selected) < NODE_TOTAL_CAPACITY;
 }
 static void friend_worker(void *unused)
 {
@@ -507,13 +625,13 @@ static bool ask_friend_code(char code[8])
             *p -= 'a' - 'A';
     return R_SUCCEEDED(result) && strlen(code) == 6;
 }
-static void rank_nodes(const NodeView *copy, uint8_t region, uint32_t order[NODE_CATALOG_COUNT],
-                       unsigned *count, bool recommended[NODE_CATALOG_COUNT])
+static void rank_nodes(const NodeView *copy, uint8_t region, uint32_t order[NODE_TOTAL_CAPACITY],
+                       unsigned *count, bool recommended[NODE_TOTAL_CAPACITY])
 {
     *count = 0;
-    memset(recommended, 0, NODE_CATALOG_COUNT * sizeof(*recommended));
-    for (unsigned i = 0; i < NODE_CATALOG_COUNT; i++)
-        if (region == NODE_ALL_REGIONS || LanywhereNodes[i].region == region)
+    memset(recommended, 0, NODE_TOTAL_CAPACITY * sizeof(*recommended));
+    for (unsigned i = 0; i < NODE_TOTAL_CAPACITY; i++)
+        if (nodes_ui_valid(node_id(i)) && (region == NODE_ALL_REGIONS || nodes_ui_region_for(node_id(i)) == region))
             order[(*count)++] = i;
     for (unsigned i = 1; i < *count; i++) {
         const uint32_t id = order[i];
@@ -526,7 +644,7 @@ static void rank_nodes(const NodeView *copy, uint8_t region, uint32_t order[NODE
                 enabled != previous_enabled
                     ? enabled
                     : node_measurement_compare(&copy->measurements[id], &copy->measurements[previous]) < 0;
-            if (enabled == previous_enabled && group_code[0]) {
+            if (enabled == previous_enabled && group_code[0] && id < NODE_CATALOG_COUNT && previous < NODE_CATALOG_COUNT) {
                 const NodeFriendSummary *a = &group.nodes[id], *b = &group.nodes[previous];
                 const bool ready_a = group.participants && a->reachable_members == group.participants &&
                                      a->measured_members == group.participants;
@@ -554,11 +672,16 @@ static void rank_nodes(const NodeView *copy, uint8_t region, uint32_t order[NODE
         if (!(copy->enabled & (1u << id)) || !node_measurement_recommended(&copy->measurements[id]))
             continue;
         bool duplicate = false;
-        for (unsigned j = 0; j < i; j++)
-            if (recommended[order[j]] && !strcmp(LanywhereNodes[order[j]].host, LanywhereNodes[id].host))
-                duplicate = true;
+        NodeDynamicEntry candidate;
+        if (!node_copy(node_id(id), &candidate)) continue;
+        for (unsigned j = 0; j < i; j++) {
+            NodeDynamicEntry previous;
+            if (recommended[order[j]] && node_copy(node_id(order[j]), &previous) &&
+                !strcmp(previous.host, candidate.host)) duplicate = true;
+        }
         if (duplicate)
             continue;
+        if (group_code[0] && id >= NODE_CATALOG_COUNT) continue;
         if (group_code[0]) {
             const NodeFriendSummary *shared = &group.nodes[id];
             if (!group.participants || shared->reachable_members != group.participants ||
@@ -642,8 +765,8 @@ static void draw_regions(uint8_t region, bool focus, bool draw_counts)
         gfx_text_fit(84, y + 12, 20, current ? NODE_COLOR_ACCENT : NODE_COLOR_TEXT, nodes_ui_region(id), 214);
         if (draw_counts) {
             unsigned total = 0;
-            for (unsigned j = 0; j < NODE_CATALOG_COUNT; j++)
-                if (id == NODE_ALL_REGIONS || LanywhereNodes[j].region == id)
+            for (unsigned j = 0; j < NODE_TOTAL_CAPACITY; j++)
+                if (nodes_ui_valid(node_id(j)) && (id == NODE_ALL_REGIONS || nodes_ui_region_for(node_id(j)) == id))
                     total++;
             char label[8];
             snprintf(label, sizeof(label), "%u", total);
@@ -684,10 +807,15 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
     gfx_text(1090, 249, 17, NODE_COLOR_DIM, ui_text("Status"));
     for (unsigned i = first; i < count && i < first + NODE_ROWS; i++) {
         const uint32_t id = order[i];
-        const LanywhereNode *node = &LanywhereNodes[id];
+        NodeDynamicEntry node;
+        if (!node_copy(node_id(id), &node)) continue;
         const NodeMeasurement *m = &copy->measurements[id];
         const bool enabled = copy->catalog_ok && (copy->enabled & (1u << id));
         const bool available = copy->catalog_ok && (copy->available & (1u << id));
+        const bool current_row = node_id(id) == current && (!current_host_valid ||
+            (current_host_info.status != NodeHostUnavailable && current_host_info.node_id == current &&
+             (id < NODE_CATALOG_COUNT || (!strcmp(current_host_info.name, node.name) &&
+              !strcmp(current_host_info.host, node.host) && current_host_info.port == node.port))));
         const int y = NODE_LIST_Y + (int)(i - first) * NODE_ROW_HEIGHT;
         if (i == selected) {
             gfx_rect(NODE_TABLE_X, y, 879, NODE_ROW_HEIGHT - 1, NODE_COLOR_SELECT);
@@ -696,16 +824,17 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
         }
         gfx_rect(NODE_TABLE_X, y + NODE_ROW_HEIGHT - 1, 879, 1, NODE_COLOR_LINE);
         gfx_text_fit(379, y + (recommended[id] ? 7 : 16), 19, enabled ? NODE_COLOR_TEXT : NODE_COLOR_DIM,
-                     nodes_ui_name(id), 305);
+                     nodes_ui_name(node_id(id)), 305);
         if (recommended[id]) {
             const char *recommendation = group_code[0] ? " (Recommended)" : " (Recommended for you)";
             gfx_text_fit(379, y + 31, 15, NODE_COLOR_ACCENT, ui_text(recommendation), 305);
         }
         char location[96];
-        node_location(node, location);
+        if (id < NODE_CATALOG_COUNT) node_location(&LanywhereNodes[id], location);
+        else snprintf(location, sizeof(location), "%s", nodes_ui_region(node.region));
         gfx_text_fit(704, y + 16, 18, NODE_COLOR_DIM, location, 145);
-        const char *protocol = node->protocol == NodeProtocolLanPlay ? "UDP" : "TCP";
-        if (m->state == NodeMeasureReady && group_code[0] && group.participants &&
+        const char *protocol = node.protocol == NodeProtocolLanPlay ? "UDP" : "TCP";
+        if (m->state == NodeMeasureReady && id < NODE_CATALOG_COUNT && group_code[0] && group.participants &&
             group.nodes[id].measured_members == group.participants) {
             if (group.nodes[id].reachable_members < group.participants)
                 snprintf(text, sizeof(text), "%s", ui_text("Unstable for a player"));
@@ -732,8 +861,8 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
             status = "Unreachable";
             color = NODE_COLOR_WARN;
         } else if (m->state == NodeMeasureReady) {
-            status = id == current ? "Current" : available ? "Online" : "Unlisted";
-            color = id == current ? NODE_COLOR_ACCENT : NODE_COLOR_DIM;
+            status = current_row ? "Current" : available ? "Online" : "Unlisted";
+            color = current_row ? NODE_COLOR_ACCENT : NODE_COLOR_DIM;
         }
         gfx_text_fit(1090, y + 16, 17, color, ui_text(status), 134);
     }
@@ -749,16 +878,24 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
         gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text("Could not load node availability. Refresh."), 1200);
     else {
         unsigned finished = 0;
-        for (unsigned id = 0; id < NODE_CATALOG_COUNT; id++)
-            if (copy->measurements[id].state == NodeMeasureReady || copy->measurements[id].state == NodeMeasureFailed)
+        for (unsigned id = 0; id < NODE_TOTAL_CAPACITY; id++)
+            if (nodes_ui_valid(node_id(id)) && (copy->measurements[id].state == NodeMeasureReady || copy->measurements[id].state == NodeMeasureFailed))
                 finished++;
-        if (finished < NODE_CATALOG_COUNT) {
-            snprintf(text, sizeof(text), ui_text("Testing nodes: %u/%u"), finished, NODE_CATALOG_COUNT);
+        unsigned total = 0;
+        for (unsigned id = 0; id < NODE_TOTAL_CAPACITY; ++id) if (nodes_ui_valid(node_id(id))) ++total;
+        if (finished < total) {
+            snprintf(text, sizeof(text), ui_text("Testing nodes: %u/%u"), finished, total);
             gfx_text(40, 618, 20, NODE_COLOR_DIM, text);
         }
     }
     node_footer();
-    if (current < NODE_CATALOG_COUNT) {
+    if (current_host_valid && current_host_info.name[0]) {
+        const char *state = current_host_info.status == NodeHostUnavailable ? ui_text("Unavailable") :
+                            current_host_info.status == NodeHostPending ? ui_text("Testing…") : NULL;
+        snprintf(text, sizeof(text), "%s · %s%s%s", ui_text("Current"), current_host_info.name,
+                 state ? " · " : "", state ? state : "");
+        gfx_text_fit(40, 673, 19, current_host_info.status == NodeHostUnavailable ? NODE_COLOR_WARN : NODE_COLOR_ACCENT, text, 352);
+    } else if (nodes_ui_valid(current)) {
         snprintf(text, sizeof(text), "%s · %s", ui_text("Current"), nodes_ui_name(current));
         gfx_text_fit(40, 673, 19, NODE_COLOR_ACCENT, text, 352);
     }
@@ -924,20 +1061,47 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
 {
     if (!initialized)
         return false;
-    const uint32_t all = (1u << NODE_CATALOG_COUNT) - 1;
+    cancel_probes();
+    refresh_host_info(service);
+    if (current_host_valid) current = current_host_info.node_id;
+    const bool custom_ok = nodes_ui_refresh_catalog(service);
+    uint32_t all = (1u << NODE_CATALOG_COUNT) - 1;
+    for (uint32_t slot = NODE_CATALOG_COUNT; slot < NODE_TOTAL_CAPACITY; ++slot)
+        if (nodes_ui_valid(node_id(slot))) all |= 1u << slot;
+    mutexLock(&view_lock);
+    uint32_t last_dynamic_generation = dynamic_generation;
+    mutexUnlock(&view_lock);
     start_probes(all, false);
-    notice = NULL;
+    notice = custom_ok ? NULL : "Custom nodes unavailable. Check nodes.ini.";
     unsigned selected = 0;
     uint8_t region = NODE_ALL_REGIONS;
     bool region_focus = false;
     bool dirty = true, moved = false, touch_held = true;
     bool rendered_prev = false, rendered_next = false;
-    uint32_t selected_id = current, rendered_selected = NODE_ID_INVALID, rendered[NODE_ROWS];
+    uint32_t selected_id = node_slot(current), rendered_selected = NODE_ID_INVALID, rendered[NODE_ROWS];
     for (unsigned i = 0; i < NODE_ROWS; i++)
         rendered[i] = NODE_ID_INVALID;
     NodeProbeLoop probe_loop = probe_loop_start();
+    uint64_t next_catalog_poll = 0;
     while (appletMainLoop()) {
         collect_probes();
+        if (node_probe_now_ms() >= next_catalog_poll) {
+            next_catalog_poll = node_probe_now_ms() + 2000;
+            refresh_host_info(service);
+            if (current_host_valid) current = current_host_info.node_id;
+            if (nodes_ui_refresh_catalog(service)) {
+                uint32_t updated = (1u << NODE_CATALOG_COUNT) - 1;
+                for (uint32_t slot = NODE_CATALOG_COUNT; slot < NODE_TOTAL_CAPACITY; ++slot)
+                    if (nodes_ui_valid(node_id(slot))) updated |= 1u << slot;
+                mutexLock(&view_lock);
+                const uint32_t generation = dynamic_generation;
+                mutexUnlock(&view_lock);
+                if (updated != all || generation != last_dynamic_generation) {
+                    all = updated; last_dynamic_generation = generation;
+                    start_probes(all, true); dirty = true;
+                }
+            }
+        }
         maintain_probes(&probe_loop, all);
         if (collect_friend())
             dirty = true;
@@ -949,9 +1113,9 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
         padUpdate(pad);
         u64 down = padGetButtonsDown(pad);
         const NodeView copy = snapshot();
-        uint32_t order[NODE_CATALOG_COUNT];
+        uint32_t order[NODE_TOTAL_CAPACITY];
         unsigned count;
-        bool recommended[NODE_CATALOG_COUNT];
+        bool recommended[NODE_TOTAL_CAPACITY];
         rank_nodes(&copy, region, order, &count, recommended);
 
         uint32_t touched = NODE_ID_INVALID;
@@ -1053,12 +1217,13 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
                     if (!copy.catalog_ok || !(copy.enabled & (1u << id)) || m->state != NodeMeasureReady) {
                         notice = "This node is not ready. Refresh or choose another.";
                     } else {
-                        node_selection_trace_begin(id);
+                        const uint32_t selected_node_id = node_id(id);
+                        node_selection_trace_begin(selected_node_id);
                         node_selection_trace_phase(NodeSelectionBeforeIpc, 0);
-                        const uint32_t result = serviceDispatchIn(service, 36, id);
+                        const uint32_t result = serviceDispatchIn(service, 36, selected_node_id);
                         node_selection_trace_phase(NodeSelectionAfterIpc, result);
                         if (R_SUCCEEDED(result)) {
-                            *selected_node = id;
+                            *selected_node = selected_node_id;
                             node_selection_trace_phase(NodeSelectionBeforeCancelProbes, 0);
                             cancel_probes();
                             node_selection_trace_phase(NodeSelectionAfterCancelProbes, 0);
@@ -1088,6 +1253,10 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
     cancel_probes();
     return false;
 }
+static bool room_probe_can_retry(const NodeMeasurement *m, bool probe_start_failed)
+{
+    return probe_start_failed || m->state == NodeMeasureFailed;
+}
 static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gateway, bool probe_start_failed)
 {
     begin_screen("Check room connection");
@@ -1107,21 +1276,45 @@ static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gat
             gfx_text_fit(56, 500, 21, NODE_COLOR_DIM,
                          ui_text("External forwarding adds latency beyond this measurement."), 1168);
     }
+    if (m->state == NodeMeasureFailed && !probe_start_failed)
+        gfx_text_fit(56, 450, 24, NODE_COLOR_WARN, ui_text("No probe response."), 1168);
     if (probe_start_failed)
         gfx_text_fit(56, 550, 21, NODE_COLOR_WARN, ui_text("Could not start node tests. Try again."), 1168);
     node_footer();
     if (m->state == NodeMeasureReady)
         gfx_button(56, 670, "A", ui_text("Continue"));
-    if (probe_start_failed)
+    if (room_probe_can_retry(m, probe_start_failed))
         gfx_button(420, 670, "X", ui_text("Refresh"));
     gfx_button(980, 670, "B", ui_text("Back"));
     gfx_end();
 }
-bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway)
+static void finish_room_probe(uint32_t node_id)
 {
-    if (node_id >= NODE_CATALOG_COUNT)
+    cancel_probes();
+    if (room_probe_pin_valid) {
+        /* Do not reuse a room's historical pin measurement in the host picker. */
+        mutexLock(&view_lock);
+        view.measurements[node_id].measured_at_ms = 0;
+        view.measurements[node_id].state = NodeMeasurePending;
+        mutexUnlock(&view_lock);
+    }
+    room_probe_pin_valid = false;
+}
+bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway, const NodeRoomLocator *locator)
+{
+    if (node_id >= NODE_SHARED_CAPACITY || !nodes_ui_valid(node_id))
         return false;
-    start_probes(1u << node_id, false);
+    cancel_probes();
+    room_probe_pin_valid = false;
+    if (node_id >= NODE_CATALOG_COUNT) {
+        if (!locator || !(locator->reserved[0] | locator->reserved[1] | locator->reserved[2] | locator->reserved[3]))
+            return false;
+        room_probe_node = node_id;
+        memcpy(room_probe_pin, locator->reserved, sizeof(room_probe_pin));
+        room_probe_pin_valid = true;
+    }
+    /* A fresh measurement is essential: a cached result may describe a newer pin. */
+    start_probes(1u << node_id, true);
     bool dirty = true, touch_held = true;
     NodeProbeLoop probe_loop = probe_loop_start();
     while (appletMainLoop()) {
@@ -1135,7 +1328,7 @@ bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway)
             if (touch_x >= 1056 && touch_y >= 15 && touch_y < 76)
                 down |= HidNpadButton_StickR;
             else if (touch_y >= 650) {
-                if (copy.probe_start_failed && touch_x >= 340 && touch_x < 760)
+                if (room_probe_can_retry(&copy.measurements[node_id], copy.probe_start_failed) && touch_x >= 340 && touch_x < 760)
                     down |= HidNpadButton_X;
                 else
                     down |= touch_x < 600 ? HidNpadButton_A : HidNpadButton_B;
@@ -1144,15 +1337,15 @@ bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway)
         language_input(down);
         const NodeMeasurement *m = &copy.measurements[node_id];
         if (down & HidNpadButton_B) {
-            cancel_probes();
+            finish_room_probe(node_id);
             return false;
         }
-        if ((down & HidNpadButton_X) && copy.probe_start_failed) {
+        if ((down & HidNpadButton_X) && room_probe_can_retry(m, copy.probe_start_failed)) {
             start_probes(1u << node_id, true);
             continue;
         }
         if ((down & HidNpadButton_A) && m->state == NodeMeasureReady) {
-            cancel_probes();
+            finish_room_probe(node_id);
             return true;
         }
         mutexLock(&view_lock);
@@ -1165,7 +1358,7 @@ bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway)
         }
         svcSleepThread(33000000ULL);
     }
-    cancel_probes();
+    finish_room_probe(node_id);
     return false;
 }
 static bool ask_game_search(char query[64])

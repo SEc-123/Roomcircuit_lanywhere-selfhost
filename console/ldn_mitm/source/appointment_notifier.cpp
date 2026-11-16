@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "appointment_notifier.hpp"
+#include "storage_migration.hpp"
+#include "../../../common/roomcircuit_paths.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -10,10 +12,10 @@ namespace ams::mitm::lanywhere {
         constexpr char NotificationDir[] = "sdmc:/config/ultrahand/notifications";
         constexpr char NotificationPath[] = "sdmc:/config/ultrahand/notifications/LANywhere-room.notify";
         constexpr char TemporaryPath[] = "sdmc:/config/ultrahand/notifications/LANywhere-room.tmp";
-        constexpr char LocalePath[] = "sdmc:/lanywhere/language.ini";
-        constexpr char SubscriptionsPath[] = "sdmc:/lanywhere/appointment-subscriptions.bin";
-        constexpr char PreviousSubscriptionsPath[] = "sdmc:/lanywhere/appointment-subscriptions.bin.previous";
-        constexpr char TemporarySubscriptionsPath[] = "sdmc:/lanywhere/appointment-subscriptions.bin.tmp";
+        const char *LocalePath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("language.ini"), RC_CURRENT_PATH("language.ini")); }
+        const char *SubscriptionsPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("appointment-subscriptions.bin"), RC_CURRENT_PATH("appointment-subscriptions.bin")); }
+        const char *PreviousSubscriptionsPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("appointment-subscriptions.bin.previous"), RC_CURRENT_PATH("appointment-subscriptions.bin.previous")); }
+        const char *TemporarySubscriptionsPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("appointment-subscriptions.bin.tmp"), RC_CURRENT_PATH("appointment-subscriptions.bin.tmp")); }
         constexpr u32 SubscriptionMagic = 0x53414e4c; // LNAS
         constexpr u32 SubscriptionVersion = 1;
         constexpr u64 MaxScheduleAhead = 7 * 24 * 60 * 60;
@@ -97,8 +99,8 @@ namespace ams::mitm::lanywhere {
 
         bool Chinese() {
             fs::FileHandle file;
-            if (R_FAILED(fs::OpenFile(&file, LocalePath, fs::OpenMode_Read)) &&
-                R_FAILED(fs::OpenFile(&file, "sdmc:/lanywhere/language.ini.previous", fs::OpenMode_Read))) return false;
+            if (R_FAILED(fs::OpenFile(&file, LocalePath(), fs::OpenMode_Read)) &&
+                R_FAILED(fs::OpenFile(&file, rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("language.ini.previous"), RC_CURRENT_PATH("language.ini.previous")), fs::OpenMode_Read))) return false;
             char text[32]{};
             size_t size = 0;
             const Result result = fs::ReadFile(&size, file, 0, text, sizeof(text) - 1);
@@ -232,10 +234,10 @@ namespace ams::mitm::lanywhere {
         bool LoadSubscriptionsLocked() {
             if (g_subscriptions_loaded) return true;
             SavedSubscriptions state{};
-            const ReadState primary = ReadSubscriptions(SubscriptionsPath, &state);
+            const ReadState primary = ReadSubscriptions(SubscriptionsPath(), &state);
             if (primary == ReadState::Unavailable) return false;
             const ReadState recovered = primary == ReadState::Valid ?
-                primary : ReadSubscriptions(PreviousSubscriptionsPath, &state);
+                primary : ReadSubscriptions(PreviousSubscriptionsPath(), &state);
             if (recovered == ReadState::Unavailable) return false;
             g_primary_valid = primary == ReadState::Valid;
             g_subscription_count = recovered == ReadState::Valid ? state.count : 0;
@@ -264,29 +266,29 @@ namespace ams::mitm::lanywhere {
         }
 
         bool StoreSubscriptionsLocked(const SavedSubscriptions &state) {
-            if (!DeleteIfPresent(TemporarySubscriptionsPath) ||
-                R_FAILED(fs::CreateFile(TemporarySubscriptionsPath, sizeof(state)))) return false;
+            if (!DeleteIfPresent(TemporarySubscriptionsPath()) ||
+                R_FAILED(fs::CreateFile(TemporarySubscriptionsPath(), sizeof(state)))) return false;
             fs::FileHandle file;
             bool written = false;
-            if (R_SUCCEEDED(fs::OpenFile(&file, TemporarySubscriptionsPath, fs::OpenMode_Write))) {
+            if (R_SUCCEEDED(fs::OpenFile(&file, TemporarySubscriptionsPath(), fs::OpenMode_Write))) {
                 written = R_SUCCEEDED(fs::WriteFile(file, 0, &state, sizeof(state), fs::WriteOption::Flush));
                 fs::CloseFile(file);
             }
             SavedSubscriptions verified{};
-            written = written && ReadSubscriptions(TemporarySubscriptionsPath, &verified) == ReadState::Valid &&
+            written = written && ReadSubscriptions(TemporarySubscriptionsPath(), &verified) == ReadState::Valid &&
                 std::memcmp(&state, &verified, sizeof(state)) == 0;
             if (written && g_primary_valid) {
-                written = DeleteIfPresent(PreviousSubscriptionsPath) &&
-                    R_SUCCEEDED(fs::RenameFile(SubscriptionsPath, PreviousSubscriptionsPath));
+                written = DeleteIfPresent(PreviousSubscriptionsPath()) &&
+                    R_SUCCEEDED(fs::RenameFile(SubscriptionsPath(), PreviousSubscriptionsPath()));
                 if (written) g_primary_valid = false;
             } else if (written) {
-                written = DeleteIfPresent(SubscriptionsPath);
+                written = DeleteIfPresent(SubscriptionsPath());
             }
-            if (written && R_SUCCEEDED(fs::RenameFile(TemporarySubscriptionsPath, SubscriptionsPath))) {
+            if (written && R_SUCCEEDED(fs::RenameFile(TemporarySubscriptionsPath(), SubscriptionsPath()))) {
                 g_primary_valid = true;
                 return true;
             }
-            static_cast<void>(DeleteIfPresent(TemporarySubscriptionsPath));
+            static_cast<void>(DeleteIfPresent(TemporarySubscriptionsPath()));
             return false;
         }
 

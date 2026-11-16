@@ -60,6 +60,15 @@ Result lanywhereOverlayGetProtocol(Service *s, u32 *version) {
     *version = 0;
     return serviceDispatchOut(s, 10, *version);
 }
+Result lanywhereOverlayGetStorageSelection(Service *s, u32 *selection) {
+    *selection = 2;
+    u32 value = 2;
+    Result rc = serviceDispatchOut(s, 46, value);
+    if (R_FAILED(rc)) return rc;
+    if (value > 1) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    *selection = value;
+    return 0;
+}
 Result lanywhereOverlayGetStatus(Service *s, LanywhereOverlayStatus *out) {
     memset(out, 0, sizeof(*out));
     LanywhereOverlayStatus value = {0};
@@ -81,6 +90,35 @@ Result lanywhereOverlayGetMatch(Service *s, LanywhereOverlayMatch *out) {
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     value.room[6] = value.room[7] = '\0';
     value.error[63] = '\0';
+    *out = value;
+    return 0;
+}
+
+Result lanywhereOverlayGetHostNode(Service *s, NodeHostInfo *out) {
+    memset(out, 0, sizeof(*out));
+    NodeHostInfo value = {0};
+    Result rc = serviceDispatch(s, NODE_GET_HOST_INFO_IPC,
+        .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+        .buffers = { { &value, sizeof(value) } });
+    if (R_FAILED(rc)) return rc;
+    if (value.version != 1 || value.status > NodeHostSelected || value.reserved ||
+        !memchr(value.name, '\0', sizeof(value.name)) || !value.name[0])
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    *out = value;
+    return 0;
+}
+
+Result lanywhereOverlayGetActiveRoute(Service *s, NodeActiveRouteInfo *out) {
+    memset(out, 0, sizeof(*out));
+    NodeActiveRouteInfo value = {0};
+    Result rc = serviceDispatch(s, NODE_GET_ACTIVE_ROUTE_IPC,
+        .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+        .buffers = { { &value, sizeof(value) } });
+    if (R_FAILED(rc)) return rc;
+    if (value.version != 1 || value.status > NodeRouteUnavailable || value.reserved ||
+        !memchr(value.name, '\0', sizeof(value.name)) ||
+        (value.status != NodeRouteNone && !value.name[0]))
+        return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     *out = value;
     return 0;
 }

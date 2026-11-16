@@ -85,7 +85,11 @@ int lobby_provider_index(const char *provider)
 bool lobby_provider_is_lanplay(const char *provider)
 {
     const int index = lobby_provider_index(provider);
-    return index >= 2 && index < LOBBY_PROVIDER_COUNT;
+    if (index >= 2 && index < LOBBY_PROVIDER_COUNT) return true;
+    if (!provider || strncmp(provider, "custom-", 7) != 0) return false;
+    return provider[7] >= '1' && provider[7] <= '2' && provider[8] >= '0' && provider[8] <= '9' &&
+        provider[9] == '\0' && ((provider[7] == '1' && provider[8] >= '3') ||
+                                (provider[7] == '2' && provider[8] <= '3'));
 }
 
 bool lobby_provider_is_self_relay(const char *provider)
@@ -108,8 +112,8 @@ LobbyRoomId lobby_room_id_on(const LobbyGroup *group, const char *provider)
         size_t size = 0;
         while (size < sizeof(id.provider) && provider[size]) ++size;
         if (size == sizeof(id.provider) ||
-            (lobby_provider_index(provider) < 0 && strcmp(provider, REGION_PROVIDER_EU) != 0 &&
-             strcmp(provider, REGION_PROVIDER_COMMUNITY) != 0))
+            (lobby_provider_index(provider) < 0 && !lobby_provider_is_lanplay(provider) &&
+             strcmp(provider, REGION_PROVIDER_EU) != 0 && strcmp(provider, REGION_PROVIDER_COMMUNITY) != 0))
             return (LobbyRoomId){0};
         memcpy(id.provider, provider, size);
     }

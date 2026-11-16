@@ -1,4 +1,6 @@
 #include "node_lobby.h"
+#include "roomcircuit_paths.h"
+namespace ams::mitm::storage { inline bool StorageUseCurrent(){ return false; } }
 #include <algorithm>
 #include <array>
 #include <cassert>

@@ -3,9 +3,14 @@
 #pragma once
 #include <atomic>
 #include <cassert>
+#include <cstdio>
 #include "node_catalog.h"
 #include "node_lobby.h"
 #include "../source/lanplay_direct.hpp"
+[[maybe_unused]] static bool DirectNodeId(u32 id) { return id >= 2 && id < NODE_CATALOG_COUNT; }
+[[maybe_unused]] static size_t NodeSlot(u32 id) { return id; }
+[[maybe_unused]] static void NodeProvider(u32 id, char out[33]) { std::snprintf(out, 33, "%s", LanywhereNodes[id].provider); }
+[[maybe_unused]] static void RestoreHostPreference() {}
 [[maybe_unused]] static std::atomic<bool> g_direct_session{false};
 [[maybe_unused]] static GameRoute g_direct_room{};
 bool DirectNodeRoute(const DiscoveryRoute &route);

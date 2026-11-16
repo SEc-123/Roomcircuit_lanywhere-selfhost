@@ -1,5 +1,9 @@
 /* Direct client for the documented LAN Play wire protocol. GPL-2.0-only. */
 #include "lanplay_direct.hpp"
+#if defined(__SWITCH__)
+#include "storage_migration.hpp"
+#include "../../../common/roomcircuit_paths.h"
+#endif
 #include "lanplay_codec.hpp"
 #include "tcp_stream_protocol.hpp"
 #include <algorithm>
@@ -1506,9 +1510,9 @@ uint32_t VirtualAddress(bool renew) {
 #if defined(__SWITCH__)
     // This sysmodule mounts sdmc through ams::fs, not libnx's stdio devoptab.
     namespace fs = ams::fs;
-    constexpr const char *Path = "sdmc:/lanywhere/lanplay-ip.bin";
-    constexpr const char *TemporaryPath = "sdmc:/lanywhere/lanplay-ip.bin.tmp";
-    constexpr const char *PreviousPath = "sdmc:/lanywhere/lanplay-ip.bin.previous";
+    const char *Path = rc_storage_path(ams::mitm::storage::StorageUseCurrent(), RC_LEGACY_PATH("lanplay-ip.bin"), RC_CURRENT_PATH("lanplay-ip.bin"));
+    const char *TemporaryPath = rc_storage_path(ams::mitm::storage::StorageUseCurrent(), RC_LEGACY_PATH("lanplay-ip.bin.tmp"), RC_CURRENT_PATH("lanplay-ip.bin.tmp"));
+    const char *PreviousPath = rc_storage_path(ams::mitm::storage::StorageUseCurrent(), RC_LEGACY_PATH("lanplay-ip.bin.previous"), RC_CURRENT_PATH("lanplay-ip.bin.previous"));
     auto read = [](const char *path, uint32_t *out) {
         fs::FileHandle file;
         if (R_FAILED(fs::OpenFile(&file, path, fs::OpenMode_Read)))
@@ -1538,7 +1542,7 @@ uint32_t VirtualAddress(bool renew) {
 #if defined(__SWITCH__)
     // Stage and verify before replacing the last valid identity. Any storage
     // failure keeps this session usable and leaves the old file recoverable.
-    static_cast<void>(fs::CreateDirectory("sdmc:/lanywhere"));
+    static_cast<void>(fs::CreateDirectory(ams::mitm::storage::StorageUseCurrent() ? RC_CURRENT_DIR : RC_LEGACY_DIR));
     std::memcpy(saved, "LPIP", 4);
     Put32(saved + 4, address);
     static_cast<void>(fs::DeleteFile(TemporaryPath));

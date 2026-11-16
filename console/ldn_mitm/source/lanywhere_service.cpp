@@ -7,10 +7,16 @@
  */
 #include "lanywhere_service.hpp"
 #include "appointment_notifier.hpp"
+#include "storage_migration.hpp"
 #include <algorithm>
 #include <cstring>
 
 namespace ams::mitm::lanywhere {
+
+    Result LanywhereService::GetStorageSelection(sf::Out<u32> selection) {
+        selection.SetValue(static_cast<u32>(storage::StorageSelection()));
+        R_SUCCEED();
+    }
 
     namespace {
 
@@ -34,6 +40,28 @@ namespace ams::mitm::lanywhere {
             std::memcpy(request->participant, participant, sizeof(participant));
         }
 
+    }
+
+    Result LanywhereService::GetDynamicNodeCatalog(const sf::OutBuffer &out) {
+        if (out.GetSize() != sizeof(NodeDynamicCatalog)) return ResultRelayFailed();
+        NodeDynamicCatalog catalog{};
+        if (!lanywhere::GetDynamicNodeCatalog(&catalog)) return ResultRelayFailed();
+        std::memcpy(out.GetPointer(), &catalog, sizeof(catalog));
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::GetHostNodeInfo(const sf::OutBuffer &out) {
+        if (out.GetSize() != sizeof(NodeHostInfo)) return ResultRelayFailed();
+        const auto info = lanywhere::GetHostNodeInfo();
+        std::memcpy(out.GetPointer(), &info, sizeof(info));
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::GetActiveNodeRoute(const sf::OutBuffer &out) {
+        if (out.GetSize() != sizeof(NodeActiveRouteInfo)) return ResultRelayFailed();
+        const auto info = lanywhere::GetActiveNodeRoute();
+        std::memcpy(out.GetPointer(), &info, sizeof(info));
+        R_SUCCEED();
     }
 
     Result LanywhereService::GetHostNode(sf::Out<u32> node) {

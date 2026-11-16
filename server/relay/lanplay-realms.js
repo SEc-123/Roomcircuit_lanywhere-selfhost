@@ -45,7 +45,8 @@ function create({ count = () => {}, paused = () => false, log = () => {}, onEven
         child.on('message', m => {
             if (r.stopping || !m || typeof m !== 'object') return;
             if (m.type === 'ready' && Number.isInteger(m.port) && m.port > 0 && m.port < 65536) {
-                clearTimeout(r.startTimer); r.endpoint = { host: '127.0.0.1', port: m.port };
+                if (provider.id.startsWith('custom-') && !require('./custom-node-registry').publicIPv4(m.upstreamAddress)) return stop(r, 'upstream_unavailable');
+                clearTimeout(r.startTimer); r.endpoint = { host: '127.0.0.1', port: m.port, upstreamAddress: m.upstreamAddress };
                 r.resolve(r.endpoint); r.reject = null; log(`LAN Play realm ready: ${provider.id}`);
             } else if (m.type === 'traffic' && Number.isSafeInteger(m.bytes) && m.bytes >= 0 && m.bytes <= 16 * 1024 * 1024) count(m.bytes);
             else if (m.type === 'failed') stop(r, 'upstream_unavailable');

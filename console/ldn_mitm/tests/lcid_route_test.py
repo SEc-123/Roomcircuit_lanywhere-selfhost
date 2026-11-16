@@ -94,6 +94,7 @@ static void reset(){ClearSelectionLocked();g_state=RelayState::Idle;g_recovering
  configured_ip=htonl(0x7f000001);configured_port=htons(11460);g_public=true;change_at_nickname=false;attempted=0;leaves=0;g_token=0;std::strcpy(g_code,"ABC234");g_stream_epoch=1;g_stream_ready=false;}
 int main(){unsigned checks=0;reset();GameRoute route{};
  assert(!CaptureGameRoute(nullptr));assert(CaptureGameRoute(&route)&&route.room_epoch==0&&std::string(route.discovery.provider)=="self");checks++;
+ g_selected_status=NodeHostUnavailable;assert(!CaptureGameRoute(&route)&&!CaptureHostGameRoute(&route));g_selected_status=NodeHostSelected;assert(CaptureGameRoute(&route));checks++;
  // A game that alternates creating and searching must see its peer's room
  // even when both consoles previously browsed a different provider.
  reset();configured="lanplay-nl-r3ps4j-rust";DiscoveryRoute saved{};GameRoute host{};

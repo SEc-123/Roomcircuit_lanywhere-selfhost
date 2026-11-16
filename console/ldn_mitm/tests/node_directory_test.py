@@ -24,13 +24,21 @@ code=r'''
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <mutex>
 #include <unistd.h>
 #include <arpa/inet.h>
 using u8=uint8_t;using u16=uint16_t;using u32=uint32_t;using u64=uint64_t;using s32=int32_t;
 constexpr u32 LanPlayNet=0x0a0d0000;constexpr u8 T_Error=0x85;constexpr size_t MaxMembers=8;
 namespace util {void Strlcpy(char *out,const char *in,size_t n){if(n)snprintf(out,n,"%s",in);}}
 '''+struct('DiscoveryRoute')+'\n'+struct('GroupSummaryV2')+'\n'+''.join(extract.function(source,s)+'\n' for s in ('u32 le32(', 'u64 le64(', 'void put32(', 'void put64('))+r'''
-static bool configured=true,current=true,capable=true,annotated=false,wants_annotations=false,bad_hash=false;
+static bool configured=true,current=true,capable=true,annotated=false,wants_annotations=false,bad_hash=false,dynamic=false;
+struct VerifiedNodeRoom {NodeRoomSelection selection;NodeDynamicEntry entry;u64 expires_at;};
+static std::mutex g_verified_rooms_lock;static VerifiedNodeRoom g_verified_rooms[48]{};
+static u32 g_verified_snapshot=0;static size_t g_verified_next=0;static constexpr u64 SelectionLifetimeMs=180000;
+static u64 SelectionNowMs(){return 1;}
+static bool LookupNode(u32 id,NodeDynamicEntry *out){*out={};out->id=id;out->port=11451;return id==13;}
+namespace custom_nodes {static bool PublicIpv4(const u8*ip){return ip[0]==8;}}
+
 static std::vector<u8>wire;
 static u8 last_command=0, response_override=0;
 static int queries=0;
@@ -40,17 +48,17 @@ static bool ResolveDiscoveryRoute(const DiscoveryRoute&,sockaddr_in *out,char *p
 static bool AppointmentBackendCurrent(const DiscoveryRoute&){return current;}
 static int ConnectServer(sockaddr_in,const char**,int,const char*,u32*){return dup(STDOUT_FILENO);}
 static bool QueryCapabilities(int,u32 *caps,int,u32*){
- *caps=(capable?NODE_LOBBY_CAPABILITY:0)|(annotated?DIRECT_ROOM_CAPABILITY:0);return true;
+ *caps=(capable?NODE_LOBBY_CAPABILITY:0)|(annotated?DIRECT_ROOM_CAPABILITY:0)|(dynamic?NODE_DYNAMIC_CAPABILITY:0);return true;
 }
 static bool SendFrameTo(int,u8 command,const void *data,size_t size,const void*,size_t){
  last_command=command;
- if(command==((annotated&&wants_annotations)?DIRECT_ROOM_LIST_REQUEST:NODE_LOBBY_REQUEST)){assert(size==20);memcpy(&received,data,size);queries++;}
+ if(command==((dynamic&&wants_annotations)?NODE_DYNAMIC_LOBBY_REQUEST:(annotated&&wants_annotations)?DIRECT_ROOM_LIST_REQUEST:NODE_LOBBY_REQUEST)){assert(size==20);memcpy(&received,data,size);queries++;}
  else assert(command==NODE_CATALOG_REQUEST&&size==0);
  return true;
 }
 static ssize_t ReadListFrame(int,u8 *type,void *out,size_t capacity,int,u32*){
  if(last_command==NODE_CATALOG_REQUEST){assert(capacity>=40);auto*p=static_cast<u8*>(out);memcpy(p,LanywhereNodeCatalogHash,32);if(bad_hash)p[0]^=1;put32(p+32,0x1ffd);put32(p+36,0x1fff);*type=NODE_CATALOG_RESPONSE;return 40;}
- *type=response_override?response_override:last_command==DIRECT_ROOM_LIST_REQUEST?DIRECT_ROOM_LIST_RESPONSE:NODE_LOBBY_RESPONSE;
+ *type=response_override?response_override:last_command==NODE_DYNAMIC_LOBBY_REQUEST?NODE_DYNAMIC_LOBBY_RESPONSE:last_command==DIRECT_ROOM_LIST_REQUEST?DIRECT_ROOM_LIST_RESPONSE:NODE_LOBBY_RESPONSE;
  assert(capacity>=wire.size());memcpy(out,wire.data(),wire.size());return wire.size();
 }
 static bool ValidCode(const char*code){return strlen(code)==6;}
@@ -95,6 +103,14 @@ int main(){NodeRoomsRequest req{};req.node_mask=0x1fff;UnifiedPage page{};NodeRo
  put32(wire.data()+4,2);FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==ListStatusProtocol);
  response(room());wire.pop_back();FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==ListStatusProtocol);cases++;
  wire.assign(16,0);put32(wire.data()+4,NODE_LOBBY_END);wire[11]=1;FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==UnifiedListStale);cases++;
+ // Shared custom room retains the specific address validated by the directory.
+ dynamic=true;annotated=true;wants_annotations=true;req.node_mask=0x3fff;
+ auto custom=room();custom.node_id=13;custom.locator.reserved[0]=8;custom.locator.reserved[1]=8;custom.locator.reserved[2]=8;custom.locator.reserved[3]=8;
+ response(custom);wire[10]=14;FindNodeRooms(req,&page,rows,6,wants_annotations);
+ assert(last_command==NODE_DYNAMIC_LOBBY_REQUEST&&page.count==1&&g_verified_rooms[0].selection.node_id==13);
+ assert(g_verified_rooms[0].selection.locator.reserved[3]==8&&g_verified_rooms[0].entry.port==11451);
+ custom.locator.reserved[0]=10;response(custom);wire[10]=14;FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==ListStatusProtocol);
+ dynamic=false;annotated=false;wants_annotations=false;req.node_mask=0x1fff;cases++;
  response(room());current=false;FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==ListStatusUnavailable);current=true;configured=false;FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==ListStatusConfig);cases++;
  printf("PASS native node-directory wire parser: %u cases; catalog fingerprint, scoped filters, raw identity, pagination and fallback\n",cases);
 }

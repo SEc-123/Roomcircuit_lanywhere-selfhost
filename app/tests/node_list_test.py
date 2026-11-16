@@ -27,6 +27,9 @@ static LobbyNodeRoom rows[6];
 static Result result;
 static bool legacy_api;
 static unsigned last_command;
+static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || id == 13; }
+static const char *nodes_ui_provider(uint32_t id) { return id == 13 ? "custom-13" : LanywhereNodes[id].provider; }
+
 static Result dispatch(unsigned command, NodeRoomsRequest request, UnifiedPage *out, Io io){
  assert((command==DIRECT_ROOM_LIST_IPC || command==37) && !request.reserved && io.buffers[0].size==sizeof(rows));
  last_command=command;
@@ -54,6 +57,12 @@ int main(void){
  assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol);
  rows[0].flags=NodeRoomDirect;
  assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).count==1 && groups[0].room_access==RoomAccessShared);
+ request.node_mask=(1u<<NODE_SHARED_CAPACITY)-1;rows[0].node_id=13;reply.total=14;
+ rows[0].locator.reserved[0]=8;rows[0].locator.reserved[1]=8;rows[0].locator.reserved[2]=8;rows[0].locator.reserved[3]=8;
+ assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).count==1 && !strcmp(sources[0],"custom-13"));
+ rows[0].locator.reserved[4]=1;assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol);rows[0].locator.reserved[4]=0;
+ memset(rows[0].locator.reserved,0,12);assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol);
+ rows[0].node_id=2;reply.total=13;request.node_mask=(1u<<NODE_CATALOG_COUNT)-1;
  legacy_api=true;
  assert(lanywhere_list_nodes(request,groups,sources,out,&page,&supported).reserved==ListStatusProtocol && last_command==37);
  rows[0].group.room_access=RoomAccessNone;

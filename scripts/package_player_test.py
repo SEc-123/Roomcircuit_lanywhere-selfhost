@@ -102,9 +102,10 @@ def main():
         put(fixture, 'console/ldn_mitm/ldn_mitm.elf', b'test\0' + address.encode('ascii') + b'\0' + community)
         entries = package.package_files('fixture', None, 11460, (address, 11460))
         assert len(entries) == 24, f'expected 24 files, found {len(entries)}'
-        assert entries[overlay_path] == nro
+        assert entries['switch/.overlays/RoomCircuit.ovl'] == nro
+        assert entries['switch/RoomCircuit/RoomCircuit.nro'] == nro + address.encode('ascii') + b'\0' + community
         assert 'README.txt' in entries and 'GAMES.txt' in entries
-        assert 'lanywhere/config.ini' not in entries
+        assert 'switch/RoomCircuit/config.ini' not in entries
         assert all(not name.startswith('/') and '..' not in pathlib.PurePosixPath(name).parts for name in entries)
         guide = entries['README.txt'].decode('utf-8')
         assert '@CONNECTION_' not in guide and '无需输入地址或端口' in guide
@@ -120,7 +121,7 @@ def main():
             assert z.testzip() is None and set(z.namelist()) == set(entries)
             assert z.read('README.txt') == entries['README.txt']
             assert z.read('GAMES.txt') == entries['GAMES.txt']
-            assert z.read(overlay_path) == nro
+            assert z.read('switch/.overlays/RoomCircuit.ovl') == nro
 
         profile = fixture / 'common/relay_profile.h'
         europe = b'45.132.15.1\0'

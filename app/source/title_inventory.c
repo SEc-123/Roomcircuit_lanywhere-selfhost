@@ -1,6 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "title_inventory.h"
 #include "nacp_titles.h"
+#include "roomcircuit_storage.h"
+#include "../../common/roomcircuit_paths.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -178,12 +180,12 @@ static TitleInventoryLoad ns_load(void *ctx,uint64_t id,GameCacheRecord *record)
 }
 bool title_inventory_refresh(void)
 {
-    if(mkdir("sdmc:/lanywhere",0777)!=0 && errno!=EEXIST)return false;
+    if(mkdir(rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_DIR, RC_CURRENT_DIR),0777)!=0 && errno!=EEXIST)return false;
     NsInventory state={0};
     state.control=(NsApplicationControlData *)malloc(sizeof(*state.control));
     state.titles=(unsigned char *)malloc(NACP_MAX_TITLES*NACP_TITLE_SIZE);
     bool ok=false;
-    if(state.control && state.titles){TitleInventoryBackend backend={&state,ns_list,ns_load};ok=title_inventory_refresh_at(GAME_CACHE_PATH,&backend);}
+    if(state.control && state.titles){TitleInventoryBackend backend={&state,ns_list,ns_load};ok=title_inventory_refresh_at(rc_storage_path(roomcircuit_storage_current(), GAME_CACHE_PATH, RC_CURRENT_PATH("game-titles.bin")),&backend);}
     free(state.control);free(state.titles);return ok;
 }
 #else

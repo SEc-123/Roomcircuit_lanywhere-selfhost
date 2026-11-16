@@ -7,7 +7,7 @@ RoomCircuit brings compatible Nintendo Switch games online through their built-i
 ## What you can do
 
 - **Browse and join rooms.** See public rooms across available nodes and filter by game or region.
-- **Choose where to host.** Test nodes from your Switch, including supported public LAN Play nodes. You can also compare results with friends using a shared test code.
+- **Choose where to host.** Test built-in, administrator-published and locally configured LAN Play nodes. Compare the 13 built-in nodes with friends using a shared test code.
 - **Manage room passwords.** Share your in-game password in the lobby or keep it private.
 - **Schedule a session.** Agree on a time with other players so nobody has to leave a game room open while waiting. Players can mark themselves ready and find the room when it opens.
 
@@ -17,7 +17,7 @@ You need a Switch running Atmosphère, an internet connection, and a game with a
 
 1. Download the **full SD ZIP** (`switch-online-*-sd.zip`) from the [latest release](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest).
 2. Extract it on a computer. Merge the ZIP's `atmosphere/` and `switch/` folders into the root of your SD card and replace matching files. This installs RoomCircuit's version of the `ldn_mitm` module.
-3. Safely eject the SD card, restart into Atmosphère, and open **RoomCircuit** from **Album**.
+3. Safely eject the SD card, restart into Atmosphère, and open **RoomCircuit** from **Album**. The app is `switch/RoomCircuit/RoomCircuit.nro`, the overlay is `switch/.overlays/RoomCircuit.ovl`, and user data is under `switch/RoomCircuit/`.
 
 ## Play
 
@@ -33,6 +33,22 @@ You need a Switch running Atmosphère, an internet connection, and a game with a
 2. Open or return to the game, choose **Local Wireless**, and search for the room. Enter the game's password when prompted.
 
 If the game uses link codes instead of a room list, choose the same node, enter the same code in the game, and start local matchmaking on both consoles.
+
+### Add a LAN Play node
+
+Create `switch/RoomCircuit/nodes.ini` on the SD card. Add one section per node:
+
+```ini
+[node]
+name=Russia
+host=lanplay.example.org
+port=11451
+region=europe
+```
+
+Open **Nodes** again to load changes. `name`, `host` and `port` are required; `region` may be `unknown`, `asia`, `europe`, `americas`, `oceania` or `africa`. Up to seven local-only endpoints are supported. Use a public IPv4 address or hostname and UDP port supplied by the LAN Play server operator. The sample hostname is a placeholder.
+
+An administrator-published node and its rooms appear in the shared lobby. An unregistered local node is selected by each player; its rooms are found from the game's Local Wireless search. Matching host and port use the administrator-published identity. The shared friend test currently compares the 13 built-in nodes. [Administrator setup and script example](deploy/CUSTOM-NODES.md)
 
 ### Schedule a session
 
@@ -52,7 +68,7 @@ Press **→** from the room list to open the in-app guide. See [node routing and
 
 ### Manual update (any version)
 
-Use the [full SD ZIP](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest) for a first install, to upgrade from a version before **v0.8.8**, or if the in-app update fails. Follow the [installation steps](#install) and overwrite matching files. Keep your existing `lanywhere/` folder to preserve settings and appointments. For a custom server build, use its matching SD ZIP.
+Use the [full SD ZIP](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest) for a first install, to upgrade from a version before **v0.8.8**, or if the in-app update fails. Follow the [installation steps](#install) and overwrite matching files. Keep your existing `lanywhere/` folder until RoomCircuit has migrated its settings and appointments to `switch/RoomCircuit/`. For a custom server build, use its matching SD ZIP.
 
 ## Build and self-host
 

@@ -17,6 +17,9 @@ import zlib
 ROOT = Path(__file__).resolve().parent.parent
 MAX_RAW = 16 * 1024 * 1024
 MAX_COMPRESSED = 8 * 1024 * 1024
+ENTRYPOINT_PROOF = 'switch/RoomCircuit/.entrypoints-signed'
+ENTRYPOINT_APP = 'switch/RoomCircuit/RoomCircuit.nro'
+ENTRYPOINT_OVERLAY = 'switch/.overlays/RoomCircuit.ovl'
 
 
 def managed_files():
@@ -26,6 +29,21 @@ def managed_files():
     if len(paths) != count or len(set(paths)) != count:
         raise ValueError('Invalid managed-file map')
     return paths
+
+
+def sd_path_for_update_destination(path):
+    """Map the v1 updater's permanent IDs to files in the renamed SD ZIP.
+
+    Old clients install by numeric ID, not by the SD ZIP path. Do not reorder
+    or change the legacy destination table: existing recovery journals use it.
+    """
+    if path == 'switch/lanywhere.nro':
+        return 'switch/RoomCircuit/RoomCircuit.nro'
+    if path == 'switch/.overlays/lanywhere.ovl':
+        return 'switch/.overlays/RoomCircuit.ovl'
+    if path.startswith('lanywhere/'):
+        return 'switch/RoomCircuit/' + path[len('lanywhere/'):]
+    return path
 
 
 def public_key():
@@ -67,22 +85,62 @@ def verify_nro_version(data, expected):
         raise ValueError(f'NRO version {actual} differs from requested update {expected}')
 
 
-def package(sd_zip, version):
+def verify_entrypoint_proof(proof, app, overlay, version, node='node'):
+    """Verify the fixed RCI1 record against exactly the two release entrypoints."""
+    version_numbers(version)
+    encoded = version.encode('ascii')
+    if (len(encoded) >= 16 or len(proof) != 156 or proof[:4] != b'RCI1' or
+            proof[4:20] != encoded.ljust(16, b'\0')):
+        raise ValueError('Invalid signed entrypoint record')
+    for offset, data in ((20, app), (56, overlay)):
+        size, = struct.unpack_from('<I', proof, offset)
+        if (size == 0 or size > MAX_RAW or size != len(data) or
+                proof[offset + 4:offset + 36] != hashlib.sha256(data).digest()):
+            raise ValueError('Signed entrypoint does not match release binary')
+        verify_nro_version(data, version)
+    verify = '''const fs=require('fs'),crypto=require('crypto');
+const data=fs.readFileSync(0);
+const key=crypto.createPublicKey({key:Buffer.from('302a300506032b6570032100'+process.argv[1],'hex'),format:'der',type:'spki'});
+if(data.length!==156 || !crypto.verify(null,data.subarray(0,92),key,data.subarray(92)))process.exit(1);
+'''
+    checked = subprocess.run([node, '-e', verify, public_key().hex()], input=proof,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    if checked.returncode:
+        raise ValueError('Invalid entrypoint signature')
+
+
+def package(sd_zip, version, node='node'):
     names = managed_files()
     raw = bytearray(b'LNUB' + struct.pack('<II', 1, len(names)))
     with zipfile.ZipFile(sd_zip) as archive:
         entries = archive.infolist()
         if len({entry.filename for entry in entries}) != len(entries):
             raise ValueError('Duplicate update ZIP entries')
-        allowed = set(names) | {'README.txt', 'GAMES.txt'}
+        renamed = [sd_path_for_update_destination(name) for name in names]
+        if len(set(renamed)) != len(names):
+            raise ValueError('Duplicate renamed update destination')
+        # Accept a complete legacy or renamed SD package, never a mixture.
+        actual = {entry.filename for entry in entries} - {'README.txt', 'GAMES.txt', ENTRYPOINT_PROOF}
+        if actual == set(names):
+            sources = names
+        elif actual == set(renamed):
+            sources = renamed
+        else:
+            raise ValueError('Unexpected path or incomplete update ZIP')
+        allowed = set(sources) | {'README.txt', 'GAMES.txt', ENTRYPOINT_PROOF}
         if any(entry.filename not in allowed or stat.S_ISLNK(entry.external_attr >> 16) for entry in entries):
             raise ValueError('Unexpected path or symlink in update ZIP')
         if sum(entry.file_size for entry in entries) > MAX_RAW:
             raise ValueError('Expanded update exceeds size limit')
         if archive.testzip() is not None:
             raise ValueError('Invalid ZIP checksum')
+        if ENTRYPOINT_PROOF in {entry.filename for entry in entries}:
+            if sources != renamed:
+                raise ValueError('Signed entrypoints require the renamed SD layout')
+            verify_entrypoint_proof(archive.read(ENTRYPOINT_PROOF), archive.read(ENTRYPOINT_APP),
+                                    archive.read(ENTRYPOINT_OVERLAY), version, node)
         for index, name in enumerate(names):
-            data = archive.read(name)
+            data = archive.read(sources[index])
             if name.endswith(('.nro', '.ovl')):
                 verify_nro_version(data, version)
             if name.endswith('boot2.flag') and data:
@@ -152,7 +210,7 @@ def main():
     args = parser.parse_args()
     try:
         numbers = version_numbers(args.version)
-        raw, compressed, count = package(args.sd_zip, args.version)
+        raw, compressed, count = package(args.sd_zip, args.version, args.node)
         digest = hashlib.sha256(compressed).digest()
         body = bytearray(448)
         struct.pack_into('<4s8I', body, 0, b'LNU1', 1, *numbers, 1, len(compressed), len(raw), count)

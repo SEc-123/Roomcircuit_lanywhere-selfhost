@@ -13,10 +13,12 @@ resolver = SOURCE[SOURCE.index('        struct NodeDnsWatch'):SOURCE.index('    
 
 fixture = r'''
 #include "node_catalog.h"
+#include "node_lobby.h"
 #include "selection_trace.hpp"
 namespace selection_trace = ams::mitm::selection_trace;
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -76,6 +78,12 @@ static bool CommunityEndpoint(sockaddr_in *out) {
     return ::inet_pton(AF_INET, "1.1.1.1", &out->sin_addr) == 1;
 }
 
+static size_t NodeSlot(u32 id) { return id < NODE_SHARED_CAPACITY ? id : id >= NODE_LOCAL_BASE && id < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY ? NODE_SHARED_CAPACITY + id - NODE_LOCAL_BASE : NODE_TOTAL_CAPACITY; }
+static bool LookupNode(u32 id, NodeDynamicEntry *out) {
+ if(id>=NODE_CATALOG_COUNT)return false;
+ *out={};out->id=id;out->protocol=LanywhereNodes[id].protocol;out->port=LanywhereNodes[id].port;
+ std::snprintf(out->host,sizeof(out->host),"%s",LanywhereNodes[id].host);return true;
+}
 static unsigned handle = 42, queries = 0, cancels = 0, frees = 0;
 static constexpr unsigned PublicIpv4 = 0x09090909;
 static bool watchdog = false, fail_dns = false, bad_addr = false;
@@ -98,7 +106,7 @@ static void test_freeaddrinfo(addrinfo *value) {
 #undef getaddrinfo
 #undef freeaddrinfo
 static int test_getaddrinfo(const char *host, const char *service, const addrinfo *hints, addrinfo **out) {
-    assert(host == LanywhereNodes[2].host && !service && hints->ai_family == AF_INET);
+    assert(!std::strcmp(host, LanywhereNodes[2].host) && !service && hints->ai_family == AF_INET);
     ++queries;
     os::now += lookup_delay;
     if (watchdog)

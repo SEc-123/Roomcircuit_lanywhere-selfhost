@@ -1,3 +1,4 @@
+namespace ams::mitm::storage { bool StorageUseCurrent() { return false; } }
 #include "../../console/ldn_mitm/source/game_identity_cache.cpp"
 #include <cassert>
 #include <cstdio>

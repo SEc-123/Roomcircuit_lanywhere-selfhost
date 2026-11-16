@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "node_selection_trace.h"
+#include "roomcircuit_storage.h"
+#include "../../common/roomcircuit_paths.h"
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -9,11 +11,13 @@
 #ifndef LANYWHERE_APP_VERSION
 #define LANYWHERE_APP_VERSION "development"
 #endif
-#ifndef NODE_SELECTION_TRACE_DIRECTORY
-#define NODE_SELECTION_TRACE_DIRECTORY "sdmc:/lanywhere"
-#endif
-
+#ifdef NODE_SELECTION_TRACE_DIRECTORY
+#define TRACE_DIRECTORY NODE_SELECTION_TRACE_DIRECTORY
 #define TRACE_PATH NODE_SELECTION_TRACE_DIRECTORY "/node-selection-app.log"
+#else
+#define TRACE_DIRECTORY rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_DIR, RC_CURRENT_DIR)
+#define TRACE_PATH rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("node-selection-app.log"), RC_CURRENT_PATH("node-selection-app.log"))
+#endif
 #define TRACE_LIMIT 2048L
 #define TRACE_BUILD "node-select-20261116b"
 
@@ -51,7 +55,7 @@ void node_selection_trace_begin(uint32_t node_id)
     const int saved_errno = errno;
     trace_ready = false;
     trace_node = node_id;
-    if (mkdir(NODE_SELECTION_TRACE_DIRECTORY, 0700) == 0 || errno == EEXIST) {
+    if (mkdir(TRACE_DIRECTORY, 0700) == 0 || errno == EEXIST) {
         char line[160];
         const int length = snprintf(line, sizeof(line), "app=%s build=%s node=%u\n",
                                     LANYWHERE_APP_VERSION, TRACE_BUILD, (unsigned)node_id);

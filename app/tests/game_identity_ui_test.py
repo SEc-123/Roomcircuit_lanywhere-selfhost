@@ -38,6 +38,8 @@ static GameCatalog g_catalog;
 static GameInfo fake;
 static u64 last_query;
 static int launches;
+static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || id == 13; }
+static const char *nodes_ui_provider(uint32_t id) { return id == 13 ? "custom-13" : LanywhereNodes[id].provider; }
 static const GameInfo *game_info(u64 id) { last_query=id; return installed ? &fake : NULL; }
 static void draw_busy(const char *s) { (void)s; }
 static int appletRequestLaunchApplication(u64 id, const void *p) { (void)p; assert(id==fake.id); launches++; return 0; }

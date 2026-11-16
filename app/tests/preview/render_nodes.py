@@ -15,7 +15,7 @@ source=here.parents[1]/'source'
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',type=Path,required=True);args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
 spec=importlib.util.spec_from_file_location('routes',here.parent/'input_routing_test.py');routes=importlib.util.module_from_spec(spec);spec.loader.exec_module(routes)
 text=(source/'nodes_ui.c').read_text()
-functions=['const char *nodes_ui_name(','const char *nodes_ui_region(','const char *nodes_ui_country(','static void rank_nodes(','static void measurement_label(','static uint8_t region_for_row(','static void begin_screen(','static void node_footer(','static void node_panel(','static void draw_regions(','static void node_location(','static void draw_picker(','static void draw_friend_panel(','static void draw_room_check(','static void draw_filters(']
+functions=['const char *nodes_ui_name(','const char *nodes_ui_region(','const char *nodes_ui_country(','static void rank_nodes(','static void measurement_label(','static uint8_t region_for_row(','static void begin_screen(','static void node_footer(','static void node_panel(','static void draw_regions(','static void node_location(','static void draw_picker(','static void draw_friend_panel(','static bool room_probe_can_retry(','static void draw_room_check(','static void draw_filters(']
 code='''#include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,6 +30,19 @@ static char group_code[8];
 static const char *notice;
 static const char *keyboard_error;
 static bool language_save_failed;
+static NodeHostInfo current_host_info;
+static bool current_host_valid;
+static uint32_t node_id(uint32_t slot) { return slot < NODE_SHARED_CAPACITY ? slot : NODE_LOCAL_BASE + slot - NODE_SHARED_CAPACITY; }
+static bool node_copy(uint32_t id, NodeDynamicEntry *node) {
+ if (id >= NODE_CATALOG_COUNT) return false;
+ const LanywhereNode *builtin = &LanywhereNodes[id];
+ *node = (NodeDynamicEntry){.id=id,.protocol=builtin->protocol,.region=builtin->region,.port=builtin->port,.flags=1};
+ snprintf(node->name,sizeof(node->name),"%s",builtin->name_en);
+ snprintf(node->host,sizeof(node->host),"%s",builtin->host);
+ return true;
+}
+static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT; }
+static uint8_t nodes_ui_region_for(uint32_t id) { return id < NODE_CATALOG_COUNT ? LanywhereNodes[id].region : NodeRegionUnknown; }
 '''+ '\n'.join(routes.function(text,x) for x in functions)+r'''
 static void capture(const char *dir,const char *kind,int zh){char path[4096];snprintf(path,sizeof(path),"%s/nodes-%s-%s.png",dir,zh?"zh":"en",kind);assert(gfx_save_png(path));}
 int main(int argc,char **argv){
@@ -37,7 +50,7 @@ int main(int argc,char **argv){
  for(int zh=0;zh<2;zh++){
   ui_set_language(zh,false);NodeView v={.catalog_ok=true,.enabled=((1u<<NODE_CATALOG_COUNT)-1) & ~(1u<<8),.available=((1u<<NODE_CATALOG_COUNT)-1) & ~(1u<<8) & ~(1u<<3)};
   for(unsigned i=0;i<NODE_CATALOG_COUNT;i++)v.measurements[i]=(NodeMeasurement){.node_id=i,.state=NodeMeasureReady,.sent=5,.received=5,.kind=i<2?NodeProbeTcp:NodeProbeUdp,.median_ms=(uint16_t)(40+i*8),.jitter_ms=5};
-  uint32_t order[NODE_CATALOG_COUNT];unsigned count;bool recommended[NODE_CATALOG_COUNT];
+  uint32_t order[NODE_TOTAL_CAPACITY];unsigned count;bool recommended[NODE_TOTAL_CAPACITY];
   rank_nodes(&v,NODE_ALL_REGIONS,order,&count,recommended);draw_picker(&v,NODE_ALL_REGIONS,order,count,0,0,false,recommended);capture(argv[1],"all",zh);
   rank_nodes(&v,NodeRegionEurope,order,&count,recommended);draw_picker(&v,NodeRegionEurope,order,count,0,0,false,recommended);capture(argv[1],"europe",zh);
   rank_nodes(&v,NODE_ALL_REGIONS,order,&count,recommended);assert(count==13);draw_picker(&v,NODE_ALL_REGIONS,order,count,12,0,false,recommended);capture(argv[1],"last-page",zh);

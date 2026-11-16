@@ -35,6 +35,7 @@ extern "C" {
 #include "bsd_spy.hpp"
 #include "lanywhere_service.hpp"
 #include "appointment_notifier.hpp"
+#include "storage_migration.hpp"
 
 namespace ams {
 
@@ -189,6 +190,11 @@ namespace ams {
                     }
                 }
 
+                // Reserve the mandatory service workers before starting optional
+                // node discovery/retry threads. Resource exhaustion in the
+                // optional work is handled without aborting the sysmodule.
+                mitm::lanywhere::InitializeNodeSelection();
+
                 /* Start extra threads. */
                 if constexpr (NumExtraThreads > 0)
                 {
@@ -250,6 +256,13 @@ namespace ams {
     }
 
     void Main() {
+        static_cast<void>(mitm::storage::Initialize());
+        if (!mitm::storage::StorageAvailable()) {
+            // Do not expose LDN, BSD or RoomCircuit services when storage's
+            // committed generation cannot be determined. Keep the console
+            // usable; a reboot retries after the SD issue has been resolved.
+            while (true) os::SleepThread(TimeSpan::FromSeconds(60));
+        }
         R_ABORT_UNLESS(log::Initialize());
         LogFormat("main");
         mitm::lanywhere::InitializeAppointmentSubscriptions();

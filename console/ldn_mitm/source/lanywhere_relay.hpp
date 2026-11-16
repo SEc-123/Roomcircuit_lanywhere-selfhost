@@ -107,6 +107,10 @@ namespace ams::mitm::lanywhere {
     u32 GetRelayRegion();
     u32 GetRelayRegions();
     Result SetRelayRegion(u32 region);
+    void InitializeNodeSelection();
+    bool GetDynamicNodeCatalog(NodeDynamicCatalog *out);
+    NodeHostInfo GetHostNodeInfo();
+    NodeActiveRouteInfo GetActiveNodeRoute();
     u32 GetHostNode();
     Result SetHostNode(u32 node);
     void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity, bool annotate = false);

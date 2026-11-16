@@ -37,6 +37,7 @@ namespace selection_trace = ams::mitm::selection_trace;
 #include <arpa/inet.h>
 using u8=uint8_t;using u16=uint16_t;using u32=uint32_t;using u64=uint64_t;using Result=int;
 #define R_RETURN(x) return (x)
+#define R_FAILED(x) ((x)!=0)
 #define R_SUCCEED() return 0
 constexpr size_t NickLength=32,CodeLength=6;
 constexpr u8 Features=3,T_Create=1,T_Join=2;
@@ -91,9 +92,26 @@ static MatchData g_match;static MatchTicket g_release_next;
 static bool ArmedLocked(){return false;}
 static bool MatchArmed(){return false;}
 static void ReleaseTicket(MatchTicket){}
-''' + extract.selection_state(source) + r'''
+static NodeDynamicEntry g_selected_node{};
+static std::atomic<u64> g_host_preference_generation{1};
+static size_t NodeSlot(u32 id){return id<NODE_SHARED_CAPACITY?id:(id>=NODE_LOCAL_BASE&&id<NODE_LOCAL_BASE+NODE_LOCAL_CAPACITY?NODE_SHARED_CAPACITY+id-NODE_LOCAL_BASE:NODE_TOTAL_CAPACITY);}
+static bool DirectNodeId(u32 id){return id>=2&&NodeSlot(id)<NODE_TOTAL_CAPACITY;}
+static void NodeProvider(u32 id,char out[33]){if(id<NODE_CATALOG_COUNT)util::Strlcpy(out,LanywhereNodes[id].provider,33);else std::snprintf(out,33,"custom-%u",id);}
+static void RestoreHostPreference(){}
+static void StartPreferenceRetry(){}
+static u8 shared_pin[4]={8,8,8,8};
+static bool LookupNode(u32 id,NodeDynamicEntry *out){*out={};out->id=id;out->flags=1;if(id==13){out->protocol=2;out->port=11451;std::strcpy(out->host,"shared.example");std::memcpy(out->ipv4,shared_pin,4);return true;}if(id>=NODE_CATALOG_COUNT)return false;out->protocol=LanywhereNodes[id].protocol;out->port=LanywhereNodes[id].port;std::snprintf(out->host,sizeof(out->host),"%s",LanywhereNodes[id].host);return true;}
+static bool SaveNodePreference(const NodeDynamicEntry &){return true;}
+static NodeRoomSelection trusted{};
+static bool VerifiedSharedRoom(const NodeRoomSelection &request,NodeDynamicEntry *out){
+ if(request.node_id!=13 || std::memcmp(&request,&trusted,sizeof(request)))return false;
+ *out={};out->id=13;out->protocol=2;out->port=11451;std::strcpy(out->host,"shared.example");return true;
+}
+namespace custom_nodes {static bool PublicIpv4(const u8* ip){return ip[0]&&ip[0]!=10&&ip[0]!=127;}}
+''' + extract.selection_state(source).replace('g_node_endpoints[NODE_CATALOG_COUNT]', 'g_node_endpoints[NODE_TOTAL_CAPACITY]') + r'''
 static u32 resolved_extra=0;
 static bool ResolveNodeEndpoint(u32 node,sockaddr_in *out,selection_trace::Handle=0){
+ if(node==13){*out={};std::memcpy(&out->sin_addr.s_addr,shared_pin,4);out->sin_port=htons(11451);return true;}
  if(node>=NODE_CATALOG_COUNT)return false;
  *out={};out->sin_addr.s_addr=htonl(0x08080808+node+resolved_extra);out->sin_port=htons(LanywhereNodes[node].port);
  return true;
@@ -106,7 +124,7 @@ static void CancelMatch(){ClearSelectionLocked();}
 ''' + ''.join(actual(s) for s in (
     'bool CaptureDiscoveryRoute(', 'bool CaptureGameRoute(', 'bool CaptureHostGameRoute(',
     'bool GameRouteStillCurrent(', 'bool DiscoveryRouteStillSelected(const DiscoveryRoute &route) {',
-    'Result EnterDirectNode(', 'u32 GetHostNode(', 'Result SetHostNode(', 'Result SelectNodeRoom(',
+    'Result EnterDirectNode(', 'u32 GetHostNode(', 'Result SetHostNodeInternal(u32 node, u64 expected_generation) {', 'Result SetHostNode(', 'Result SelectNodeRoom(',
 )) + r'''
 static int central_entries=0;
 static Result Enter(u8,const u8*,size_t,const sockaddr_in*,u8*,const u8*,const DiscoveryRoute*,GameRoute*){central_entries++;return 0;}
@@ -157,10 +175,27 @@ int main(){
  request.locator.bssid[0]=2;request.locator.network_id[16]=9;put64(request.locator.network_id,43);strcpy(request.locator.code,"ABC234");
  assert(SelectNodeRoom(request)==ResultRelayFailed()&&g_node_endpoints[3].sin_addr.s_addr==original.sin_addr.s_addr);
  lanplay::probe_hook=nullptr;g_direct_session=false;resolved_extra=0;cases++;
+ // The directory can change while the probe is in flight. Never commit the old
+ // address with the new identity, and preserve the previously selected route.
+ const auto prior_node=GetHostNode();const auto prior_endpoint=g_node_endpoints[3];
+ lanplay::probe_hook=+[]{shared_pin[3]=9;};
+ assert(SetHostNode(13)==ResultRelayFailed()&&GetHostNode()==prior_node);
+ assert(g_node_endpoints[3].sin_addr.s_addr==prior_endpoint.sin_addr.s_addr);
+ assert(!g_node_endpoints[13].sin_addr.s_addr);
+ lanplay::probe_hook=nullptr;shared_pin[3]=8;cases++;
  // Self/original-public rows keep the established selector, not LAN Play synthetic codes.
  request={};request.node_id=0;request.game_id=42;strcpy(request.locator.code,"ABC234");assert(SelectNodeRoom(request)==0&&gateway_joins==1);
  request.node_id=1;assert(SelectNodeRoom(request)==0&&gateway_joins==2);cases++;
  g_relay_region=RelayRegionEurope;assert(GetHostNode()==NODE_ID_INVALID);cases++;
+ // Shared discovery pins an authorized room to the exact endpoint seen by the directory.
+ request={};request.node_id=13;request.game_id=52;request.locator.flavor=NodeFlavorStandard;
+ request.locator.host_ip=LanPlayNet|0x5678;request.locator.bssid[0]=2;request.locator.network_id[16]=9;
+ put64(request.locator.network_id,52);strcpy(request.locator.code,"ABC234");
+ request.locator.reserved[0]=8;request.locator.reserved[1]=8;request.locator.reserved[2]=8;request.locator.reserved[3]=8;
+ trusted=request;assert(SelectNodeRoom(request)==0);
+ assert(CaptureGameRoute(&captured)&&captured.discovery.node_id==13&&captured.discovery.ipv4==htonl(0x08080808));
+ assert(FindDirectNodeGroups(captured.discovery,nullptr,found,nullptr)==1&&lanplay::target.ipv4==htonl(0x08080808));
+ request.locator.reserved[3]=9;assert(SelectNodeRoom(request)!=0);cases++;
  printf("PASS native public-node entry points: %u cases; direct route pinning, raw identity, lifecycle, stale routes and legacy selector\n",cases);
 }
 '''

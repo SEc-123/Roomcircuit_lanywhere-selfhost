@@ -48,7 +48,7 @@ static int simulated_lookup(const char *host, const char *service,
 #undef getaddrinfo
 static void *lookup(void *unused) {
     (void)unused;
-    assert(open_node("example.invalid", 1, NodeProbeUdp, node_probe_now_ms() + 30000, &stopped, &guard) == -1);
+    assert(open_node("example.invalid", 1, NodeProbeUdp, node_probe_now_ms() + 30000, &stopped, &guard, false) == -1);
     atomic_store(&finished, true);
     return NULL;
 }

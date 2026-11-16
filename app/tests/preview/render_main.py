@@ -16,7 +16,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent.parent / 'source'
-FUNCTIONS = ['tr_error', 'button_mask', 'add_zone', 'draw_language_control', 'touch_action_at', 'show_matching', 'external_room_expired', 'supports_reserved', 'is_self_network', 'can_enter_game_password', 'room_password_allows_launch', 'match_state_text', 'list_error_title', 'status_pill', 'seats',
+FUNCTIONS = ['tr_error', 'button_mask', 'add_zone', 'draw_language_control', 'touch_action_at', 'hosting_node_label', 'show_matching', 'external_room_expired', 'supports_reserved', 'is_self_network', 'can_enter_game_password', 'room_password_allows_launch', 'match_state_text', 'list_error_title', 'status_pill', 'seats',
              'local_game_info', 'room_catalog_match', 'game_info_has_lcid', 'room_title', 'direct_host_title', 'display_game_icon', 'room_title_note', 'provider_label', 'region_label', 'group_card', 'draw_room_password_panel', 'matching_column', 'network_offline_hint', 'list_error_hint', 'groups_column', 'can_change_visibility', 'can_change_provider', 'can_change_host_region', 'current_host_line_available', 'is_self_room_context', 'can_share_game_password', 'provider_column', 'private_column',
              'appointment_entry_available', 'lobby_guide_available', 'side_column', 'room_board_available', 'room_board_games',
              'draw_brand', 'draw_update_action', 'board_game_title', 'board_room_node', 'board_room_region', 'draw_room_board', 'draw_board_header', 'draw_password_visibility', 'draw_update_entry', 'draw_appointments_link', 'draw', 'draw_no_service']
@@ -69,7 +69,11 @@ def main():
                         if line.startswith('#define ') and line.split()[1].startswith(prefixes))
     host_predicates = ['has_direct_host', 'owns_direct_room', 'has_pinned_direct_room']
     extracted = '\n\n'.join(function(main_source, name) for name in host_predicates + FUNCTIONS)
-    node_labels = '\n\n'.join(function(node_source, name) for name in ('nodes_ui_name', 'nodes_ui_region', 'nodes_ui_country'))
+    node_labels = """static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || id == 13; }
+static const char *nodes_ui_provider(uint32_t id) { return id == 13 ? "custom-13" : LanywhereNodes[id].provider; }
+static uint8_t nodes_ui_region_for(uint32_t id) { return id == 13 ? NodeRegionEurope : id < NODE_CATALOG_COUNT ? LanywhereNodes[id].region : NodeRegionUnknown; }
+static const char *nodes_ui_name(uint32_t id) { if (id == 13) return "Russia"; if (id == 0) return ui_text("Main server"); return id < NODE_CATALOG_COUNT ? (ui_chinese() ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en) : ui_text("Unknown node"); }
+""" + '\n\n'.join(function(node_source, name) for name in ('nodes_ui_region', 'nodes_ui_country'))
     source = '''#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -102,6 +106,7 @@ static GameInfo sample_games[2];
 static const char *output_path;
 static unsigned failures;
 static bool sample_update_available;
+bool roomcircuit_storage_available(void) { return true; }
 static bool update_ui_available(void) { return sample_update_available; }
 static const char *update_ui_app_version(void) { return "0.8.8"; }
 static const char *update_ui_button_label(bool available) { return ui_text(available ? "Update available" : "Check updates"); }

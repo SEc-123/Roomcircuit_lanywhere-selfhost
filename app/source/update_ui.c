@@ -248,6 +248,7 @@ static bool start_worker(bool install)
 static bool running_version_matches(const char *version)
 {
     if (strcmp(version, LANYWHERE_APP_VERSION)) return false;
+    if (!roomcircuit_storage_available()) return false;
     Service module;
     if (R_FAILED(smGetService(&module, "lanywhr"))) return false;
     char runtime[16] = {0};
@@ -262,7 +263,11 @@ bool update_ui_initialize(const char *running_path)
 {
     mutexInit(&lock);
     initialized = true;
-    canonical_path = running_path && (!strcmp(running_path, "sdmc:/switch/lanywhere.nro") || !strcmp(running_path, "/switch/lanywhere.nro"));
+    const bool renamed_path = running_path && (!strcmp(running_path, "sdmc:/switch/RoomCircuit/RoomCircuit.nro") ||
+        !strcmp(running_path, "/switch/RoomCircuit/RoomCircuit.nro"));
+    const bool legacy_path = running_path && (!strcmp(running_path, "sdmc:/switch/lanywhere.nro") ||
+        !strcmp(running_path, "/switch/lanywhere.nro"));
+    canonical_path = renamed_path || legacy_path;
     UpdateResult recovered = UPDATE_OK;
     if (game_closed()) {
         recovered = update_recover(UpdateRoot);
@@ -273,8 +278,26 @@ bool update_ui_initialize(const char *running_path)
     if (recovered == UPDATE_INSTALLED || recovered == UPDATE_RECOVERED) {
         char version[32];
         const UpdateResult pending = update_pending_version(UpdateRoot, version);
+        if (pending == UPDATE_INSTALLED) {
+            const UpdateResult bridge = update_promote_renamed(UpdateRoot, renamed_path);
+            if (bridge != UPDATE_OK) {
+                const char *error = bridge == UPDATE_RENAMED_APP_CONFLICT ?
+                    "Move conflicting switch/RoomCircuit/RoomCircuit.nro, then retry." :
+                    bridge == UPDATE_RENAMED_OVERLAY_CONFLICT ?
+                    "Move conflicting switch/.overlays/RoomCircuit.ovl, then retry." : core_error(bridge);
+                set_state(UpdateRecoveryBlocked, error);
+                return true;
+            }
+        }
         if ((pending == UPDATE_INSTALLED || pending == UPDATE_RECOVERED) && running_version_matches(version) &&
             update_acknowledge(UpdateRoot) == UPDATE_OK) {
+            /* A new module must re-open storage after the old v1 journal was
+             * acknowledged. Also return to the renamed app entry. */
+            if (legacy_path && pending == UPDATE_INSTALLED) {
+                must_exit = true;
+                set_state(UpdateRestart, NULL);
+                return true;
+            }
             state.screen = UpdateChecking;
         } else {
             rollback_pending = recovered == UPDATE_RECOVERED && pending == UPDATE_RECOVERED &&
@@ -286,6 +309,11 @@ bool update_ui_initialize(const char *running_path)
     } else if (recovered != UPDATE_OK) {
         set_state(UpdateRecoveryBlocked, "Update recovery needs the complete SD package.");
         return true;
+    }
+    if (renamed_path && running_version_matches(LANYWHERE_APP_VERSION)) {
+        update_finish_legacy_cleanup(UpdateRoot);
+        update_record_renamed_ownership(UpdateRoot, LANYWHERE_APP_VERSION);
+        update_cleanup_known_legacy(UpdateRoot, LANYWHERE_APP_VERSION);
     }
     start_worker(false);
     return false;
@@ -416,8 +444,10 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
         if (down & HidNpadButton_StickR) {
             const bool chinese = !ui_chinese();
             ui_set_language(chinese, false);
-            (void)mkdir("sdmc:/lanywhere", 0777);
-            language_save_failed = !ui_locale_save(UI_LOCALE_PATH, chinese);
+            if (roomcircuit_storage_available()) {
+                (void)mkdir(RELAY_CONFIG_DIR, 0777);
+                language_save_failed = !ui_locale_save(UI_LOCALE_PATH, chinese);
+            } else language_save_failed = true;
             dirty = true;
         }
         if ((down & (HidNpadButton_B | HidNpadButton_Plus)) && view.screen != UpdateInstalling) {

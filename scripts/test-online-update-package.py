@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the update packager with isolated keys, exact file map and malformed inputs."""
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -30,6 +31,7 @@ def main():
         root = Path(temporary)
         (root / 'scripts').mkdir(); (root / 'common').mkdir()
         shutil.copy2(ROOT / 'scripts/make-online-update.py', root / 'scripts/make-online-update.py')
+        shutil.copy2(ROOT / 'scripts/sign-entrypoints.py', root / 'scripts/sign-entrypoints.py')
         shutil.copy2(ROOT / 'common/update_format.h', root / 'common/update_format.h')
         (root / 'package.json').write_text('{"version":"0.7.1"}')
         key = root / 'test-key.pem'
@@ -72,6 +74,46 @@ process.stdout.write(keys.publicKey.export({type:'spki',format:'der'}).subarray(
             assert actual == index and data == files[name] and digest == hashlib.sha256(data).digest()
             offset += 40 + size
         assert offset == len(raw)
+        # 0.8.9 and earlier decode these IDs using the original destination
+        # table. The renamed SD layout must produce byte-identical v1 payloads.
+        spec = importlib.util.spec_from_file_location('update_packager', root / 'scripts/make-online-update.py')
+        packager = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(packager)
+        renamed = {packager.sd_path_for_update_destination(name): data for name, data in files.items()}
+        assert len(renamed) == len(files)
+        write_zip(renamed)
+        assert run() == result
+        signed = root / 'signed.zip'
+        signer = ['python3', root / 'scripts/sign-entrypoints.py', '--sd-zip', archive, '--output', signed,
+                  '--key', key, '--version', '0.7.1']
+        subprocess.run(signer, check=True, capture_output=True)
+        assert subprocess.run(signer, capture_output=True).returncode != 0  # never overwrite output
+        with zipfile.ZipFile(signed) as z:
+            signed_files = {name: z.read(name) for name in z.namelist()}
+        proof = signed_files[packager.ENTRYPOINT_PROOF]
+        assert len(proof) == 156 and proof[:4] == b'RCI1'
+        assert proof[4:20] == b'0.7.1'.ljust(16, b'\0')
+        assert struct.unpack_from('<I', proof, 20)[0] == len(signed_files[packager.ENTRYPOINT_APP])
+        assert proof[24:56] == hashlib.sha256(signed_files[packager.ENTRYPOINT_APP]).digest()
+        assert struct.unpack_from('<I', proof, 56)[0] == len(signed_files[packager.ENTRYPOINT_OVERLAY])
+        assert proof[60:92] == hashlib.sha256(signed_files[packager.ENTRYPOINT_OVERLAY]).digest()
+        write_zip(signed_files)
+        assert run() == result  # detached record must not change legacy 22-ID OTA bytes
+        bad = dict(signed_files); bad[packager.ENTRYPOINT_PROOF] = proof[:-1] + bytes([proof[-1] ^ 1]); write_zip(bad)
+        assert 'Invalid entrypoint signature' in run(False)
+        bad = dict(signed_files); bad[packager.ENTRYPOINT_APP] += b'x'; write_zip(bad)
+        assert 'does not match' in run(False)
+        bad = dict(signed_files); bad[packager.ENTRYPOINT_OVERLAY] += b'x'; write_zip(bad)
+        assert 'does not match' in run(False)
+        bad = dict(signed_files); bad[packager.ENTRYPOINT_PROOF] = proof[:9] + b'x' + proof[10:]; write_zip(bad)
+        assert 'Invalid signed entrypoint record' in run(False)
+        bad = dict(files); bad[packager.ENTRYPOINT_PROOF] = proof; write_zip(bad)
+        assert 'renamed SD layout' in run(False)
+        mixed = dict(renamed)
+        mixed['switch/lanywhere.nro'] = mixed.pop('switch/RoomCircuit/RoomCircuit.nro')
+        write_zip(mixed)
+        assert 'Unexpected path' in run(False)
+        write_zip(files)
         verify = '''const fs=require('fs'),crypto=require('crypto');const m=fs.readFileSync(process.argv[1]);
 const key=crypto.createPublicKey({key:Buffer.from('302a300506032b6570032100'+process.argv[2],'hex'),format:'der',type:'spki'});
 if(!crypto.verify(null,m.subarray(0,448),key,m.subarray(448)))process.exit(1);'''

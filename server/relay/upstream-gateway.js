@@ -504,6 +504,7 @@ function create({ providers = [], send: sendFront, sendUdp, isLocalToken = () =>
 
             function finish(result) {
                 if (front.destroyed) return;
+                if (result) result.upstreamAddress = routes.get(front)?.lease?.upstreamAddress || null;
                 front.destroyed = true;
                 clearTimeout(timeout);
                 onClose(front);

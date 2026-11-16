@@ -25,6 +25,8 @@ PATHS = {
     'stats.json': (STATE_DIR / 'stats.json', 16 * 1024 * 1024),
     'games.json': (STATE_DIR / 'games.json', 2 * 1024 * 1024),
     'appointments.json': (STATE_DIR / 'appointments.json', 2 * 1024 * 1024),
+    'custom-node-identities.json': (STATE_DIR / 'custom-node-identities.json', 16384),
+    'custom-nodes.json': (Path('/var/lib/switch-online/custom-nodes.json'), 16384),
 }
 MAX_TAR_BYTES = sum(limit for _, limit in PATHS.values()) + 65536
 MAX_ARCHIVE_BYTES = MAX_TAR_BYTES + 65536
@@ -118,6 +120,16 @@ def validate(entries):
             names = parse_json(name, data)
             if any(not re.fullmatch(r'[0-9A-Fa-f]{16}', key) or not isinstance(name, str) for key, name in names.items()):
                 raise ValueError('Invalid games.json title mapping')
+        elif name == 'custom-node-identities.json':
+            ledger = parse_json(name, data)
+            if len(ledger) > 11 or any(not re.fullmatch(r'1[3-9]|2[0-3]', key) or
+                                       not isinstance(value, str) or len(value) > 133
+                                       for key, value in ledger.items()):
+                raise ValueError('Invalid custom node identity ledger')
+        elif name == 'custom-nodes.json':
+            registry = parse_json(name, data)
+            if registry.get('version') != 1 or not isinstance(registry.get('nodes'), list) or len(registry['nodes']) > 11:
+                raise ValueError('Invalid custom node registry')
         elif name == 'appointments.json':
             parse_json(name, data)
             module = Path(__file__).resolve().parent.parent / 'server/relay/appointments.js'
@@ -226,6 +238,11 @@ def restore(archive):
         for name, content in entries.items():
             path, limit = PATHS[name]
             previous = read_optional(path, limit)
+            if name == 'custom-node-identities.json' and previous is not None:
+                current = parse_json(name, previous)
+                restored = parse_json(name, content)
+                if any(restored.get(key) != value for key, value in current.items()):
+                    raise ValueError('Restore would discard or reuse a custom node identity')
             if name == 'traffic.json' and previous is not None:
                 previous_month, previous_bytes = traffic_counter(previous)
                 month, count = traffic_counter(content)

@@ -19,6 +19,7 @@ code = r'''
 #include <string.h>
 #include <sys/stat.h>
 #define CAPTURE_FLAG "sdmc:/lanywhere/captura.flag"
+#define RELAY_CONFIG_DIR "sdmc:/lanywhere"
 static bool g_capture_pending, png_ok;
 static int occupied, stat_error, saved, removed;
 static int sample_stat(const char *path,struct stat *out) {

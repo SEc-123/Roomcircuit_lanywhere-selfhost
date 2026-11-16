@@ -26,6 +26,12 @@ static bool change_room_during_request, cancel_keyboard;
 static Result keyboard_create_error, keyboard_show_error;
 static u32 write_status, unlock_status;
 
+bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || id == 13; }
+const char *nodes_ui_provider(uint32_t id) {
+    if (id < NODE_CATALOG_COUNT) return LanywhereNodes[id].provider;
+    return id == 13 ? "custom-13" : "";
+}
+
 void mutexInit(Mutex *lock) { lock->locked = false; }
 void mutexLock(Mutex *lock) { assert(!lock->locked); lock->locked = true; }
 void mutexUnlock(Mutex *lock) { assert(lock->locked); lock->locked = false; }
@@ -254,7 +260,16 @@ int main(void)
     assert(room_password_worker_exchange(&g_service) && direct_reads == 2);
     direct.locator.bssid[3]++;
     assert(room_password_tick_direct(&guest, third_party, &direct, false, 5) && !guest.value[0] && guest.pending);
-    assert(room_password_tick(&guest, (LobbyRoomId){0}, false, 6) && !guest.pending && !guest.locked);
+    const LobbyRoomId shared = {.code = "ABCD23", .game_id = UINT64_MAX, .provider = "custom-13"};
+    direct.node_id = 13;
+    assert(room_password_tick_direct(&guest, shared, &direct, false, 6) && guest.pending);
+    assert(room_password_worker_exchange(&g_service) && direct_reads == 3);
+    assert(room_password_tick_direct(&guest, shared, &direct, false, 7) && !strcmp(guest.value, "p-test"));
+    assert(room_password_tick_direct(&guest, shared, &direct, true, 8) && guest.locked && !guest.value[0]);
+    assert(!room_password_worker_exchange(&g_service));
+    direct.node_id = 14; /* Unpublished or mismatched source is rejected. */
+    assert(room_password_tick_direct(&guest, shared, &direct, false, 9) && !guest.room.game_id);
+    assert(!room_password_tick(&guest, (LobbyRoomId){0}, false, 10) && !guest.pending && !guest.locked);
     assert(!room_password_worker_exchange(&g_service));
     puts("Room password app IPC: hidden/shared/clear, owner check, unlock and wrong code, stale reply, exact text, and EN/ZH passed.");
 }

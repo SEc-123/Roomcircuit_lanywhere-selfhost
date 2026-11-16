@@ -311,6 +311,311 @@ static bool replace_file(const char *source, const char *target) {
     if (exists && unlink(target) != 0) return false;
     return rename(source, target) == 0;
 }
+static bool verify_installed(const char *, const Journal *, bool);
+
+#define BRIDGE_BYTES (8u + 2u * 72u + 32u)
+static const unsigned BridgeIds[] = {18, 19};
+static const char *const BridgePaths[] = {
+    "switch/.overlays/RoomCircuit.ovl", "switch/RoomCircuit/RoomCircuit.nro"
+};
+typedef struct {
+    uint32_t existed;
+    uint32_t old_size[2], new_size[2];
+    uint8_t old_hash[2][32], new_hash[2][32];
+} BridgeJournal;
+
+static bool bridge_read(const char *root, BridgeJournal *bridge, bool *found) {
+    char path[PATH_MAX]; uint8_t data[BRIDGE_BYTES], hash[32];
+    if (!path_join(path, root, TXN "/bridge-journal") || !regular_or_missing(path, found)) return false;
+    if (!*found) return true;
+    FILE *file = fopen(path, "rb");
+    if (!file) return false;
+    bool valid = fread(data, 1, sizeof(data), file) == sizeof(data) && fgetc(file) == EOF && !ferror(file);
+    if (fclose(file) != 0) valid = false;
+    digest(data, sizeof(data) - 32, hash);
+    if (!valid || memcmp(data, "RCB1", 4) || (read32(data + 4) & ~3u) ||
+        memcmp(hash, data + sizeof(data) - 32, 32)) return false;
+    memset(bridge, 0, sizeof(*bridge)); bridge->existed = read32(data + 4);
+    for (unsigned i = 0; i < 2; i++) {
+        const uint8_t *entry = data + 8 + i * 72;
+        bridge->old_size[i] = read32(entry); bridge->new_size[i] = read32(entry + 36);
+        memcpy(bridge->old_hash[i], entry + 4, 32); memcpy(bridge->new_hash[i], entry + 40, 32);
+        if (bridge->old_size[i] > UPDATE_MAX_RAW || bridge->new_size[i] > UPDATE_MAX_RAW) return false;
+    }
+    return true;
+}
+
+static bool bridge_write(const char *root, const BridgeJournal *bridge) {
+    char path[PATH_MAX], temporary[PATH_MAX]; uint8_t data[BRIDGE_BYTES] = {0}; bool exists;
+    memcpy(data, "RCB1", 4); write32(data + 4, bridge->existed);
+    for (unsigned i = 0; i < 2; i++) {
+        uint8_t *entry = data + 8 + i * 72;
+        write32(entry, bridge->old_size[i]); memcpy(entry + 4, bridge->old_hash[i], 32);
+        write32(entry + 36, bridge->new_size[i]); memcpy(entry + 40, bridge->new_hash[i], 32);
+    }
+    digest(data, sizeof(data) - 32, data + sizeof(data) - 32);
+    return path_join(path, root, TXN "/bridge-journal") && regular_or_missing(path, &exists) && !exists &&
+        path_join(temporary, root, TXN "/bridge-next") && write_file(temporary, data, sizeof(data)) &&
+        rename(temporary, path) == 0 && durable_directory(root);
+}
+
+static bool bridge_owned_matches(const char *, unsigned, const char *);
+
+void update_cleanup_known_legacy(const char *root, const char *running_version) {
+    static const char *const known[][2] = {
+        {"d790c402913722416035a1301b377ba7c536245841f1e5db8474bcc78cb27353",
+         "3da726244db569249b6124d764f1475597dbe862b46692a0b076bccac177b1b2"},
+        {"b10f15d239e94f9eeb07f24c9a4e215509d305154752181d411693effd62e62c",
+         "0ac3a59e5edfae6da0b2fde7206fe41196bcf9dd625e47431b598c620ee59c99"},
+    };
+    if (!root || !running_version || atomic_flag_test_and_set(&updater_busy)) return;
+    bool changed = false;
+    for (unsigned i = 0; i < 2; i++) {
+        char target[PATH_MAX], legacy[PATH_MAX]; uint8_t actual[32]; uint32_t size;
+        if (!safe_parent(root, BridgePaths[i], false) || !path_join(target, root, BridgePaths[i]) ||
+            !bridge_owned_matches(root, i, target) ||
+            !safe_parent(root, LanywhereUpdateFiles[BridgeIds[i]], false) ||
+            !path_join(legacy, root, LanywhereUpdateFiles[BridgeIds[i]]) ||
+            !file_digest(legacy, &size, actual)) continue;
+        char hex[65];
+        for (unsigned n = 0; n < 32; n++) snprintf(hex + 2 * n, 3, "%02x", actual[n]);
+        for (unsigned version = 0; version < 2; version++) {
+            if (!strcmp(hex, known[i][version])) {
+                if (unlink(legacy) == 0) changed = true;
+                break;
+            }
+        }
+    }
+    if (changed) (void)durable_directory(root);
+    atomic_flag_clear(&updater_busy);
+}
+
+
+#define BRIDGE_CLEANUP_BYTES (4u + 2u * 36u + 32u)
+#define BRIDGE_CLEANUP "switch/RoomCircuit/.legacy-cleanup-v1"
+#define BRIDGE_CLEANUP_NEXT "switch/RoomCircuit/.legacy-cleanup-next"
+
+/* Kept outside the v1 transaction, so a power loss after the old journal is
+ * removed cannot lose the hashes that authorize entrypoint cleanup. */
+static bool bridge_cleanup_record(const char *root, const BridgeJournal *bridge) {
+    char target[PATH_MAX], next[PATH_MAX]; bool exists;
+    uint8_t data[BRIDGE_CLEANUP_BYTES] = {0};
+    memcpy(data, "RCC1", 4);
+    for (unsigned i = 0; i < 2; i++) {
+        write32(data + 4 + i * 36, bridge->new_size[i]);
+        memcpy(data + 8 + i * 36, bridge->new_hash[i], 32);
+    }
+    digest(data, sizeof(data) - 32, data + sizeof(data) - 32);
+    if (!safe_parent(root, BRIDGE_CLEANUP, true) || !path_join(target, root, BRIDGE_CLEANUP) ||
+        !regular_or_missing(target, &exists)) return false;
+    if (exists) {
+        uint8_t hash[32]; digest(data, sizeof(data), hash);
+        return matches_file(target, sizeof(data), hash);
+    }
+    return path_join(next, root, BRIDGE_CLEANUP_NEXT) && write_file(next, data, sizeof(data)) &&
+        rename(next, target) == 0 && durable_directory(root);
+}
+
+static bool bridge_write_owner(const char *, const uint8_t [BRIDGE_CLEANUP_BYTES]);
+
+static void bridge_finish_cleanup(const char *root) {
+    char marker[PATH_MAX]; bool found;
+    if (!safe_parent(root, BRIDGE_CLEANUP, false) || !path_join(marker, root, BRIDGE_CLEANUP) ||
+        !regular_or_missing(marker, &found) || !found) return;
+    uint8_t data[BRIDGE_CLEANUP_BYTES], hash[32];
+    FILE *file = fopen(marker, "rb"); if (!file) return;
+    bool valid = fread(data, 1, sizeof(data), file) == sizeof(data) && fgetc(file) == EOF && !ferror(file);
+    if (fclose(file) != 0) valid = false;
+    digest(data, sizeof(data) - 32, hash);
+    if (!valid || memcmp(data, "RCC1", 4) || memcmp(hash, data + sizeof(data) - 32, 32)) return;
+    bool complete = true;
+    for (unsigned i = 0; i < 2; i++) {
+        char target[PATH_MAX], legacy[PATH_MAX]; bool exists;
+        const unsigned id = BridgeIds[i]; const uint32_t size = read32(data + 4 + i * 36);
+        const uint8_t *expected = data + 8 + i * 36;
+        if (size > UPDATE_MAX_RAW || !safe_parent(root, BridgePaths[i], false) ||
+            !path_join(target, root, BridgePaths[i]) || !matches_file(target, size, expected) ||
+            !safe_parent(root, LanywhereUpdateFiles[id], false) || !path_join(legacy, root, LanywhereUpdateFiles[id]) ||
+            !regular_or_missing(legacy, &exists)) { complete = false; continue; }
+        if (exists && (!matches_file(legacy, size, expected) || unlink(legacy) != 0)) complete = false;
+    }
+    if (complete && durable_directory(root) && bridge_write_owner(root, data) && unlink(marker) == 0)
+        (void)durable_directory(root);
+}
+
+void update_finish_legacy_cleanup(const char *root) {
+    if (!root || atomic_flag_test_and_set(&updater_busy)) return;
+    bridge_finish_cleanup(root);
+    atomic_flag_clear(&updater_busy);
+}
+
+
+#define BRIDGE_OWNER "switch/RoomCircuit/.entrypoints-owned-v1"
+#define BRIDGE_OWNER_NEXT "switch/RoomCircuit/.entrypoints-owned-next"
+#define BRIDGE_OWNER_PREVIOUS "switch/RoomCircuit/.entrypoints-owned-previous"
+
+static bool bridge_valid_owner(const char *path) {
+    uint8_t owner[BRIDGE_CLEANUP_BYTES] = {0}, hash[32];
+    FILE *file = fopen(path, "rb"); if (!file) return false;
+    bool valid = fread(owner, 1, sizeof(owner), file) == sizeof(owner) && fgetc(file) == EOF && !ferror(file);
+    if (fclose(file) != 0) valid = false;
+    digest(owner, sizeof(owner) - 32, hash);
+    return valid && !memcmp(owner, "RCO1", 4) && !memcmp(hash, owner + sizeof(owner) - 32, 32);
+}
+
+/* FAT rename cannot replace a file. Keep the old marker until the new marker
+ * is committed; a reboot between unlink and rename restores the old marker. */
+static bool bridge_recover_owner(const char *root) {
+    char target[PATH_MAX], previous[PATH_MAX], next[PATH_MAX]; bool target_exists, previous_exists;
+    if (!safe_parent(root, BRIDGE_OWNER, false) || !path_join(target, root, BRIDGE_OWNER) ||
+        !path_join(previous, root, BRIDGE_OWNER_PREVIOUS) || !path_join(next, root, BRIDGE_OWNER_NEXT) ||
+        !regular_or_missing(target, &target_exists) || !regular_or_missing(previous, &previous_exists)) return false;
+    if (!previous_exists) return true;
+    /* A power cut during the backup copy can leave it partial, but the
+     * committed original is still authoritative and must be retained. */
+    if (target_exists && bridge_valid_owner(target))
+        return durable_directory(root) && unlink(previous) == 0 && durable_directory(root);
+    if (!bridge_valid_owner(previous)) return false;
+    if (!target_exists)
+        return copy_file(previous, next) && rename(next, target) == 0 && durable_directory(root) &&
+            unlink(previous) == 0 && durable_directory(root);
+    return false;
+}
+
+static bool bridge_write_owner(const char *root, const uint8_t cleanup[BRIDGE_CLEANUP_BYTES]) {
+    char target[PATH_MAX], next[PATH_MAX], previous[PATH_MAX]; bool exists, previous_exists;
+    uint8_t owner[BRIDGE_CLEANUP_BYTES];
+    if (!safe_parent(root, BRIDGE_OWNER, true) || !path_join(target, root, BRIDGE_OWNER) ||
+        !path_join(next, root, BRIDGE_OWNER_NEXT) || !path_join(previous, root, BRIDGE_OWNER_PREVIOUS) ||
+        !bridge_recover_owner(root) || !regular_or_missing(target, &exists) ||
+        !regular_or_missing(previous, &previous_exists) || previous_exists) return false;
+    memcpy(owner, cleanup, sizeof(owner)); memcpy(owner, "RCO1", 4);
+    digest(owner, sizeof(owner) - 32, owner + sizeof(owner) - 32);
+    if (!write_file(next, owner, sizeof(owner))) return false;
+    if (exists) {
+        if (!bridge_valid_owner(target) || !copy_file(target, previous) || !bridge_valid_owner(previous) ||
+            !durable_directory(root)) return false;
+    }
+    if (!replace_file(next, target)) {
+        (void)bridge_recover_owner(root);
+        return false;
+    }
+    if (!durable_directory(root)) return false; // Keep the backup until a later successful commit.
+    return bridge_recover_owner(root);
+}
+
+static bool bridge_owned_matches(const char *root, unsigned index, const char *target) {
+    char owner_path[PATH_MAX]; bool exists; uint8_t owner[BRIDGE_CLEANUP_BYTES], hash[32];
+    if (index >= 2 || !bridge_recover_owner(root) || !safe_parent(root, BRIDGE_OWNER, false) || !path_join(owner_path, root, BRIDGE_OWNER) ||
+        !regular_or_missing(owner_path, &exists) || !exists) return false;
+    FILE *file = fopen(owner_path, "rb"); if (!file) return false;
+    bool valid = fread(owner, 1, sizeof(owner), file) == sizeof(owner) && fgetc(file) == EOF && !ferror(file);
+    if (fclose(file) != 0) valid = false;
+    digest(owner, sizeof(owner) - 32, hash);
+    const uint32_t size = read32(owner + 4 + index * 36);
+    return valid && !memcmp(owner, "RCO1", 4) && !memcmp(hash, owner + sizeof(owner) - 32, 32) &&
+        size <= UPDATE_MAX_RAW && matches_file(target, size, owner + 8 + index * 36);
+}
+
+void update_record_renamed_ownership(const char *root, const char *version) {
+    if (!root || !version || atomic_flag_test_and_set(&updater_busy)) return;
+    char owner_path[PATH_MAX], signed_path[PATH_MAX]; bool exists;
+    if (!bridge_recover_owner(root) || !safe_parent(root, BRIDGE_OWNER, false) || !path_join(owner_path, root, BRIDGE_OWNER) ||
+        !regular_or_missing(owner_path, &exists) ||
+        !safe_parent(root, "switch/RoomCircuit/.entrypoints-signed", false) ||
+        !path_join(signed_path, root, "switch/RoomCircuit/.entrypoints-signed") ||
+        !regular_or_missing(signed_path, &exists) || !exists) goto done;
+    uint8_t signed_record[156]; FILE *file = fopen(signed_path, "rb");
+    if (!file) goto done;
+    bool valid = fread(signed_record, 1, sizeof(signed_record), file) == sizeof(signed_record) &&
+        fgetc(file) == EOF && !ferror(file);
+    if (fclose(file) != 0) valid = false;
+    if (!valid || memcmp(signed_record, "RCI1", 4) || !display_text(signed_record + 4, 16) ||
+        strcmp((const char *)signed_record + 4, version) || !update_crypto_ready() ||
+        crypto_sign_verify_detached(signed_record + 92, signed_record, 92, UPDATE_VERIFY_PUBLIC_KEY) != 0) goto done;
+    uint8_t cleanup[BRIDGE_CLEANUP_BYTES] = {0}; memcpy(cleanup, "RCC1", 4);
+    bool already_owned = true;
+    for (unsigned i = 0; i < 2; i++) {
+        // Signed layout is app first, overlay second; bridge IDs are reversed.
+        const unsigned source = 1 - i; const uint8_t *entry = signed_record + 20 + source * 36;
+        const uint32_t size = read32(entry); char target[PATH_MAX];
+        if (!size || size > UPDATE_MAX_RAW || !safe_parent(root, BridgePaths[i], false) ||
+            !path_join(target, root, BridgePaths[i]) || !matches_file(target, size, entry + 4)) goto done;
+        if (!bridge_owned_matches(root, i, target)) already_owned = false;
+        write32(cleanup + 4 + i * 36, size); memcpy(cleanup + 8 + i * 36, entry + 4, 32);
+    }
+    digest(cleanup, sizeof(cleanup) - 32, cleanup + sizeof(cleanup) - 32);
+    if (!already_owned) (void)bridge_write_owner(root, cleanup);
+done:
+    atomic_flag_clear(&updater_busy);
+}
+
+static bool bridge_restore(const char *root) {
+    BridgeJournal bridge; bool found;
+    if (!bridge_read(root, &bridge, &found)) return false;
+    if (!found) return true;
+    for (unsigned i = 0; i < 2; i++) {
+        char target[PATH_MAX], backup[PATH_MAX], stage[PATH_MAX]; bool exists;
+        if (!safe_parent(root, BridgePaths[i], false) || !path_join(target, root, BridgePaths[i]) ||
+            !transaction_path(backup, root, "bridge-old", i) ||
+            !transaction_path(stage, root, "bridge-copy", i) || !regular_or_missing(target, &exists)) return false;
+        if (exists && !matches_file(target, bridge.new_size[i], bridge.new_hash[i]) &&
+            (!(bridge.existed & (1u << i)) || !matches_file(target, bridge.old_size[i], bridge.old_hash[i]))) return false;
+        if (bridge.existed & (1u << i)) {
+            if (!matches_file(backup, bridge.old_size[i], bridge.old_hash[i]) ||
+                !copy_file(backup, stage) || !matches_file(stage, bridge.old_size[i], bridge.old_hash[i]) ||
+                !replace_file(stage, target)) return false;
+        } else if (exists && unlink(target) != 0) return false;
+        if (!durable_directory(root)) return false;
+    }
+    return true;
+}
+
+UpdateResult update_promote_renamed(const char *root, bool allow_existing) {
+    (void)allow_existing; // Ownership, never the filename or calling path, authorizes replacement.
+    if (atomic_flag_test_and_set(&updater_busy)) return UPDATE_RECOVERY_REQUIRED;
+    UpdateResult result = UPDATE_RECOVERY_REQUIRED;
+    Journal journal; BridgeJournal bridge; bool found, has_bridge;
+    if (!safe_parent(root, TXN "/journal", false) || !journal_read(root, &journal, &found) || !found || journal.phase != COMMITTED ||
+        !verify_installed(root, &journal, false) || !bridge_read(root, &bridge, &has_bridge)) goto done;
+    if (!has_bridge) {
+        memset(&bridge, 0, sizeof(bridge));
+        for (unsigned i = 0; i < 2; i++) {
+            char target[PATH_MAX], backup[PATH_MAX]; bool exists;
+            if (!safe_parent(root, BridgePaths[i], true) || !path_join(target, root, BridgePaths[i]) ||
+                !regular_or_missing(target, &exists) || !transaction_path(backup, root, "bridge-old", i)) goto done;
+            bridge.new_size[i] = journal.new_size[BridgeIds[i]];
+            memcpy(bridge.new_hash[i], journal.new_hash[BridgeIds[i]], 32);
+            if (exists) {
+                if (!matches_file(target, bridge.new_size[i], bridge.new_hash[i]) &&
+                    !bridge_owned_matches(root, i, target)) {
+                    result = i == 0 ? UPDATE_RENAMED_OVERLAY_CONFLICT : UPDATE_RENAMED_APP_CONFLICT; goto done;
+                }
+                bridge.existed |= 1u << i;
+                if (!file_digest(target, &bridge.old_size[i], bridge.old_hash[i]) ||
+                    !copy_file(target, backup) || !matches_file(backup, bridge.old_size[i], bridge.old_hash[i])) goto done;
+            }
+        }
+        if (!durable_directory(root) || !bridge_write(root, &bridge)) goto done;
+    }
+    for (unsigned i = 0; i < 2; i++) {
+        const unsigned id = BridgeIds[i]; char target[PATH_MAX], original[PATH_MAX], stage[PATH_MAX]; bool exists;
+        if (bridge.new_size[i] != journal.new_size[id] || memcmp(bridge.new_hash[i], journal.new_hash[id], 32) ||
+            !safe_parent(root, BridgePaths[i], false) || !path_join(target, root, BridgePaths[i]) ||
+            !path_join(original, root, LanywhereUpdateFiles[id]) ||
+            !transaction_path(stage, root, "bridge-copy", i) || !regular_or_missing(target, &exists)) goto done;
+        if (exists && matches_file(target, bridge.new_size[i], bridge.new_hash[i])) continue;
+        if (exists && (!(bridge.existed & (1u << i)) || !matches_file(target, bridge.old_size[i], bridge.old_hash[i]))) goto done;
+        if (!copy_file(original, stage) || !matches_file(stage, bridge.new_size[i], bridge.new_hash[i]) ||
+            !replace_file(stage, target) || !durable_directory(root) ||
+            !matches_file(target, bridge.new_size[i], bridge.new_hash[i])) goto done;
+    }
+    result = UPDATE_OK;
+done:
+    atomic_flag_clear(&updater_busy);
+    return result;
+}
+
 static bool cleanup_recovery_app(const char *root) {
     char marker_path[PATH_MAX], app_path[PATH_MAX]; bool exists;
     if (!path_join(marker_path, root, TXN "/recovery-owned") || !regular_or_missing(marker_path, &exists)) return false;
@@ -334,7 +639,8 @@ static bool cleanup_transaction(const char *root) {
             if (exists && unlink(path) != 0) return false;
         }
     }
-    const char *leaves[] = {"restore", "journal-next", "committed", "rolled-back", "recovery-next"};
+    const char *leaves[] = {"restore", "journal-next", "committed", "rolled-back", "recovery-next",
+        "bridge-journal", "bridge-next", "bridge-old-00", "bridge-old-01", "bridge-copy-00", "bridge-copy-01"};
     for (unsigned i = 0; i < sizeof(leaves) / sizeof(leaves[0]); i++) {
         char relative[100]; snprintf(relative, sizeof(relative), TXN "/%s", leaves[i]);
         if (!path_join(path, root, relative) || !regular_or_missing(path, &exists)) return false;
@@ -391,6 +697,7 @@ static UpdateResult recover_locked(const char *root) {
     if (!found) return cleanup_transaction(root) ? UPDATE_OK : UPDATE_RECOVERY_REQUIRED;
     if (journal.phase == PREPARED && !rollback(root, &journal)) return UPDATE_RECOVERY_REQUIRED;
     bool old = journal.phase == ROLLED_BACK;
+    if (old && !bridge_restore(root)) return UPDATE_RECOVERY_REQUIRED;
     if (!verify_installed(root, &journal, old)) return UPDATE_RECOVERY_REQUIRED;
     return old ? UPDATE_RECOVERED : UPDATE_INSTALLED;
 }
@@ -433,10 +740,27 @@ UpdateResult update_pending_version(const char *root, char version[32]) {
 }
 UpdateResult update_acknowledge(const char *root) {
     if (atomic_flag_test_and_set(&updater_busy)) return UPDATE_RECOVERY_REQUIRED;
-    Journal journal; bool found; UpdateResult result = UPDATE_RECOVERY_REQUIRED;
+    Journal journal; BridgeJournal bridge; bool found, has_bridge = false; UpdateResult result = UPDATE_RECOVERY_REQUIRED;
     if (safe_parent(root, TXN "/journal", false) && journal_read(root, &journal, &found) && found &&
-        journal.phase != PREPARED && verify_installed(root, &journal, journal.phase == ROLLED_BACK) && cleanup_transaction(root))
-        result = UPDATE_OK;
+        journal.phase != PREPARED && verify_installed(root, &journal, journal.phase == ROLLED_BACK) &&
+        bridge_read(root, &bridge, &has_bridge)) {
+        bool valid = true;
+        if (has_bridge && journal.phase == COMMITTED) {
+            for (unsigned i = 0; i < 2; i++) {
+                char target[PATH_MAX];
+                const unsigned id = BridgeIds[i];
+                if (!path_join(target, root, BridgePaths[i]) || bridge.new_size[i] != journal.new_size[id] ||
+                    memcmp(bridge.new_hash[i], journal.new_hash[id], 32) ||
+                    !matches_file(target, bridge.new_size[i], bridge.new_hash[i])) valid = false;
+            }
+        }
+        if (valid && has_bridge && journal.phase == COMMITTED)
+            valid = bridge_cleanup_record(root, &bridge);
+        if (valid && cleanup_transaction(root)) {
+            result = UPDATE_OK;
+            if (has_bridge && journal.phase == COMMITTED) bridge_finish_cleanup(root);
+        }
+    }
     atomic_flag_clear(&updater_busy); return result;
 }
 

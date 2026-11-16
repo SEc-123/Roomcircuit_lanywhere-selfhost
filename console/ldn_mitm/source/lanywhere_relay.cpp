@@ -7,6 +7,10 @@
  */
 #include "selection_trace.hpp"
 #include "lanywhere_relay.hpp"
+#include "storage_migration.hpp"
+#include "custom_nodes.hpp"
+#include "node_preferences.hpp"
+#include "../../../common/roomcircuit_paths.h"
 #include "appointment_notifier.hpp"
 #include "tcp_stream_proxy.hpp"
 #include "lanplay_direct.hpp"
@@ -44,7 +48,7 @@ namespace ams::mitm::lanywhere {
 
     namespace {
 
-        constexpr const char ConfigPath[] = "sdmc:/lanywhere/config.ini";
+        const char *ConfigPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("config.ini"), RC_CURRENT_PATH("config.ini")); }
 #if RELAY_PROFILE_FIXED
         static_assert(RELAY_PROFILE_PORT > 0 && RELAY_PROFILE_PORT <= 65535);
         constexpr const char ConfigError[] = "Invalid server or network settings";
@@ -53,7 +57,7 @@ namespace ams::mitm::lanywhere {
         constexpr const char ConfigError[] = "Set a valid server IPv4 and port in the LANywhere app";
 #endif
         constexpr s64 MaxConfigSize = 511;
-        constexpr const char LogPath[] = "sdmc:/lanywhere/relay.log";
+        const char *LogPath() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("relay.log"), RC_CURRENT_PATH("relay.log")); }
         constexpr u32 UdpMagic = 0x594E414C;
         constexpr int ConnectTimeoutMs = 5000;
         constexpr int MatchIoTimeoutMs = 900;
@@ -120,7 +124,55 @@ namespace ams::mitm::lanywhere {
         int g_tcp = -1, g_udp = -1;
         sockaddr_in g_server;
         u32 g_host_node = 0;
-        sockaddr_in g_node_endpoints[NODE_CATALOG_COUNT]{};
+        sockaddr_in g_node_endpoints[NODE_TOTAL_CAPACITY]{};
+        NodeDynamicCatalog g_dynamic_nodes{};
+        NodeDynamicEntry g_selected_node{};
+        u32 g_selected_status = NodeHostSelected;
+        constinit os::SdkMutex g_catalog_lock;
+        constinit os::SdkMutex g_catalog_refresh_lock;
+        constinit os::SdkMutex g_catalog_thread_lock;
+        std::atomic<bool> g_catalog_running{false};
+        os::ThreadType g_catalog_thread;
+        alignas(os::MemoryPageSize) u8 g_catalog_stack[0x4000];
+        bool g_catalog_created = false;
+        u64 g_catalog_next_refresh = 0;
+        constinit os::SdkMutex g_restore_lock;
+        std::atomic<bool> g_preference_loaded{false};
+        std::atomic<u64> g_host_preference_generation{1};
+        std::atomic<bool> g_retry_running{false};
+        constinit os::SdkMutex g_retry_lifecycle_lock;
+        bool g_retry_requested = false;
+        os::ThreadType g_retry_thread;
+        alignas(os::MemoryPageSize) u8 g_retry_stack[0x4000];
+        bool g_retry_created = false;
+        Result SetHostNodeInternal(u32 node, u64 expected_generation);
+        void StartPreferenceRetry();
+        bool RefreshDynamicNodes();
+        void RestoreHostPreference();
+        bool LookupNode(u32 node, NodeDynamicEntry *entry);
+        size_t NodeSlot(u32 node) {
+            if (node < NODE_SHARED_CAPACITY) return node;
+            if (node >= NODE_LOCAL_BASE && node < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY)
+                return NODE_SHARED_CAPACITY + (node - NODE_LOCAL_BASE);
+            return NODE_TOTAL_CAPACITY;
+        }
+        bool DirectNodeId(u32 node) { return node >= 2 && NodeSlot(node) < NODE_TOTAL_CAPACITY; }
+        struct VerifiedNodeRoom {
+            NodeRoomSelection selection;
+            NodeDynamicEntry entry;
+            u64 expires_at;
+        };
+        constinit os::SdkMutex g_verified_rooms_lock;
+        VerifiedNodeRoom g_verified_rooms[48]{};
+        u32 g_verified_snapshot = 0;
+        size_t g_verified_next = 0;
+        bool VerifiedSharedRoom(const NodeRoomSelection &selection, NodeDynamicEntry *entry);
+
+        void NodeProvider(u32 node, char out[33]) {
+            if (node < NODE_CATALOG_COUNT) util::Strlcpy(out, LanywhereNodes[node].provider, 33);
+            else if (node < NODE_SHARED_CAPACITY) util::TSNPrintf(out, 33, "custom-%u", node);
+            else util::TSNPrintf(out, 33, "local-%u", node - NODE_LOCAL_BASE);
+        }
         std::atomic<bool> g_direct_session{false};
         GameRoute g_direct_room{};
         struct DirectRegistration {
@@ -185,9 +237,9 @@ namespace ams::mitm::lanywhere {
 #endif
             g_public = true;
             fs::FileHandle file;
-            Result open_result = fs::OpenFile(std::addressof(file), ConfigPath, fs::OpenMode_Read);
+            Result open_result = fs::OpenFile(std::addressof(file), ConfigPath(), fs::OpenMode_Read);
             if (fs::ResultPathNotFound::Includes(open_result))
-                open_result = fs::OpenFile(std::addressof(file), "sdmc:/lanywhere/config.ini.bak", fs::OpenMode_Read);
+                open_result = fs::OpenFile(std::addressof(file), rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("config.ini.bak"), RC_CURRENT_PATH("config.ini.bak")), fs::OpenMode_Read);
             if (R_FAILED(open_result) && !fs::ResultPathNotFound::Includes(open_result)) return false;
             if (R_SUCCEEDED(open_result)) {
                 char text[MaxConfigSize + 1] = {};
@@ -252,14 +304,15 @@ namespace ams::mitm::lanywhere {
         }
 
         bool DirectNodeRoute(const DiscoveryRoute &route) {
-            return route.node_id >= 2 && route.node_id < NODE_CATALOG_COUNT;
+            return DirectNodeId(route.node_id);
         }
 
         bool TrustedNodeEndpointLocked(const DiscoveryRoute &route) {
             if (!DirectNodeRoute(route)) return false;
-            const auto &expected = g_node_endpoints[route.node_id];
+            const auto &expected = g_node_endpoints[NodeSlot(route.node_id)];
+            char provider[33]; NodeProvider(route.node_id, provider);
             return expected.sin_addr.s_addr && expected.sin_addr.s_addr == route.ipv4 && expected.sin_port == route.port &&
-                !std::strcmp(route.provider, LanywhereNodes[route.node_id].provider);
+                !std::strcmp(route.provider, provider);
         }
 
         struct NodeDnsWatch {
@@ -286,16 +339,25 @@ namespace ams::mitm::lanywhere {
         }
 
         bool ResolveNodeEndpoint(u32 node, sockaddr_in *out, selection_trace::Handle trace = 0) {
-            if (node >= NODE_CATALOG_COUNT || !out) return false;
+            if (NodeSlot(node) >= NODE_TOTAL_CAPACITY || !out) return false;
             if (node == 0) { std::scoped_lock lock(g_lock); return LoadServer(out); }
             if (node == 1) return CommunityEndpoint(out);
             selection_trace::Record(trace, "dns.lock.begin");
             std::scoped_lock resolver(g_node_resolve_lock);
             selection_trace::Record(trace, "dns.lock.end");
-            const auto &definition = LanywhereNodes[node];
+            NodeDynamicEntry definition{};
+            if (!LookupNode(node, &definition)) return false;
             sockaddr_in address{};
             address.sin_family = AF_INET;
             address.sin_port = htons(definition.port);
+            // Shared nodes must use the exact endpoint validated by the central
+            // directory; DNS can yield different regions on different consoles.
+            if (node >= NODE_CATALOG_COUNT && node < NODE_SHARED_CAPACITY) {
+                if (!(definition.flags & 1) || !std::any_of(std::begin(definition.ipv4), std::end(definition.ipv4), [](u8 b) { return b != 0; })) return false;
+                std::memcpy(&address.sin_addr.s_addr, definition.ipv4, 4);
+                *out = address;
+                return true;
+            }
             if (::inet_pton(AF_INET, definition.host, &address.sin_addr) != 1) {
                 addrinfo hint{}; hint.ai_family = AF_INET; hint.ai_socktype = SOCK_DGRAM;
                 addrinfo *result = nullptr;
@@ -335,9 +397,9 @@ namespace ams::mitm::lanywhere {
                 if (!valid) return false;
             }
             const u32 ip = ntohl(address.sin_addr.s_addr);
-            if (!(ip >> 24) || (ip >> 24) >= 224 || (ip >> 24) == 127 || (ip >> 24) == 10 ||
-                (ip >> 20) == 0xac1 || (ip >> 16) == 0xc0a8 || (ip >> 16) == 0xa9fe ||
-                (ip >> 17) == 0x6309) return false;
+            if (!(ip >> 24) || (ip >> 24) >= 224 || (ip >> 24) == 127 || (ip >> 16) == 0xa9fe ||
+                (node < NODE_LOCAL_BASE && ((ip >> 24) == 10 || (ip >> 20) == 0xac1 ||
+                (ip >> 16) == 0xc0a8 || (ip >> 17) == 0x6309))) return false;
             *out = address;
             return true;
         }
@@ -346,7 +408,7 @@ namespace ams::mitm::lanywhere {
             const char *end = static_cast<const char *>(std::memchr(route.provider, '\0', sizeof(route.provider)));
             if (DirectNodeRoute(route) && !TrustedNodeEndpointLocked(route)) return false;
             if (!end || !route.ipv4 || route.ipv4 == INADDR_BROADCAST || !route.port ||
-                (std::strcmp(route.provider, "self") && std::strcmp(route.provider, "lanywhere-public") &&
+                (!DirectNodeRoute(route) && std::strcmp(route.provider, "self") && std::strcmp(route.provider, "lanywhere-public") &&
                  std::strcmp(route.provider, REGION_PROVIDER_COMMUNITY) &&
                  std::strcmp(route.provider, "lanplay-nl") && std::strcmp(route.provider, "lanplay-br") &&
                  std::strcmp(route.provider, "lanplay-id") && std::strcmp(route.provider, "lanplay-nl-jaysea-rust") &&
@@ -400,6 +462,11 @@ namespace ams::mitm::lanywhere {
 
         const char *GameplayProviderLocked() {
             if (g_host_node >= 2 && g_host_node < NODE_CATALOG_COUNT) return LanywhereNodes[g_host_node].provider;
+            if (DirectNodeId(g_host_node)) {
+                static thread_local char provider[33];
+                NodeProvider(g_host_node, provider);
+                return provider;
+            }
             return g_relay_region == RelayRegionCommunity ? REGION_PROVIDER_COMMUNITY : "self";
         }
 
@@ -433,8 +500,9 @@ namespace ams::mitm::lanywhere {
         }
 
         bool GameplayEndpointLocked(sockaddr_in *out) {
-            if (g_host_node >= 2 && g_host_node < NODE_CATALOG_COUNT) {
-                *out = g_node_endpoints[g_host_node];
+            if (g_host_node == NODE_ID_INVALID || g_selected_status == NodeHostUnavailable) return false;
+            if (DirectNodeId(g_host_node)) {
+                *out = g_node_endpoints[NodeSlot(g_host_node)];
                 return out->sin_addr.s_addr && out->sin_port;
             }
             return RegionEndpointLocked(g_relay_region, out);
@@ -1303,6 +1371,23 @@ namespace ams::mitm::lanywhere {
                    std::strcmp(current.provider, route.provider) == 0;
         }
 
+        // Reserve the worker before publishing the accepted session. If the
+        // kernel is out of thread resources, leave the server room and keep
+        // both sockets out of global state so the caller can safely retry.
+        Result PrepareRelayWorker(Session &session, std::unique_lock<os::SdkMutex> &lock) {
+            const Result result = os::CreateThread(std::addressof(g_thread), Worker, nullptr,
+                                                  g_thread_stack, sizeof(g_thread_stack), 10);
+            if (R_SUCCEEDED(result)) R_SUCCEED();
+            lock.unlock();
+            SendFrameTo(session.tcp, T_Leave, nullptr, 0, nullptr, 0);
+            if (session.tcp >= 0) ::close(session.tcp);
+            if (session.udp >= 0) ::close(session.udp);
+            session.tcp = session.udp = -1;
+            lock.lock();
+            SetError("Could not start the room connection. Try again.");
+            return ResultRelayFailed();
+        }
+
         // Conecta, envía CREATE o JOIN y espera ROOM; luego registra el UDP y arranca el hilo.
         Result Enter(u8 type, const u8 *body, size_t size, const sockaddr_in *pinned = nullptr,
                      u8 *error_code = nullptr, const u8 *owner = nullptr,
@@ -1378,6 +1463,7 @@ namespace ams::mitm::lanywhere {
                 SetError(s.error);
                 R_THROW(ResultRelayFailed());
             }
+            if (R_FAILED(PrepareRelayWorker(s, lk))) return ResultRelayFailed();
             std::memset(g_members, 0, sizeof(g_members));
             g_sent = g_received = 0;
             {
@@ -1403,7 +1489,6 @@ namespace ams::mitm::lanywhere {
                 std::memcpy(joined->room_code, g_code, CodeLength);
             }
             g_last_keepalive = os::GetSystemTick();
-            R_ABORT_UNLESS(os::CreateThread(std::addressof(g_thread), Worker, nullptr, g_thread_stack, sizeof(g_thread_stack), 10));
             os::SetThreadNamePointer(std::addressof(g_thread), "lanywhere::Relay");
             os::StartThread(std::addressof(g_thread));
             g_thread_started = true;
@@ -1426,6 +1511,7 @@ namespace ams::mitm::lanywhere {
 
     bool CaptureGameRoute(GameRoute *out) {
         if (!out) return false;
+        RestoreHostPreference();
         if (g_direct_session.load()) {
             const auto state = lanplay::State();
             if (!state.active) return false;
@@ -1475,6 +1561,7 @@ namespace ams::mitm::lanywhere {
 
     bool CaptureHostGameRoute(GameRoute *out) {
         if (!out) return false;
+        RestoreHostPreference();
         // Preserve the existing session if the game opens an access point in it.
         if (InRoom() && CaptureGameRoute(out) && out->room_epoch) return true;
         *out = {};
@@ -1796,9 +1883,9 @@ namespace ams::mitm::lanywhere {
         line[n] = '\n';
         std::scoped_lock lk(g_log_lock);
         fs::FileHandle file;
-        if (R_FAILED(fs::OpenFile(std::addressof(file), LogPath, fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
-            static_cast<void>(fs::CreateDirectory("sdmc:/lanywhere"));
-            if (R_FAILED(fs::CreateFile(LogPath, 0)) || R_FAILED(fs::OpenFile(std::addressof(file), LogPath, fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
+        if (R_FAILED(fs::OpenFile(std::addressof(file), LogPath(), fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
+            static_cast<void>(fs::CreateDirectory(storage::StorageUseCurrent() ? RC_CURRENT_DIR : RC_LEGACY_DIR));
+            if (R_FAILED(fs::CreateFile(LogPath(), 0)) || R_FAILED(fs::OpenFile(std::addressof(file), LogPath(), fs::OpenMode_Write | fs::OpenMode_AllowAppend))) {
                 return;
             }
         }
@@ -3536,14 +3623,353 @@ namespace ams::mitm::lanywhere {
         *page = {static_cast<s32>(count), next, snapshot, available, total, ListStatusOk};
     }
 
+    namespace {
+        bool LookupNode(u32 node, NodeDynamicEntry *entry) {
+            if (!entry) return false;
+            *entry = {};
+            if (node < NODE_CATALOG_COUNT) {
+                const auto &built = LanywhereNodes[node];
+                entry->id = node; entry->protocol = built.protocol; entry->port = built.port;
+                entry->region = built.region; entry->flags = 1;
+                util::Strlcpy(entry->host, built.host, sizeof(entry->host));
+                util::Strlcpy(entry->name, built.name_en, sizeof(entry->name));
+                return true;
+            }
+            std::scoped_lock lock(g_catalog_lock);
+            for (u32 i = 0; i < g_dynamic_nodes.count; ++i) {
+                if (g_dynamic_nodes.nodes[i].id == node) {
+                    *entry = g_dynamic_nodes.nodes[i];
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool ReadLocalNodes(char *buffer, size_t capacity, size_t *actual) {
+            *actual = 0;
+            fs::FileHandle file;
+            const Result opened = fs::OpenFile(&file, RC_CONFIG_DIR "/nodes.ini", fs::OpenMode_Read);
+            if (fs::ResultPathNotFound::Includes(opened)) return true;
+            if (R_FAILED(opened)) return false;
+            s64 size = 0;
+            bool valid = R_SUCCEEDED(fs::GetFileSize(&size, file)) && size >= 0 &&
+                static_cast<u64>(size) <= capacity &&
+                R_SUCCEEDED(fs::ReadFile(actual, file, 0, buffer, static_cast<size_t>(size))) &&
+                *actual == static_cast<size_t>(size);
+            fs::CloseFile(file);
+            return valid;
+        }
+
+        bool RefreshDynamicNodes() {
+            std::scoped_lock refresh(g_catalog_refresh_lock);
+            // These buffers exceed a sysmodule IPC worker stack, so allocate
+            // bounded scratch from the existing malloc pool and fail cleanly.
+            struct Scratch {
+                NodeDynamicCatalog clean, fresh, combined;
+                char config[8192];
+                u8 reply[40 + (NODE_SHARED_CAPACITY - NODE_CATALOG_COUNT) * sizeof(NodeDynamicEntry)];
+            };
+            std::unique_ptr<Scratch, decltype(&std::free)> scratch(static_cast<Scratch *>(std::calloc(1, sizeof(Scratch))), &std::free);
+            if (!scratch) return false;
+            auto &clean = scratch->clean;
+            clean.version = 1;
+            {
+                std::scoped_lock lock(g_catalog_lock);
+                for (u32 i = 0; i < g_dynamic_nodes.count; ++i)
+                    if (g_dynamic_nodes.nodes[i].id < NODE_SHARED_CAPACITY)
+                        clean.nodes[clean.count++] = g_dynamic_nodes.nodes[i];
+                clean.enabled = g_dynamic_nodes.enabled;
+            }
+            bool fresh_received = false;
+            DiscoveryRoute route{};
+            sockaddr_in server{}; char provider[33]{};
+            if (CaptureAppointmentRoute(&route) && ResolveDiscoveryRoute(route, &server, provider)) {
+                const char *error = nullptr;
+                const int fd = ConnectServer(server, &error, 3000, "self");
+                if (fd >= 0) {
+                    u32 caps = 0, status = 0; u8 type = 0;
+                    if (QueryCapabilities(fd, &caps, 3000, &status) && (caps & NODE_DYNAMIC_CAPABILITY) &&
+                        SendFrameTo(fd, NODE_DYNAMIC_CATALOG_REQUEST, nullptr, 0, nullptr, 0)) {
+                        const ssize_t bytes = ReadListFrame(fd, &type, scratch->reply, sizeof(scratch->reply), 3000, &status);
+                        if (bytes >= 0 && type == NODE_DYNAMIC_CATALOG_RESPONSE &&
+                            custom_nodes::ParseShared(scratch->reply, static_cast<size_t>(bytes), LanywhereNodeCatalogHash, &scratch->fresh)) {
+                            clean = scratch->fresh;
+                            fresh_received = true;
+                        }
+                    }
+                    ::close(fd);
+                }
+            }
+            // An old/disconnected directory cannot confirm the current pin.
+            if (!fresh_received) {
+                clean.available = 0;
+                for (u32 i = 0; i < clean.count; ++i) std::memset(clean.nodes[i].ipv4, 0, 4);
+            }
+            size_t bytes = 0;
+            if (!ReadLocalNodes(scratch->config, sizeof(scratch->config), &bytes) ||
+                !custom_nodes::ParseLocal(scratch->config, bytes, clean, &scratch->combined)) return false;
+            auto &combined = scratch->combined;
+            for (u32 i = 0; i < combined.count;) {
+                const auto &candidate = combined.nodes[i];
+                bool duplicate = false;
+                if (candidate.id >= NODE_LOCAL_BASE) {
+                    for (u32 j = 2; j < NODE_CATALOG_COUNT; ++j) {
+                        if (candidate.port == LanywhereNodes[j].port &&
+                            !strcasecmp(candidate.host, LanywhereNodes[j].host)) { duplicate = true; break; }
+                    }
+                }
+                if (duplicate) {
+                    for (u32 j = i + 1; j < combined.count; ++j) combined.nodes[j - 1] = combined.nodes[j];
+                    combined.nodes[--combined.count] = {};
+                } else ++i;
+            }
+            bool needs_retry = false;
+            {
+                std::scoped_lock route_lock(g_lock);
+                std::scoped_lock catalog_lock(g_catalog_lock);
+                if (g_selection.selection_epoch && SelectionNowMs() >= g_selection_until_ms)
+                    ClearSelectionLocked();
+                if (g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting ||
+                    g_selection.selection_epoch) return true; // keep the active route pinned
+                if (g_host_node >= NODE_CATALOG_COUNT && g_host_node != NODE_ID_INVALID && g_preference_loaded) {
+                    const NodeDynamicEntry *match = nullptr;
+                    for (u32 i = 0; i < combined.count; ++i) {
+                        const auto &candidate = combined.nodes[i];
+                        if (custom_nodes::SameEndpoint(candidate, g_selected_node) && candidate.flags &&
+                            (candidate.id == g_selected_node.id || g_selected_node.id >= NODE_LOCAL_BASE)) {
+                            match = &candidate; break;
+                        }
+                    }
+                    const size_t old_slot = NodeSlot(g_host_node);
+                    if (!match) {
+                        if (old_slot < NODE_TOTAL_CAPACITY) g_node_endpoints[old_slot] = {};
+                        g_selected_status = NodeHostUnavailable;
+                        needs_retry = true;
+                    } else {
+                        const size_t next_slot = NodeSlot(match->id);
+                        if (next_slot < NODE_TOTAL_CAPACITY && old_slot < NODE_TOTAL_CAPACITY && next_slot != old_slot) {
+                            g_node_endpoints[next_slot] = g_node_endpoints[old_slot];
+                            g_node_endpoints[old_slot] = {};
+                            g_host_node = match->id;
+                        }
+                        // Re-probe a changed central pin; never silently host on
+                        // an address no longer used by the shared directory.
+                        if (match->id < NODE_SHARED_CAPACITY && next_slot < NODE_TOTAL_CAPACITY &&
+                            std::memcmp(&g_node_endpoints[next_slot].sin_addr.s_addr, match->ipv4, 4)) {
+                            g_node_endpoints[next_slot] = {};
+                            g_selected_status = NodeHostUnavailable;
+                            needs_retry = true;
+                        }
+                        g_selected_node = *match;
+                    }
+                }
+                g_dynamic_nodes = combined;
+            }
+            (void)needs_retry; // the periodic reader schedules restoration outside this lock
+            return true;
+        }
+
+        void CatalogRefreshWorker(void *) {
+            static_cast<void>(RefreshDynamicNodes());
+            bool needs_retry;
+            { std::scoped_lock lock(g_lock); needs_retry = g_selected_status == NodeHostUnavailable && g_host_node != NODE_ID_INVALID; }
+            if (needs_retry) StartPreferenceRetry();
+            g_catalog_running = false;
+        }
+        void RequestCatalogRefresh() {
+            std::scoped_lock lock(g_catalog_thread_lock);
+            const u64 now = SelectionNowMs();
+            if (g_catalog_running.load() || now < g_catalog_next_refresh) return;
+            if (g_catalog_created) {
+                os::WaitThread(&g_catalog_thread);
+                os::DestroyThread(&g_catalog_thread);
+                g_catalog_created = false;
+            }
+            const Result created = os::CreateThread(&g_catalog_thread, CatalogRefreshWorker, nullptr,
+                g_catalog_stack, sizeof(g_catalog_stack), 10);
+            g_catalog_next_refresh = now + 10000;
+            if (R_FAILED(created)) return;
+            g_catalog_created = true; g_catalog_running = true;
+            os::SetThreadNamePointer(&g_catalog_thread, "lanywhere::NodeCatalog");
+            os::StartThread(&g_catalog_thread);
+        }
+
+        void PreferenceRetryWorker(void *argument) {
+          u64 generation = static_cast<u64>(reinterpret_cast<uintptr_t>(argument));
+          for (;;) {
+            while (g_host_preference_generation.load() == generation) {
+                NodeDynamicEntry saved{};
+                {
+                    std::scoped_lock lock(g_lock);
+                    if (g_selected_status != NodeHostUnavailable || g_host_node == NODE_ID_INVALID) break;
+                    saved = g_selected_node;
+                }
+                if (saved.id >= NODE_CATALOG_COUNT) static_cast<void>(RefreshDynamicNodes());
+                NodeDynamicEntry current{};
+                bool found = LookupNode(saved.id, &current) && current.flags &&
+                    current.protocol == saved.protocol && current.port == saved.port &&
+                    !std::strcmp(current.host, saved.host);
+                if (!found && saved.id >= NODE_LOCAL_BASE) {
+                    std::scoped_lock lock(g_catalog_lock);
+                    for (u32 i = 0; i < g_dynamic_nodes.count; ++i)
+                        if (g_dynamic_nodes.nodes[i].flags && custom_nodes::SameEndpoint(saved, g_dynamic_nodes.nodes[i])) {
+                            current = g_dynamic_nodes.nodes[i]; found = true; break;
+                        }
+                }
+                if (found && R_SUCCEEDED(SetHostNodeInternal(current.id, generation))) break;
+                // The retry is bounded and does not run on the app's IPC thread.
+                for (unsigned i = 0; i < 100 && g_host_preference_generation.load() == generation; ++i)
+                    os::SleepThread(TimeSpan::FromMilliSeconds(100));
+            }
+            // Coordinate with StartPreferenceRetry: a new selection can fail
+            // while this generation is still unwinding. Do not lose its retry.
+            std::scoped_lock lifecycle(g_retry_lifecycle_lock);
+            if (g_retry_requested) {
+                g_retry_requested = false;
+                generation = g_host_preference_generation.load();
+                continue;
+            }
+            g_retry_running = false;
+            break;
+          }
+        }
+
+        void StartPreferenceRetry() {
+            std::scoped_lock lock(g_retry_lifecycle_lock);
+            if (g_retry_running.load()) { g_retry_requested = true; return; }
+            if (g_retry_created) {
+                os::WaitThread(&g_retry_thread);
+                os::DestroyThread(&g_retry_thread);
+                g_retry_created = false;
+            }
+            const auto generation = g_host_preference_generation.load();
+            const Result created = os::CreateThread(&g_retry_thread, PreferenceRetryWorker,
+                reinterpret_cast<void *>(static_cast<uintptr_t>(generation)), g_retry_stack, sizeof(g_retry_stack), 10);
+            if (R_FAILED(created)) return;
+            g_retry_created = true;
+            g_retry_requested = false;
+            g_retry_running = true;
+            os::SetThreadNamePointer(&g_retry_thread, "lanywhere::NodeRetry");
+            os::StartThread(&g_retry_thread);
+        }
+
+        void RestoreHostPreference() {
+            std::scoped_lock restore(g_restore_lock);
+            if (g_preference_loaded.load()) return;
+            g_preference_loaded = true;
+            NodeDynamicEntry saved{};
+            const auto read = ReadNodePreference(&saved);
+            if (read == NodePreferenceRead::Missing) return;
+            if (read != NodePreferenceRead::Valid || !std::memchr(saved.host, 0, sizeof(saved.host)) ||
+                !std::memchr(saved.name, 0, sizeof(saved.name)) || NodeSlot(saved.id) >= NODE_TOTAL_CAPACITY) {
+                std::scoped_lock lock(g_lock);
+                g_host_node = NODE_ID_INVALID;
+                g_selected_status = NodeHostUnavailable;
+                util::Strlcpy(g_selected_node.name, "Saved node", sizeof(g_selected_node.name));
+                return;
+            }
+            {
+                std::scoped_lock lock(g_lock);
+                g_host_node = saved.id;
+                g_selected_node = saved;
+                g_selected_status = NodeHostUnavailable;
+                g_relay_region = saved.id ? RelayRegionCommunity : RelayRegionDefault;
+            }
+            StartPreferenceRetry();
+        }
+    }
+
+    void InitializeNodeSelection() {
+        RestoreHostPreference();
+        RequestCatalogRefresh();
+    }
+
+    bool GetDynamicNodeCatalog(NodeDynamicCatalog *out) {
+        if (!out) return false;
+        RequestCatalogRefresh();
+        std::scoped_lock lock(g_catalog_lock);
+        *out = g_dynamic_nodes;
+        if (!out->version) out->version = 1;
+        return true;
+    }
+
+    NodeHostInfo GetHostNodeInfo() {
+        RestoreHostPreference();
+        bool needs_retry;
+        { std::scoped_lock lock(g_lock); needs_retry = g_selected_status == NodeHostUnavailable && g_host_node != NODE_ID_INVALID; }
+        if (needs_retry) StartPreferenceRetry();
+        std::scoped_lock lock(g_lock);
+        NodeHostInfo info{};
+        info.version = 1; info.node_id = g_host_node; info.status = g_selected_status;
+        NodeDynamicEntry entry = g_selected_node;
+        if (g_host_node < NODE_CATALOG_COUNT) {
+            const auto &built = LanywhereNodes[g_host_node];
+            info.protocol = built.protocol; info.port = built.port; info.region = built.region;
+            util::Strlcpy(info.name, g_host_node ? built.name_en : "Main server", sizeof(info.name));
+            util::Strlcpy(info.host, built.host, sizeof(info.host));
+        } else {
+            info.protocol = entry.protocol; info.port = entry.port; info.region = entry.region;
+            util::Strlcpy(info.name, entry.name, sizeof(info.name));
+            util::Strlcpy(info.host, entry.host, sizeof(info.host));
+        }
+        return info;
+    }
+
+    NodeActiveRouteInfo GetActiveNodeRoute() {
+        NodeActiveRouteInfo info{};
+        info.version = 1;
+        DiscoveryRoute active{};
+        const bool direct_before = g_direct_session.load();
+        const auto direct = direct_before ? lanplay::State() : lanplay::Snapshot{};
+        {
+            std::scoped_lock lock(g_lock);
+            if (g_direct_session.load()) {
+                active = g_direct_room.discovery;
+                info.status = direct_before && direct.active && direct.epoch == g_direct_room.room_epoch ?
+                    NodeRouteConnected : NodeRouteUnavailable;
+            } else if (g_state == RelayState::InRoom || g_state == RelayState::Connecting || g_recovering) {
+                active.ipv4 = g_server.sin_addr.s_addr; active.port = g_server.sin_port;
+                if (!std::strcmp(g_room_provider, "self")) {
+                    sockaddr_in main_server{};
+                    active.node_id = LoadServer(&main_server) && main_server.sin_addr.s_addr == active.ipv4 &&
+                        main_server.sin_port == active.port ? 0 : NODE_ID_INVALID;
+                } else if (!std::strcmp(g_room_provider, REGION_PROVIDER_COMMUNITY) ||
+                         !std::strcmp(g_room_provider, "lanywhere-public")) active.node_id = 1;
+                else active.node_id = NODE_ID_INVALID;
+                info.status = g_recovering ? NodeRouteRecovering :
+                    g_state == RelayState::Connecting ? NodeRouteSelected : NodeRouteConnected;
+            } else if (g_selection.selection_epoch && SelectionNowMs() < g_selection_until_ms) {
+                active = g_selection;
+                info.status = NodeRouteSelected;
+            } else {
+                info.node_id = NODE_ID_INVALID;
+                return info;
+            }
+        }
+        info.node_id = active.node_id;
+        NodeDynamicEntry node{};
+        if (LookupNode(active.node_id, &node)) {
+            info.protocol = node.protocol; info.region = node.region; info.port = node.port;
+            util::Strlcpy(info.name, active.node_id == 0 ? "Main server" : node.name, sizeof(info.name));
+            util::Strlcpy(info.host, node.host, sizeof(info.host));
+        } else {
+            util::Strlcpy(info.name, "Unknown node", sizeof(info.name));
+        }
+        return info;
+    }
+
     u32 GetHostNode() {
+        RestoreHostPreference();
         std::scoped_lock lock(g_lock);
         return g_relay_region == RelayRegionEurope ? NODE_ID_INVALID : g_host_node;
     }
 
-    Result SetHostNode(u32 node) {
+    namespace {
+    Result SetHostNodeInternal(u32 node, u64 expected_generation) {
         const auto trace = selection_trace::Begin(node, "host.begin");
-        if (node >= NODE_CATALOG_COUNT || g_direct_session.load()) return ResultRelayFailed();
+        if (NodeSlot(node) >= NODE_TOTAL_CAPACITY || g_direct_session.load()) return ResultRelayFailed();
+        NodeDynamicEntry requested{};
+        if (!LookupNode(node, &requested) || !requested.flags) return ResultRelayFailed();
         {
             std::scoped_lock match(g_match_lock);
             std::scoped_lock lock(g_lock);
@@ -3565,10 +3991,23 @@ namespace ams::mitm::lanywhere {
         std::scoped_lock lifecycle(g_room_lifecycle_lock);
         std::scoped_lock match(g_match_lock);
         std::scoped_lock lock(g_lock);
-        if (g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting ||
+        if (g_host_preference_generation.load() != expected_generation ||
+            g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting ||
             g_recovering || ArmedLocked() || g_match.in_flight) return ResultRelayFailed();
+        // Persist the full identity, not a mutable slot number alone.
+        NodeDynamicEntry identity{};
+        if (!LookupNode(node, &identity) || !identity.flags || identity.id != requested.id ||
+            identity.protocol != requested.protocol || identity.port != requested.port ||
+            std::strcmp(identity.host, requested.host) ||
+            (node >= NODE_CATALOG_COUNT && node < NODE_SHARED_CAPACITY &&
+             (std::memcmp(identity.ipv4, requested.ipv4, sizeof(identity.ipv4)) ||
+              std::memcmp(identity.ipv4, &endpoint.sin_addr.s_addr, sizeof(identity.ipv4)) ||
+              endpoint.sin_port != htons(identity.port))) ||
+            !SaveNodePreference(identity)) return ResultRelayFailed();
+        g_selected_node = identity;
+        g_selected_status = node == 0 ? NodeHostSelected : NodeHostReady;
         // Commit DNS only with the selection; a failed/racing probe cannot alter an active route.
-        g_node_endpoints[node] = endpoint;
+        g_node_endpoints[NodeSlot(node)] = endpoint;
         g_host_node = node;
         g_relay_region = node ? RelayRegionCommunity : RelayRegionDefault;
         do { ++g_gameplay_generation; } while (!g_gameplay_generation);
@@ -3577,13 +4016,27 @@ namespace ams::mitm::lanywhere {
         selection_trace::Record(trace, "host.committed");
         R_SUCCEED();
     }
+    }
+
+    Result SetHostNode(u32 node) {
+        u64 generation;
+        { std::scoped_lock lock(g_lock); generation = ++g_host_preference_generation; }
+        const Result result = SetHostNodeInternal(node, generation);
+        if (R_FAILED(result)) {
+            bool unavailable = false;
+            { std::scoped_lock lock(g_lock); unavailable = g_selected_status == NodeHostUnavailable && g_host_node != NODE_ID_INVALID; }
+            if (unavailable) StartPreferenceRetry();
+        }
+        return result;
+    }
 
     Result SelectNodeRoom(const NodeRoomSelection &request) {
         const auto trace = selection_trace::Begin(request.node_id, "room.begin");
-        if (request.node_id >= NODE_CATALOG_COUNT || request.reserved || !request.game_id ||
+        if (request.node_id >= NODE_SHARED_CAPACITY || request.reserved || !request.game_id ||
             request.locator.code[6] || request.locator.code[7] || !ValidCode(request.locator.code) ||
             request.locator.reserved0 ||
-            !std::all_of(std::begin(request.locator.reserved), std::end(request.locator.reserved), [](u8 value) { return value == 0; }) ||
+            !std::all_of(std::begin(request.locator.reserved) + (request.node_id >= NODE_CATALOG_COUNT ? 4 : 0),
+                         std::end(request.locator.reserved), [](u8 value) { return value == 0; }) ||
             g_direct_session.load()) return ResultRelayFailed();
         if (request.node_id < 2) {
             if (request.game_id == UINT64_MAX || request.locator.flavor) return ResultRelayFailed();
@@ -3598,6 +4051,9 @@ namespace ams::mitm::lanywhere {
             util::Strlcpy(room.provider, request.node_id ? REGION_PROVIDER_COMMUNITY : "self", sizeof(room.provider));
             return SelectUnifiedRoom(room);
         }
+        NodeDynamicEntry verified_entry{};
+        if (request.node_id >= NODE_CATALOG_COUNT && !VerifiedSharedRoom(request, &verified_entry))
+            return ResultRelayFailed();
         if ((request.locator.flavor != NodeFlavorStandard && request.locator.flavor != NodeFlavorFork) ||
             le64(request.locator.network_id) != request.game_id ||
             (request.locator.host_ip & 0xffff0000u) != LanPlayNet || !(request.locator.host_ip & 0xffffu) ||
@@ -3606,8 +4062,21 @@ namespace ams::mitm::lanywhere {
             !std::any_of(std::begin(request.locator.bssid), std::end(request.locator.bssid), [](u8 value) { return value != 0; }))
             return ResultRelayFailed();
         sockaddr_in endpoint{};
-        if (!ResolveNodeEndpoint(request.node_id, &endpoint, trace) ||
-            !lanplay::Probe({endpoint.sin_addr.s_addr, endpoint.sin_port}, 1500, trace)) {
+        bool resolved;
+        if (request.node_id >= NODE_CATALOG_COUNT) {
+            endpoint.sin_family = AF_INET;
+            endpoint.sin_port = htons(verified_entry.port);
+            resolved = verified_entry.port != 0;
+        } else {
+            resolved = ResolveNodeEndpoint(request.node_id, &endpoint, trace);
+        }
+        if (resolved && request.node_id >= NODE_CATALOG_COUNT) {
+            const auto *ip = request.locator.reserved;
+            const bool public_ip = custom_nodes::PublicIpv4(ip);
+            if (!public_ip) resolved = false;
+            else std::memcpy(&endpoint.sin_addr.s_addr, ip, 4);
+        }
+        if (!resolved || !lanplay::Probe({endpoint.sin_addr.s_addr, endpoint.sin_port}, 1500, trace)) {
             selection_trace::Record(trace, "room.resolve_or_probe.failed");
             return ResultCommunityUnreachable();
         }
@@ -3619,12 +4088,12 @@ namespace ams::mitm::lanywhere {
             std::scoped_lock lock(g_lock);
             if (g_direct_session.load() || g_state == RelayState::InRoom || g_state == RelayState::Connecting ||
                 g_recovering || g_match.in_flight) return ResultRelayFailed();
-            g_node_endpoints[request.node_id] = endpoint;
+            g_node_endpoints[NodeSlot(request.node_id)] = endpoint;
             DiscoveryRoute route{};
             route.ipv4 = endpoint.sin_addr.s_addr; route.port = endpoint.sin_port;
             route.public_enabled = true; route.node_id = request.node_id;
             route.node_locator = request.locator; route.selected_game_id = request.game_id;
-            util::Strlcpy(route.provider, LanywhereNodes[request.node_id].provider, sizeof(route.provider));
+            NodeProvider(request.node_id, route.provider);
             old = g_match.ticket; pending = g_release_next; g_release_next = {}; g_match = {};
             SelectRouteLocked(route, request.locator.code);
         }
@@ -3635,7 +4104,7 @@ namespace ams::mitm::lanywhere {
 
     bool PrepareDirectHostIdentity(const GameRoute &route, void *session_id, size_t size) {
         if (!session_id || size != 16 || !route.room_epoch ||
-            route.discovery.node_id < 2 || route.discovery.node_id >= NODE_CATALOG_COUNT) return false;
+            route.discovery.node_id < 2 || route.discovery.node_id >= NODE_SHARED_CAPACITY) return false;
         const auto transport = lanplay::State();
         if (!transport.active || !transport.hosting || transport.epoch != route.room_epoch || !transport.address)
             return false;
@@ -3688,7 +4157,7 @@ namespace ams::mitm::lanywhere {
     RoomPasscodeReply LookupDirectRoomPasscode(const NodeRoomSelection &room) {
         RoomPasscodeReply result{};
         result.status = RoomPasscodeInvalid;
-        if (room.reserved || room.node_id < 2 || room.node_id >= NODE_CATALOG_COUNT || !room.game_id ||
+        if (room.reserved || room.node_id < 2 || room.node_id >= NODE_SHARED_CAPACITY || !room.game_id ||
             room.game_id != le64(room.locator.network_id) ||
             (room.locator.flavor != NodeFlavorStandard && room.locator.flavor != NodeFlavorFork)) return result;
         DirectRoomMetadata request{};
@@ -3704,10 +4173,27 @@ namespace ams::mitm::lanywhere {
         return result;
     }
 
+    namespace {
+        bool VerifiedSharedRoom(const NodeRoomSelection &selection, NodeDynamicEntry *entry) {
+            if (!entry || selection.node_id < NODE_CATALOG_COUNT || selection.node_id >= NODE_SHARED_CAPACITY) return false;
+            const u64 now = SelectionNowMs();
+            std::scoped_lock lock(g_verified_rooms_lock);
+            for (const auto &room : g_verified_rooms) {
+                if (room.expires_at > now && room.selection.node_id == selection.node_id &&
+                    room.selection.game_id == selection.game_id &&
+                    !std::memcmp(&room.selection.locator, &selection.locator, sizeof(selection.locator))) {
+                    *entry = room.entry;
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
     void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity, bool annotate) {
         *page = {-1, NODE_LOBBY_END, 0, 0, 0, ListStatusProtocol};
         if (!groups || capacity < NODE_LOBBY_PAGE_SIZE || request.reserved ||
-            (request.node_mask >> NODE_CATALOG_COUNT) || (request.offset && !request.snapshot)) return;
+            (request.node_mask >> NODE_SHARED_CAPACITY) || (request.offset && !request.snapshot)) return;
         std::memset(groups, 0, sizeof(NodeRoomWire) * NODE_LOBBY_PAGE_SIZE);
         DiscoveryRoute route{};
         sockaddr_in endpoint{};
@@ -3739,31 +4225,36 @@ namespace ams::mitm::lanywhere {
         }
         u8 body[20]{};
         put32(body, request.offset); put32(body + 4, request.snapshot);
-        put64(body + 8, request.game_id); put32(body + 16, request.node_mask);
+        const bool dynamic = annotate && (caps & NODE_DYNAMIC_CAPABILITY) != 0;
+        const u32 wire_mask = dynamic ? request.node_mask : request.node_mask & ((1u << NODE_CATALOG_COUNT) - 1);
+        put64(body + 8, request.game_id); put32(body + 16, wire_mask);
         u8 reply[16 + NODE_LOBBY_PAGE_SIZE * NODE_LOBBY_ROW_SIZE]{};
         count = -1;
         const bool annotations = annotate && (caps & DIRECT_ROOM_CAPABILITY) != 0;
-        if (SendFrameTo(fd, annotations ? DIRECT_ROOM_LIST_REQUEST : NODE_LOBBY_REQUEST, body, sizeof(body), nullptr, 0))
+        const u8 request_type = dynamic ? NODE_DYNAMIC_LOBBY_REQUEST : annotations ? DIRECT_ROOM_LIST_REQUEST : NODE_LOBBY_REQUEST;
+        const u8 response_type = dynamic ? NODE_DYNAMIC_LOBBY_RESPONSE : annotations ? DIRECT_ROOM_LIST_RESPONSE : NODE_LOBBY_RESPONSE;
+        if (SendFrameTo(fd, request_type, body, sizeof(body), nullptr, 0))
             count = ReadListFrame(fd, &type, reply, sizeof(reply), 3000, &page->status);
         ::close(fd);
         if (!AppointmentBackendCurrent(route)) { page->status = ListStatusUnavailable; return; }
         if (count < 0) return;
         if (type == T_Error && count >= 1) { page->status = lanywhere_list_error_status(reply[0]); return; }
         page->status = ListStatusProtocol;
-        if (type != (annotations ? DIRECT_ROOM_LIST_RESPONSE : NODE_LOBBY_RESPONSE) || count < 16 || reply[8] > NODE_LOBBY_PAGE_SIZE ||
+        if (type != response_type || count < 16 || reply[8] > NODE_LOBBY_PAGE_SIZE ||
             count != 16 + static_cast<ssize_t>(reply[8] * sizeof(NodeRoomWire)) || reply[9] > reply[10] ||
-            reply[10] > NODE_CATALOG_COUNT || le32(reply + 12)) return;
+            reply[10] > (dynamic ? NODE_SHARED_CAPACITY : NODE_CATALOG_COUNT) || le32(reply + 12)) return;
         if (reply[11] == 1 && !reply[8] && le32(reply + 4) == NODE_LOBBY_END) {
             page->status = UnifiedListStale; return;
         }
         const u32 snapshot = le32(reply), next = le32(reply + 4);
         if (reply[11] || !snapshot || (request.snapshot && request.snapshot != snapshot) ||
             (next != NODE_LOBBY_END && (!reply[8] || next != request.offset + reply[8]))) return;
+        VerifiedNodeRoom verified[NODE_LOBBY_PAGE_SIZE]{};
         for (size_t i = 0; i < reply[8]; i++) {
             NodeRoomWire row{}; GroupSummaryV2 summary{};
             std::memcpy(&row, reply + 16 + i * sizeof(row), sizeof(row));
             std::memcpy(&summary, row.group, sizeof(summary));
-            if (row.node_id >= NODE_CATALOG_COUNT || !(request.node_mask & (1u << row.node_id)) ||
+            if (row.node_id >= (dynamic ? NODE_SHARED_CAPACITY : NODE_CATALOG_COUNT) || !(wire_mask & (1u << row.node_id)) ||
                 (row.flags != NodeRoomDirect && row.flags != NodeRoomGateway) || !summary.game_id ||
                 summary.code[6] || summary.code[7] || !ValidCode(summary.code) || !summary.players ||
                 summary.players > summary.max_players || summary.max_players > MaxMembers ||
@@ -3771,8 +4262,11 @@ namespace ams::mitm::lanywhere {
                 !CleanDisplayField(summary.title_en, sizeof(summary.title_en), true) ||
                 !CleanDisplayField(summary.title_zh, sizeof(summary.title_zh), true) ||
                 std::memcmp(summary.code, row.locator.code, sizeof(summary.code)) || row.locator.reserved0 ||
-                !std::all_of(std::begin(row.locator.reserved), std::end(row.locator.reserved), [](u8 value) { return value == 0; }) ||
+                !std::all_of(std::begin(row.locator.reserved) + (dynamic && row.node_id >= NODE_CATALOG_COUNT ? 4 : 0),
+                             std::end(row.locator.reserved), [](u8 value) { return value == 0; }) ||
                 (request.game_id && request.game_id != summary.game_id)) return;
+            if (dynamic && row.node_id >= NODE_CATALOG_COUNT &&
+                (row.flags != NodeRoomDirect || !custom_nodes::PublicIpv4(row.locator.reserved))) return;
             if (row.flags == NodeRoomDirect && row.node_id >= 2 &&
                 ((row.locator.flavor != NodeFlavorStandard && row.locator.flavor != NodeFlavorFork) ||
                  le64(row.locator.network_id) != summary.game_id ||
@@ -3784,6 +4278,25 @@ namespace ams::mitm::lanywhere {
             AddCachedIdentity(summary);
             std::memcpy(row.group, &summary, sizeof(summary));
             groups[i] = row;
+            if (dynamic && row.node_id >= NODE_CATALOG_COUNT && row.flags == NodeRoomDirect) {
+                if (!LookupNode(row.node_id, &verified[i].entry)) return;
+                verified[i].selection.game_id = summary.game_id;
+                verified[i].selection.node_id = row.node_id;
+                verified[i].selection.locator = row.locator;
+                verified[i].expires_at = SelectionNowMs() + SelectionLifetimeMs;
+            }
+        }
+        if (dynamic) {
+            std::scoped_lock lock(g_verified_rooms_lock);
+            if (!request.offset || snapshot != g_verified_snapshot) {
+                std::memset(g_verified_rooms, 0, sizeof(g_verified_rooms));
+                g_verified_snapshot = snapshot;
+                g_verified_next = 0;
+            }
+            for (size_t i = 0; i < reply[8]; ++i) {
+                if (verified[i].expires_at)
+                    g_verified_rooms[g_verified_next++ % (sizeof(g_verified_rooms) / sizeof(g_verified_rooms[0]))] = verified[i];
+            }
         }
         *page = {static_cast<s32>(reply[8]), next, snapshot, reply[9], reply[10], ListStatusOk};
     }

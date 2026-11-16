@@ -94,19 +94,20 @@ static bool transfer(int fd, unsigned char *buffer, size_t size, bool sending, u
     return true;
 }
 
-static bool usable_unicast(uint32_t network_ip)
+static bool usable_unicast(uint32_t network_ip, bool allow_local)
 {
     const uint32_t ip = ntohl(network_ip);
 #ifdef NODE_PROBE_TEST_ENDPOINTS
     if ((ip >> 24) == 127)
         return true;
 #endif
-    return (ip >> 24) && (ip >> 24) < 224 && (ip >> 24) != 127 && (ip >> 24) != 10 && (ip >> 20) != 0xac1 &&
-           (ip >> 16) != 0xc0a8 && (ip >> 16) != 0xa9fe && (ip >> 17) != 0x6309;
+    return (ip >> 24) && (ip >> 24) < 224 && (ip >> 24) != 127 && (ip >> 16) != 0xa9fe &&
+           (allow_local || ((ip >> 24) != 10 && (ip >> 20) != 0xac1 && (ip >> 16) != 0xc0a8 &&
+                            (ip >> 17) != 0x6309));
 }
 
 static int open_node(const char *host, uint16_t port, NodeProbeKind kind, uint64_t deadline,
-                     const atomic_bool *cancel, NodeProbeGuard *guard)
+                     const atomic_bool *cancel, NodeProbeGuard *guard, bool allow_local)
 {
     struct addrinfo hints = {0}, *addresses = NULL;
     hints.ai_family = AF_INET;
@@ -145,7 +146,7 @@ static int open_node(const char *host, uint16_t port, NodeProbeKind kind, uint64
         if (item->ai_addrlen != sizeof(struct sockaddr_in))
             continue;
         struct sockaddr_in endpoint = *(struct sockaddr_in *)item->ai_addr;
-        if (!usable_unicast(endpoint.sin_addr.s_addr))
+        if (!usable_unicast(endpoint.sin_addr.s_addr, allow_local))
             continue;
         endpoint.sin_port = htons(port);
         const int candidate = socket(AF_INET, hints.ai_socktype, 0);
@@ -191,7 +192,7 @@ bool node_probe(const char *host, uint16_t port, NodeProbeKind kind, uint32_t no
                                 .state = NodeMeasureMeasuring};
     uint16_t samples[NODE_PROBE_SAMPLES];
     const uint64_t overall = node_probe_now_ms() + 4000;
-    const int fd = open_node(host, port, kind, overall, cancel, guard);
+    const int fd = open_node(host, port, kind, overall, cancel, guard, node_id >= NODE_LOCAL_BASE && node_id < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY);
     if (fd < 0) {
         result->state = NodeMeasureFailed;
         result->measured_at_ms = node_probe_now_ms();
@@ -282,7 +283,7 @@ bool node_protocol_exchange(const char *host, uint16_t port, uint8_t command, co
     if (request_size > NODE_FRIEND_REQUEST_SIZE || !response || !cancel)
         return false;
     const uint64_t deadline = node_probe_now_ms() + 4000;
-    const int fd = open_node(host, port, NodeProbeTcp, deadline, cancel, NULL);
+    const int fd = open_node(host, port, NodeProbeTcp, deadline, cancel, NULL, false);
     if (fd < 0)
         return false;
     unsigned char frame[3 + NODE_FRIEND_REQUEST_SIZE] = {(unsigned char)(request_size + 1),

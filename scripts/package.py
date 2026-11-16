@@ -110,17 +110,17 @@ def package_files(version, server, port, embedded):
         (TITLE_DIR / "exefs.nsp").as_posix(): read_entry(SD_ROOT / TITLE_DIR / "exefs.nsp", valid_exefs),
         (TITLE_DIR / "flags/boot2.flag").as_posix(): read_entry(SD_ROOT / TITLE_DIR / "flags/boot2.flag"),
         (TITLE_DIR / "toolbox.json").as_posix(): read_entry(SD_ROOT / TITLE_DIR / "toolbox.json"),
-        "switch/lanywhere.nro": read_entry(ROOT / "app/lanywhere.nro", valid_nro),
-        "switch/.overlays/lanywhere.ovl": read_entry(SD_ROOT / "switch/.overlays/lanywhere.ovl", valid_nro),
-        "lanywhere/licenses/LANywhere.txt": read_entry(ROOT / "LICENSE"),
-        "lanywhere/licenses/Atmosphere-libs.txt": read_entry(ROOT / "console/Atmosphere-libs/LICENSE"),
-        "lanywhere/licenses/TitleDB-MIT.txt": read_entry(ROOT / "compatibility/title-catalog/LICENSE.titledb"),
+        "switch/RoomCircuit/RoomCircuit.nro": read_entry(ROOT / "app/lanywhere.nro", valid_nro),
+        "switch/.overlays/RoomCircuit.ovl": read_entry(SD_ROOT / "switch/.overlays/lanywhere.ovl", valid_nro),
+        "switch/RoomCircuit/licenses/LANywhere.txt": read_entry(ROOT / "LICENSE"),
+        "switch/RoomCircuit/licenses/Atmosphere-libs.txt": read_entry(ROOT / "console/Atmosphere-libs/LICENSE"),
+        "switch/RoomCircuit/licenses/TitleDB-MIT.txt": read_entry(ROOT / "compatibility/title-catalog/LICENSE.titledb"),
     }
     if embedded is not None:
         address, _ = embedded
         needle = address.encode('ascii') + b'\0'
         module = read_entry(ROOT / 'console/ldn_mitm/ldn_mitm.elf')
-        if needle not in entries['switch/lanywhere.nro'] or needle not in module:
+        if needle not in entries['switch/RoomCircuit/RoomCircuit.nro'] or needle not in module:
             raise ValueError('Rebuild both Switch binaries with the fixed relay profile before packaging')
         used_endpoints = {embedded}
         for key, label in [('EU', 'Europe'), ('COMMUNITY', 'community')]:
@@ -131,17 +131,17 @@ def package_files(version, server, port, embedded):
                 raise ValueError(f'The {label} relay must use its own endpoint')
             used_endpoints.add(endpoint)
             needle = endpoint[0].encode('ascii') + b'\0'
-            if needle not in entries['switch/lanywhere.nro'] or needle not in module:
+            if needle not in entries['switch/RoomCircuit/RoomCircuit.nro'] or needle not in module:
                 raise ValueError(f'Rebuild both Switch binaries with the {label} relay profile before packaging')
     elif optional_profile('EU') is not None:
         raise ValueError('Europe relay selection requires the managed fixed relay profile')
     elif server is not None:
-        entries["lanywhere/config.ini"] = f"server={server}\nport={port}\npublic=1\n".encode("ascii")
+        entries["switch/RoomCircuit/config.ini"] = f"server={server}\nport={port}\npublic=1\n".encode("ascii")
     notices = ROOT / "third_party"
     if notices.is_dir():
         for notice in sorted(notices.rglob("*")):
             if notice.is_file():
-                entries["lanywhere/third_party/" + notice.relative_to(notices).as_posix()] = notice.read_bytes()
+                entries["switch/RoomCircuit/third_party/" + notice.relative_to(notices).as_posix()] = notice.read_bytes()
 
     setup = "在应用中选择服务器设置，输入自有云服务器公网 IPv4 和端口。"
     if embedded is not None:
@@ -151,7 +151,7 @@ def package_files(version, server, port, embedded):
         )
     elif server is not None:
         setup = f"打开应用，确认服务器显示为 {server}:{port}。"
-    entries["lanywhere/INSTALL.zh-CN.txt"] = (
+    entries["switch/RoomCircuit/INSTALL.zh-CN.txt"] = (
         f"RoomCircuit {version}\n\n"
         "安装：将 atmosphere 和 switch 合并到 SD 卡根目录，再重启进入虚拟系统。\n"
         "从相册打开 RoomCircuit。按 − 或点「约局」可预约。\n"
@@ -171,8 +171,8 @@ def package_files(version, server, port, embedded):
         connection_zh = "   服务器地址已内置，无需输入地址或端口。原有网络设置会保留。"
         connection_en = "   The server is built in; no address or port setup is needed. Existing preferences are kept."
     elif server is not None:
-        connection_zh = "   如无原有配置，将随包的 lanywhere/config.ini 复制到卡上。"
-        connection_en = "   If you have no existing configuration, also copy the included lanywhere/config.ini."
+        connection_zh = "   如无原有配置，将随包的 switch/RoomCircuit/config.ini 复制到卡上。"
+        connection_en = "   If you have no existing configuration, also copy the included switch/RoomCircuit/config.ini."
     else:
         connection_zh = "   请先在应用中设置服务器地址和端口。"
         connection_en = "   Configure a server address and port in the app first."

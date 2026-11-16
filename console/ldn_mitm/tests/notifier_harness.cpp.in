@@ -265,7 +265,7 @@ static void assertSubscriptions(std::initializer_list<u64> expected) {
 static void testBootRestore() {
     const auto appointment = event(1001, 1794228030);
     const SavedSubscriptions saved{SubscriptionMagic, SubscriptionVersion, 1, 0, {SaveEvent(appointment)}};
-    fs::files[SubscriptionsPath].assign(reinterpret_cast<const char *>(&saved), sizeof(saved));
+    fs::files[SubscriptionsPath()].assign(reinterpret_cast<const char *>(&saved), sizeof(saved));
     const int prior_starts = worker_starts;
 
     InitializeAppointmentSubscriptions();
@@ -275,7 +275,7 @@ static void testBootRestore() {
     InitializeAppointmentSubscriptions();
     assert(worker_starts == prior_starts + 1);
 
-    fs::files.erase(SubscriptionsPath);
+    fs::files.erase(SubscriptionsPath());
     restartSubscriptions();
     assert(!g_worker_started && worker_starts == prior_starts + 1);
 }
@@ -311,7 +311,7 @@ static void testSubscriptions() {
 
     fs::fail_subscription_commit = true;
     assert(SetAppointmentSubscription(event(103)) == AppointmentStorage);
-    assert(!fs::files.count(SubscriptionsPath) && fs::files.count(PreviousSubscriptionsPath));
+    assert(!fs::files.count(SubscriptionsPath()) && fs::files.count(PreviousSubscriptionsPath()));
     assertSubscriptions({101, 102});
     fs::fail_subscription_commit = false;
     restartSubscriptions();
@@ -319,7 +319,7 @@ static void testSubscriptions() {
     assert(SetAppointmentSubscription(event(103)) == AppointmentOk);
     assertSubscriptions({101, 102, 103});
     assert(SetAppointmentSubscription(event(104)) == AppointmentOk);
-    fs::files[SubscriptionsPath].resize(10);
+    fs::files[SubscriptionsPath()].resize(10);
     restartSubscriptions();
     assertSubscriptions({101, 102, 103});
 
@@ -462,7 +462,7 @@ static void testPush() {
 int run() {
     testBootRestore();
     resetClock(1000000);
-    fs::files[LocalePath] = locale;
+    fs::files[LocalePath()] = locale;
     api_enabled = false;
     assert(SetAppointmentWatch(event(1), true) == APPOINTMENT_ALERTS_DISABLED);
     assert(GetAppointmentWatch() == 0);

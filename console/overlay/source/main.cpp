@@ -3,6 +3,8 @@
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 #include "ldn.h"
+#include "../../../common/roomcircuit_paths.h"
+#include <sys/stat.h>
 #include "model.hpp"
 #include <algorithm>
 #include <array>
@@ -15,6 +17,10 @@ namespace {
     LdnMitmConfigService g_config{};
     overlay::Snapshot g_snapshot{};
     RoomPasscodeHost g_passcode_host{};
+    NodeHostInfo g_host_node{};
+    bool g_host_node_valid = false;
+    NodeActiveRouteInfo g_active_route{};
+    bool g_active_route_valid = false;
     bool g_chinese = false, g_protocol_mismatch = false;
     char g_version[32]{};
     std::string g_notice;
@@ -44,6 +50,10 @@ namespace {
         g_snapshot.config_ok = false;
         g_snapshot.relay_ok = false;
         g_passcode_host = {};
+        g_host_node = {};
+        g_host_node_valid = false;
+        g_active_route = {};
+        g_active_route_valid = false;
         u32 enabled = 0, logging = 0;
         if (serviceIsActive(&g_config.s) && R_SUCCEEDED(ldnMitmGetEnabled(&g_config, &enabled)) &&
             R_SUCCEEDED(ldnMitmGetLogging(&g_config, &logging))) {
@@ -58,6 +68,8 @@ namespace {
             g_snapshot.relay_ok = true;
             g_snapshot.status = status;
             g_snapshot.match = match;
+            g_host_node_valid = R_SUCCEEDED(lanywhereOverlayGetHostNode(&g_relay, &g_host_node));
+            g_active_route_valid = R_SUCCEEDED(lanywhereOverlayGetActiveRoute(&g_relay, &g_active_route));
             if (status.state == 2 && status.my_index == 0 && status.game_id) {
                 if (R_FAILED(lanywhereOverlayGetPasscodeHost(&g_relay, &g_passcode_host)) ||
                     std::memcmp(status.code, g_passcode_host.room, sizeof(status.code)))
@@ -76,6 +88,10 @@ namespace {
         serviceClose(&g_ldnSrv);
         g_snapshot = {};
         g_passcode_host = {};
+        g_host_node = {};
+        g_host_node_valid = false;
+        g_active_route = {};
+        g_active_route_valid = false;
     }
 
     void connectServices() {
@@ -293,7 +309,7 @@ namespace {
 
     class MainGui : public tsl::Gui {
         tsl::elm::List *m_list{};
-        tsl::elm::ListItem *m_connection{}, *m_room{}, *m_players{}, *m_match{}, *m_notice{}, *m_password{};
+        tsl::elm::ListItem *m_connection{}, *m_host_node{}, *m_active_route{}, *m_room{}, *m_players{}, *m_match{}, *m_notice{}, *m_password{};
         SafeToggle *m_enabled{}, *m_logging{};
 
         void updatePasswordAction() {
@@ -310,7 +326,7 @@ namespace {
                     }
                     return true;
                 });
-                m_list->addItem(m_password, 0, 5);
+                m_list->addItem(m_password, 0, 6);
             } else if (!hasPasscodeHost() && m_password) {
                 if (getFocusedElement() == m_password) {
                     removeFocus();
@@ -327,6 +343,8 @@ namespace {
             auto *list = m_list = new tsl::elm::List();
             list->addItem(new tsl::elm::CategoryHeader(tr("Current session", "当前连接")));
             list->addItem(m_connection = new tsl::elm::ListItem(tr("Connection", "连接")));
+            list->addItem(m_host_node = new tsl::elm::ListItem(tr("Hosting node", "建房节点")));
+            list->addItem(m_active_route = new tsl::elm::ListItem(tr("Room node", "房间节点")));
             list->addItem(m_room = new tsl::elm::ListItem(tr("Room", "房间")));
             list->addItem(m_players = new tsl::elm::ListItem(tr("Room members", "房间成员")));
             list->addItem(m_match = new tsl::elm::ListItem(tr("Match", "匹配")));
@@ -350,6 +368,25 @@ namespace {
             if (!g_notice.empty() && armGetSystemTick() >= g_notice_until) g_notice.clear();
             updatePasswordAction();
             m_connection->setValue(connectionLabel(), !g_snapshot.relay_ok);
+            if (!g_host_node_valid) {
+                m_host_node->setValue(tr("Unavailable", "服务不可用"), true);
+            } else {
+                std::string node = g_host_node.name;
+                if (g_host_node.status == NodeHostUnavailable) node += tr(" · Unavailable", " · 不可用");
+                else if (g_host_node.status == NodeHostPending) node += tr(" · Pending", " · 待检查");
+                m_host_node->setValue(node, g_host_node.status == NodeHostPending || g_host_node.status == NodeHostUnavailable);
+            }
+            if (!g_active_route_valid) {
+                m_active_route->setValue(tr("Unavailable", "服务不可用"), true);
+            } else if (g_active_route.status == NodeRouteNone) {
+                m_active_route->setValue("—", true);
+            } else {
+                std::string node = g_active_route.name;
+                if (g_active_route.status == NodeRouteSelected) node += tr(" · Selected", " · 已选择");
+                else if (g_active_route.status == NodeRouteRecovering) node += tr(" · Reconnecting", " · 正在重连");
+                else if (g_active_route.status == NodeRouteUnavailable) node += tr(" · Unavailable", " · 不可用");
+                m_active_route->setValue(node, g_active_route.status != NodeRouteConnected);
+            }
             const bool room = g_snapshot.relay_ok && g_snapshot.status.state == 2;
             m_room->setValue(room ? g_snapshot.status.code : "—", !room);
             char players[16]{};
@@ -375,12 +412,15 @@ namespace {
     class Overlay : public tsl::Overlay {
     public:
         void initServices() override {
+            connectServices();
             tsl::hlp::doWithSDCardHandle([] {
                 bool found = false;
-                g_chinese = chinesePreference("sdmc:/lanywhere/language.ini", &found);
-                if (!found) g_chinese = chinesePreference("sdmc:/lanywhere/language.ini.previous", &found);
+                u32 selection = 2;
+                if (!serviceIsActive(&g_relay) || R_FAILED(lanywhereOverlayGetStorageSelection(&g_relay, &selection))) return;
+                const bool current = selection == 1;
+                g_chinese = chinesePreference(rc_storage_path(current, RC_LEGACY_PATH("language.ini"), RC_CURRENT_PATH("language.ini")), &found);
+                if (!found) g_chinese = chinesePreference(rc_storage_path(current, RC_LEGACY_PATH("language.ini.previous"), RC_CURRENT_PATH("language.ini.previous")), &found);
             });
-            connectServices();
         }
         void exitServices() override { closeServices(); }
         void onShow() override { refresh(); }

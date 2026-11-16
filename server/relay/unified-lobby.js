@@ -27,7 +27,8 @@ function create({ providerIds, queryProvider, selfRows, regional, community, now
             return;
         }
         const source = { time: now(), rows: rows.map(row => pack(row, provider)),
-            nodeRows: rows.map(row => ({ summary: Buffer.from(row), locator: row.nodeLocator && Buffer.from(row.nodeLocator) })) };
+            nodeRows: rows.map(row => ({ summary: Buffer.from(row), locator: row.nodeLocator && Buffer.from(row.nodeLocator), upstreamAddress: rows.upstreamAddress })) };
+        source.nodeRows.upstreamAddress = rows.upstreamAddress;
         if (community?.source === provider) {
             // The direct client requires a resolved LCID. Keep legacy sentinel
             // rooms reachable through their existing compatibility route.

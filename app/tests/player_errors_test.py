@@ -40,6 +40,8 @@ fixed_english = {
     'Direct room info is busy. Try again.',
     'Node selection requires an idle connection.', 'Node selection is unavailable. Try again.',
     'Node selection is busy. Try again.', 'Invalid node catalog request.',
+    'Invalid custom node catalog request.', 'Invalid custom node lobby request.',
+    'Could not start the room connection. Try again.',
     'Invalid node room query.', 'Invalid node locator query.',
     'Server is restarting. Try again.', 'Update requires an idle connection.', 'Update connection is read-only.',
 }

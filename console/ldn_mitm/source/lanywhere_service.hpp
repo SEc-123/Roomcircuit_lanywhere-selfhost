@@ -58,7 +58,11 @@
     AMS_SF_METHOD_INFO(C, H, 38, Result, SelectNodeRoom, (NodeRoomSelection request), (request)) \
     AMS_SF_METHOD_INFO(C, H, 39, Result, GetDirectHostRoom, (const ams::sf::OutBuffer &out), (out)) \
     AMS_SF_METHOD_INFO(C, H, 40, Result, GetDirectRoomPasscode, (NodeRoomSelection request, ams::sf::Out<RoomPasscodeReply> reply), (request, reply)) \
-    AMS_SF_METHOD_INFO(C, H, 41, Result, ListAnnotatedNodeRooms, (NodeRoomsRequest request, ams::sf::Out<UnifiedPage> page, const ams::sf::OutBuffer &out), (request, page, out))
+    AMS_SF_METHOD_INFO(C, H, 41, Result, ListAnnotatedNodeRooms, (NodeRoomsRequest request, ams::sf::Out<UnifiedPage> page, const ams::sf::OutBuffer &out), (request, page, out)) \
+    AMS_SF_METHOD_INFO(C, H, 42, Result, GetDynamicNodeCatalog, (const ams::sf::OutBuffer &out), (out)) \
+    AMS_SF_METHOD_INFO(C, H, 44, Result, GetHostNodeInfo, (const ams::sf::OutBuffer &out), (out)) \
+    AMS_SF_METHOD_INFO(C, H, 45, Result, GetActiveNodeRoute, (const ams::sf::OutBuffer &out), (out)) \
+    AMS_SF_METHOD_INFO(C, H, 46, Result, GetStorageSelection, (ams::sf::Out<u32> selection), (selection))
 
 AMS_SF_DEFINE_INTERFACE(ams::mitm::lanywhere, ILanywhereService, AMS_ILANYWHERE_SERVICE, 0x594E414C)
 
@@ -76,6 +80,10 @@ namespace ams::mitm::lanywhere {
             Result StartQuickMatch();
             Result CancelMatch();
             Result GetMatchStatus(sf::Out<MatchStatus> out);
+            Result GetDynamicNodeCatalog(const sf::OutBuffer &out);
+            Result GetHostNodeInfo(const sf::OutBuffer &out);
+            Result GetActiveNodeRoute(const sf::OutBuffer &out);
+            Result GetStorageSelection(sf::Out<u32> selection);
             Result GetHostNode(sf::Out<u32> node);
             Result SetHostNode(u32 node);
             Result ListNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out);

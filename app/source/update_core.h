@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "../../common/update_format.h"
 
 typedef enum {
@@ -16,6 +17,8 @@ typedef enum {
     UPDATE_INSTALLED,
     UPDATE_RECOVERY_REQUIRED,
     UPDATE_RECOVERY_CONFLICT,
+    UPDATE_RENAMED_OVERLAY_CONFLICT,
+    UPDATE_RENAMED_APP_CONFLICT,
 } UpdateResult;
 
 typedef struct {
@@ -44,4 +47,11 @@ UpdateResult update_recover(const char *root);
 UpdateResult update_transaction_pending(const char *root);
 
 UpdateResult update_pending_version(const char *root, char version[32]);
+/* Promote legacy v1 destinations using a recoverable, hash-bound journal.
+ * Existing entries require signed or previously validated ownership. */
+UpdateResult update_promote_renamed(const char *root, bool allow_existing);
+/* Remove only previously published legacy entrypoint binaries with known hashes. */
+void update_finish_legacy_cleanup(const char *root);
+void update_record_renamed_ownership(const char *root, const char *running_version);
+void update_cleanup_known_legacy(const char *root, const char *running_version);
 UpdateResult update_acknowledge(const char *root);

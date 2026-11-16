@@ -74,6 +74,7 @@ try {
         ...process.env, LANYWHERE_LANPLAY_PORT: '0', LANYWHERE_PUBLIC_PORT: '0',
     });
     await suite('Node directory and optional group measurements', process.execPath, ['--test', 'server/relay/test-node-directory.js']);
+    await suite('Administrator custom nodes and shared directory', process.execPath, ['--test', 'server/relay/test-custom-node-registry.js']);
     await suite('Real direct-node locators and legacy peer joins', process.execPath, ['--test', 'server/relay/test-node-real-locator.js']);
     await suite('Preferred raw locator and compatible gateway sessions', process.execPath, ['--test', 'server/relay/test-node-locator-preference.js']);
     await suite('Console measured node probes', process.env.PYTHON || 'python3', ['-B', 'app/tests/node_probe_test.py']);
@@ -85,6 +86,23 @@ try {
     await suite('Node selection sysmodule diagnostic I/O', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/selection_trace_test.py']);
     await suite('Native node probe with hostile replies and interrupted sockets', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/lanplay_probe_test.py']);
     await suite('Pinned thread creation resource boundaries', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/thread_resource_boundary_test.py']);
+    await suite('Startup worker resource ordering', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/startup_node_threads_test.py']);
+    await suite('Room worker resource failure and retry', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/relay_worker_resource_test.py']);
+    await suite('Native storage migration and fault recovery', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/storage_migration_test.py']);
+    await suite('App authoritative storage IPC', process.env.PYTHON || 'python3', ['-B', 'app/tests/storage_ipc_test.py']);
+    await suite('Saved hosting node label and unavailable state', process.env.PYTHON || 'python3', ['-B', 'app/tests/hosting_node_label_test.py']);
+    await suite('Signed entrypoint ownership', process.env.PYTHON || 'python3', ['-B', 'app/tests/entrypoint_identity_integration_test.py']);
+    await suite('Custom node configuration', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/custom_nodes_test.py']);
+    await suite('Selected node preference persistence', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_preferences_test.py']);
+    await suite('Selected node recovery after network loss', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_restore_retry_test.py']);
+    await suite('Node catalog refresh and active route preservation', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_catalog_refresh_test.py']);
+    await suite('Current room route and reconnect status', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/node_active_route_test.py']);
+    await suite('Room-specific endpoint latency', process.env.PYTHON || 'python3', ['-B', 'app/tests/room_node_probe_test.py']);
+    await suite('Room probe retry input and pinned address', process.env.PYTHON || 'python3', ['-B', 'app/tests/room_probe_input_test.py']);
+    await suite('Shared node authority and address pinning', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/shared_node_authority_test.py']);
+    const storageBinary = path.join(temp, 'storage-choice-test');
+    if (await suite('App storage choice build', process.env.CC || 'cc', ['-std=c11', '-D_DEFAULT_SOURCE', '-Wall', '-Wextra', '-Werror', 'app/tests/roomcircuit_storage_test.c', '-o', storageBinary]))
+        await suite('App storage choice snapshot', storageBinary, []);
     await suite('LDN scan fields and pre-creation advertisements', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/ldn_input_contract_test.py']);
     await suite('Online update delivery and game isolation', process.execPath, ['--test', 'server/relay/test-update-distribution.js']);
     await suite('Signed updater transaction and interrupted recovery', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_core_test.py']);

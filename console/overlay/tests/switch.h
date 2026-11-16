@@ -23,7 +23,9 @@ typedef enum {SetLanguage_ENUS=1,SetLanguage_ZHCN=6,SetLanguage_ZHTW=11,SetLangu
 #define HidNpadButton_X        (UINT64_C(1) << 10)
 typedef struct { u32 x, y; } HidTouchState;
 typedef struct { int x, y; } HidAnalogStickState;
-typedef struct {int out_num_objects;Service*out_objects;} MockParams;
+typedef struct {int out_num_objects;Service*out_objects; int buffer_attrs[8]; struct {void *ptr; size_t size;} buffers[8];} MockParams;
+#define SfBufferAttr_Out 1
+#define SfBufferAttr_HipcMapAlias 2
 #ifdef __cplusplus
 extern "C" {
 #endif

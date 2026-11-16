@@ -167,6 +167,9 @@ int main(int argc, char **argv)
             if (scene >= 41) {
                 v.discovery = LobbyDiscoveryUnified;
                 v.node_directory = v.node_picker_available = true;
+                v.host_info_valid = true;
+                v.host_info.status = NodeHostReady;
+                snprintf(v.host_info.name, sizeof(v.host_info.name), "%s", "Main server");
                 v.region_filter = 255;
                 v.count = scene == 44 ? 0 : scene == 42 ? 3 : 6;
                 v.game_filter = scene == 42 ? 100 : 0;
@@ -187,6 +190,7 @@ int main(int argc, char **argv)
                 v.count = 2;
                 v.sel = -1;
                 v.host_node = 7;
+                snprintf(v.host_info.name, sizeof(v.host_info.name), "%s", LanywhereNodes[7].name_en);
                 const char *game = zh ? "宝可梦 紫" : "Pokémon Violet";
                 for (int i = 0; i < v.count; ++i) {
                     const char *room_code = i ? "ABC235" : "ABC234";

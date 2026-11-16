@@ -1,6 +1,7 @@
 /* Game password sharing in the LANywhere lobby. SPDX-License-Identifier: GPL-2.0-only */
 #include "room_password.h"
 #include "ui_text.h"
+#include "nodes_ui.h"
 #include "../../common/direct_room_metadata.h"
 #include <string.h>
 
@@ -81,8 +82,9 @@ bool room_password_tick(RoomPasswordView *view, LobbyRoomId target, bool known_l
 bool room_password_tick_direct(RoomPasswordView *view, LobbyRoomId target, const NodeRoomSelection *selection,
                                bool known_locked, u64 now)
 {
-    if (selection && (selection->node_id < 2 || selection->node_id >= NODE_CATALOG_COUNT ||
-        selection->game_id != target.game_id || strcmp(target.provider, LanywhereNodes[selection->node_id].provider) ||
+    if (selection && (selection->node_id < 2 || selection->node_id >= NODE_SHARED_CAPACITY ||
+        !nodes_ui_valid(selection->node_id) || selection->game_id != target.game_id ||
+        strcmp(target.provider, nodes_ui_provider(selection->node_id)) ||
         memcmp(target.code, selection->locator.code, sizeof(target.code)))) {
         target = (LobbyRoomId){0};
         selection = NULL;

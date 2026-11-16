@@ -61,7 +61,11 @@ namespace log {Result Initialize();void LogFormatImpl(const char*,...);}
 }
 /* SOURCE */
 namespace fs=ams::fs;namespace util=ams::util;
-static constexpr const char*LogPath="sdmc:/lanywhere/bsd.log";
+#define RC_LEGACY_DIR "sdmc:/lanywhere"
+#define RC_CURRENT_DIR "sdmc:/switch/RoomCircuit/data"
+namespace storage {bool StorageUseCurrent(){return false;}}
+const char *rc_storage_path(bool current,const char*oldPath,const char*newPath){return current?newPath:oldPath;}
+static const char*LogPath(){return "sdmc:/lanywhere/bsd.log";}
 static bool DebugEnabled(){return true;}
 /* BSD */
 int main(){

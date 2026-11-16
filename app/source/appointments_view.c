@@ -1,5 +1,7 @@
 /* Appointments keep their own presentation and use the lobby's existing IPC worker. */
 #include "appointments_view.h"
+#include "roomcircuit_storage.h"
+#include "../../common/roomcircuit_paths.h"
 #include "appointments_model.h"
 #include "gfx.h"
 #include "title_inventory.h"
@@ -390,7 +392,7 @@ static void load_games(bool loading, bool failed)
         return;
     }
     if (!failed)
-        g_game_count = title_inventory_appointments_at(GAME_CACHE_PATH, g_game_offset,
+        g_game_count = title_inventory_appointments_at(rc_storage_path(roomcircuit_storage_current(), GAME_CACHE_PATH, RC_CURRENT_PATH("game-titles.bin")), g_game_offset,
             g_games, APPOINTMENT_PAGE_SIZE, &g_games_more);
     if (failed || g_game_count < 0) g_notice = "Could not read game titles. Reopen the app.";
     else g_notice = g_game_count ? NULL : "No installed games with Local Wireless found.";

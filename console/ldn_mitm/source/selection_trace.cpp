@@ -1,4 +1,6 @@
 #include "selection_trace.hpp"
+#include "storage_migration.hpp"
+#include "../../../common/roomcircuit_paths.h"
 #if defined(__SWITCH__)
 #include <stratosphere.hpp>
 #include <algorithm>
@@ -7,7 +9,7 @@
 
 namespace ams::mitm::selection_trace {
 namespace {
-constexpr const char Path[] = "sdmc:/lanywhere/node-selection.log";
+const char *Path() { return rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_PATH("node-selection.log"), RC_CURRENT_PATH("node-selection.log")); }
 constexpr s64 MaxBytes = 8192;
 os::SdkMutex g_trace_lock;
 Handle g_operation = 0;
@@ -35,7 +37,7 @@ bool Append(const char *stage, std::uint32_t result) {
     if (count <= 0 || static_cast<size_t>(count) >= sizeof(line) ||
         g_offset > MaxBytes - count) return false;
     fs::FileHandle file;
-    if (R_FAILED(fs::OpenFile(&file, Path, fs::OpenMode_Write | fs::OpenMode_AllowAppend))) return false;
+    if (R_FAILED(fs::OpenFile(&file, Path(), fs::OpenMode_Write | fs::OpenMode_AllowAppend))) return false;
     const Result written = fs::WriteFile(file, g_offset, line, static_cast<size_t>(count), fs::WriteOption::Flush);
     fs::CloseFile(file);
     if (R_FAILED(written)) return false;
@@ -53,12 +55,12 @@ Handle Begin(std::uint32_t node, const char *stage) {
     g_sequence = 0;
     g_offset = 0;
     g_writable = false;
-    static_cast<void>(fs::CreateDirectory("sdmc:/lanywhere"));
+    static_cast<void>(fs::CreateDirectory(rc_storage_path(storage::StorageUseCurrent(), RC_LEGACY_DIR, RC_CURRENT_DIR)));
     bool exists = false;
-    if (R_FAILED(fs::HasFile(&exists, Path))) return g_operation;
-    if (!exists && R_FAILED(fs::CreateFile(Path, 0))) return g_operation;
+    if (R_FAILED(fs::HasFile(&exists, Path()))) return g_operation;
+    if (!exists && R_FAILED(fs::CreateFile(Path(), 0))) return g_operation;
     fs::FileHandle file;
-    if (R_FAILED(fs::OpenFile(&file, Path, fs::OpenMode_Write))) return g_operation;
+    if (R_FAILED(fs::OpenFile(&file, Path(), fs::OpenMode_Write))) return g_operation;
     const Result cleared = fs::SetFileSize(file, 0);
     fs::CloseFile(file);
     if (R_SUCCEEDED(cleared)) g_writable = Append(stage, 0);

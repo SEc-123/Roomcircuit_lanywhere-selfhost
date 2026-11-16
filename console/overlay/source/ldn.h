@@ -2,6 +2,7 @@
 #pragma once
 #include <switch.h>
 #include "../../../common/room_passcode.h"
+#include "../../../common/node_lobby.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +46,9 @@ _Static_assert(sizeof(LanywhereOverlayStatus) == 96 && sizeof(LanywhereOverlayMa
 Result lanywhereOverlayGetProtocol(Service *s, u32 *version);
 Result lanywhereOverlayGetStatus(Service *s, LanywhereOverlayStatus *out);
 Result lanywhereOverlayGetMatch(Service *s, LanywhereOverlayMatch *out);
+Result lanywhereOverlayGetHostNode(Service *s, NodeHostInfo *out);
+Result lanywhereOverlayGetActiveRoute(Service *s, NodeActiveRouteInfo *out);
+Result lanywhereOverlayGetStorageSelection(Service *s, u32 *selection);
 Result lanywhereOverlayGetPasscodeHost(Service *s, RoomPasscodeHost *out);
 Result lanywhereOverlaySetRoomAccess(Service *s, const RoomAccessChange *change, u32 *status);
 

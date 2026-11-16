@@ -4,6 +4,7 @@
 typedef struct { unsigned signals; } UEvent;
 typedef struct { bool locked; } Mutex;
 typedef struct { int unused; } Service;
+typedef struct { int unused; } PadState;
 typedef struct { unsigned limit; const char *header, *subtext; } SwkbdConfig;
 
 void mutexInit(Mutex *);

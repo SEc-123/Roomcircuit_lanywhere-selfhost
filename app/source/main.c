@@ -12,6 +12,7 @@
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <switch.h>
+#include <switch/sf/tipc.h>
 #include <turbojpeg.h>
 #include "gfx.h"
 #include "lobby_model.h"
@@ -28,6 +29,8 @@
 #include "room_password.h"
 #include "update_ui.h"
 #include "nodes_ui.h"
+#include "roomcircuit_storage.h"
+#include "../../common/roomcircuit_paths.h"
 
 #define TOUCH_UPDATE (1ULL << 59)
 #define TOUCH_NODE_FILTER (1ULL << 55)
@@ -43,7 +46,7 @@
 static bool g_es;
 static bool g_zh;
 static bool g_language_save_failed;
-#define UI_LANGUAGE_PATH "sdmc:/lanywhere/language.ini"
+#define UI_LANGUAGE_PATH rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("language.ini"), RC_CURRENT_PATH("language.ini"))
 static bool g_guide_open;
 static int g_guide_page;
 #define TR(es, en) ui_tr((es), (en))
@@ -343,11 +346,11 @@ static LobbyPage lanywhere_list_nodes(NodeRoomsRequest request, LobbyGroup *grou
     if(page->count==-1 && (lanywhere_list_status_valid(page->status)||page->status==UnifiedListStale))
         return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=page->status};
     if(page->count<0 || page->count>(int32_t)NODE_LOBBY_PAGE_SIZE || page->status || !page->snapshot ||
-       (request.snapshot&&request.snapshot!=page->snapshot) || page->total>NODE_CATALOG_COUNT || page->available>page->total || (page->next!=NODE_LOBBY_END &&
+       (request.snapshot&&request.snapshot!=page->snapshot) || page->total>NODE_SHARED_CAPACITY || page->available>page->total || (page->next!=NODE_LOBBY_END &&
        (!page->count || page->next!=request.offset+(uint32_t)page->count)))
         return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusProtocol};
     for(int i=0;i<page->count;i++){
-        if(rows[i].node_id>=NODE_CATALOG_COUNT || !(request.node_mask&(1u<<rows[i].node_id)) ||
+        if(rows[i].node_id>=NODE_SHARED_CAPACITY || !nodes_ui_valid(rows[i].node_id) || !(request.node_mask&(1u<<rows[i].node_id)) ||
            (rows[i].flags!=NodeRoomDirect && rows[i].flags!=NodeRoomGateway) ||
            (request.game_id && rows[i].group.game_id!=request.game_id) ||
            !rows[i].group.game_id || rows[i].group.code[6] || rows[i].group.code[7] ||
@@ -356,11 +359,14 @@ static LobbyPage lanywhere_list_nodes(NodeRoomsRequest request, LobbyGroup *grou
            (rows[i].node_id && rows[i].group.room_access!=RoomAccessNone &&
             (!annotated || rows[i].node_id<2 || rows[i].flags!=NodeRoomDirect)) ||
            rows[i].locator.code[6] || rows[i].locator.code[7] || memcmp(rows[i].locator.code,rows[i].group.code,6) ||
-           rows[i].locator.reserved0 || memcmp(rows[i].locator.reserved,(uint8_t[12]){0},12))
+           rows[i].locator.reserved0 ||
+           (rows[i].node_id < NODE_CATALOG_COUNT ? memcmp(rows[i].locator.reserved,(uint8_t[12]){0},12) :
+             (rows[i].flags != NodeRoomDirect || !memcmp(rows[i].locator.reserved,(uint8_t[4]){0},4) ||
+              memcmp(rows[i].locator.reserved+4,(uint8_t[8]){0},8))))
             return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusProtocol};
         groups[i]=rows[i].group;lobby_sanitize_group(&groups[i]);
         snprintf(sources[i],sizeof(sources[i]),"%s",rows[i].node_id==1 && rows[i].flags==NodeRoomDirect?
-            REGION_PROVIDER_COMMUNITY:LanywhereNodes[rows[i].node_id].provider);
+            REGION_PROVIDER_COMMUNITY:nodes_ui_provider(rows[i].node_id));
         if(!lobby_room_id_on(&groups[i],sources[i]).game_id)
             return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusProtocol};
     }
@@ -437,7 +443,7 @@ static void decode_icon(Image *img, const unsigned char *jpeg, size_t size)
 static void record_icon_status(u64 id, unsigned attempt, unsigned long result,
                                u64 size, const char *decode, const Image *icon, int installed)
 {
-    const char *path = "sdmc:/lanywhere/icon-status.log";
+    const char *path = rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("icon-status.log"), RC_CURRENT_PATH("icon-status.log"));
     FILE *f = fopen(path, "a+");
     if (!f) return;
     if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return; }
@@ -536,7 +542,8 @@ static void switch_language(void)
     g_zh = !g_zh;
     g_es = false;
     ui_set_language(g_zh, false);
-    const bool directory_ready = mkdir(RELAY_CONFIG_DIR, 0777) == 0 || errno == EEXIST;
+    const bool available = roomcircuit_storage_available();
+    const bool directory_ready = available && (mkdir(RELAY_CONFIG_DIR, 0777) == 0 || errno == EEXIST);
     g_language_save_failed = !directory_ready || !ui_locale_save(UI_LANGUAGE_PATH, g_zh);
     clear_game_cache();
 }
@@ -554,7 +561,8 @@ static LobbyPage g_list_page;
 static LobbyNodeRoom g_node_rows[LOBBY_PAGE_SIZE];
 static bool g_nodes_directory;
 static u64 g_node_game_filter;
-static u32 g_node_mask=(1u<<NODE_CATALOG_COUNT)-1;
+static u32 g_node_mask=(1u<<NODE_SHARED_CAPACITY)-1;
+static uint8_t g_node_region=255;
 static u32 g_list_offset, g_list_response_ms;
 static u64 g_list_game_id;
 static char g_list_provider[33] = "self";
@@ -587,7 +595,8 @@ static void list_thread(void *arg)
         const u64 game_id = g_list_game_id;
         bool node_directory=g_nodes_directory;
         const u64 node_game=g_node_game_filter;
-        const u32 node_mask=g_node_mask;
+        u32 node_mask=g_node_mask;
+        const uint8_t node_region=g_node_region;
         enum LobbyDiscovery discovery = g_list_discovery;
         char provider[sizeof(g_list_provider)];
         memcpy(provider, g_list_provider, sizeof(provider));
@@ -609,6 +618,11 @@ static void list_thread(void *arg)
             waitSingle(waiterForUEvent(&g_refresh), (next_query - started) * 1000000ULL);
             continue;
         }
+
+        /* The native directory refreshes asynchronously; consume its latest
+         * snapshot on this worker so newly published nodes reach the lobby. */
+        if (node_directory && nodes_ui_refresh_catalog(&g_lanywhere_list))
+            node_mask = nodes_ui_region_mask(node_region);
 
         LobbyGroup groups[LOBBY_PAGE_SIZE] = {0};
         LobbySource sources[LOBBY_PAGE_SIZE] = {{0}};
@@ -815,6 +829,8 @@ typedef struct {
     DirectRoomHost direct_host;
     bool node_picker_available, node_directory;
     uint32_t host_node;
+    NodeHostInfo host_info;
+    bool host_info_valid;
     uint64_t game_filter, game_focus_id;
     bool game_rail_focused;
     char game_filter_name[128];
@@ -842,6 +858,17 @@ typedef struct {
     RoomPasswordEdit password_edit;
     int sel;  // grupo elegido en la lista, o -1
 } View;
+
+static const char *hosting_node_label(const View *v, char *buffer, size_t size)
+{
+    if (!v->host_info_valid) return ui_text("Unavailable");
+    const char *name = ui_text(v->host_info.name);
+    const char *state = v->host_info.status == NodeHostUnavailable ? ui_text("Unavailable") :
+        v->host_info.status == NodeHostPending ? ui_text("Checking") : NULL;
+    if (state) snprintf(buffer, size, "%s · %s", name, state);
+    else snprintf(buffer, size, "%s", name);
+    return buffer;
+}
 
 static bool consume_inventory_result(View *v)
 {
@@ -886,7 +913,7 @@ static bool is_self_room_context(const View *v)
 static bool has_direct_host(const View *v)
 {
     return v->status_valid && v->st.state == StateInRoom && v->st.my_index == 0 && v->direct_host.epoch &&
-        v->direct_host.node_id >= 2 && v->direct_host.node_id < NODE_CATALOG_COUNT &&
+        v->direct_host.node_id >= 2 && nodes_ui_valid(v->direct_host.node_id) &&
         (v->direct_host.flags & DirectRoomHostActive);
 }
 
@@ -900,9 +927,9 @@ static bool owns_direct_room(const View *v, const LobbyNodeRoom *row)
 
 static bool has_pinned_direct_room(const View *v)
 {
-    return v->external_confirm && v->pinned_node.node_id >= 2 && v->pinned_node.node_id < NODE_CATALOG_COUNT &&
+    return v->external_confirm && v->pinned_node.node_id >= 2 && v->pinned_node.node_id < NODE_SHARED_CAPACITY && nodes_ui_valid(v->pinned_node.node_id) &&
         v->pinned.game_id && v->pinned.game_id == v->pinned_node.game_id &&
-        strcmp(v->pinned.provider, LanywhereNodes[v->pinned_node.node_id].provider) == 0 &&
+        strcmp(v->pinned.provider, nodes_ui_provider(v->pinned_node.node_id)) == 0 &&
         memcmp(v->pinned.code, v->pinned_node.locator.code, sizeof(v->pinned.code)) == 0;
 }
 
@@ -985,7 +1012,7 @@ static const char *match_state_text(u8 state)
 
 // Capturas sin mando: si aparece sdmc:/lanywhere/captura.flag (por ejemplo, copiado por FTP), el siguiente
 // fotograma se guarda como sdmc:/lanywhere/captura-N.png y el archivo se borra.
-#define CAPTURE_FLAG "sdmc:/lanywhere/captura.flag"
+#define CAPTURE_FLAG rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("captura.flag"), RC_CURRENT_PATH("captura.flag"))
 static bool g_capture_pending;
 
 static bool capture_requested(void)
@@ -1002,7 +1029,7 @@ static void save_capture_if_requested(void)
     char path[64];
     struct stat st;
     for (int n = 1; n < 1000; n++) {
-        snprintf(path, sizeof(path), "sdmc:/lanywhere/captura-%d.png", n);
+        snprintf(path, sizeof(path), "%s/captura-%d.png", RELAY_CONFIG_DIR, n);
         if (stat(path, &st) == 0) continue;
         if (errno != ENOENT) return;
         if (gfx_save_png(path)) remove(CAPTURE_FLAG);
@@ -1200,9 +1227,14 @@ static void group_card(int x, int y, int w, const LobbyGroup *g, const char *sou
     const char *note = g->room_access == RoomAccessHidden ? ui_text("Password required") : room_title_note(g);
     char details[160] = {0};
     if (source && source[0]) {
-        const char *label = strcmp(source, REGION_PROVIDER_COMMUNITY) == 0 ? region_label(RelayRegionCommunity) :
+        unsigned custom = 0;
+        char trailing = 0;
+        const bool shared_custom = sscanf(source, "custom-%u%c", &custom, &trailing) == 1 &&
+            custom >= NODE_CATALOG_COUNT && custom < NODE_SHARED_CAPACITY && nodes_ui_valid(custom);
+        const char *label = shared_custom ? nodes_ui_name(custom) :
+            strcmp(source, REGION_PROVIDER_COMMUNITY) == 0 ? region_label(RelayRegionCommunity) :
             strcmp(source, REGION_PROVIDER_EU) == 0 ? region_label(RelayRegionEurope) : provider_label(lobby_provider_index(source));
-        const char *region = NULL;
+        const char *region = shared_custom ? nodes_ui_region(nodes_ui_region_for(custom)) : NULL;
         for (unsigned id = 0; id < NODE_CATALOG_COUNT; id++) {
             if (strcmp(source, LanywhereNodes[id].provider) == 0) {
                 region = nodes_ui_region(LanywhereNodes[id].region);
@@ -1687,7 +1719,8 @@ static void side_column(const View *v)
         gfx_round_rect(x, y, SIDE_W, 94, 18, C_PANEL);
         gfx_text(x + 20, y + 12, 24, C_TEXT, ui_text("Hosting line"));
         if (current_host_line_available(v)) {
-            gfx_text_fit(x + 20, y + 49, 24, C_CODE, v->node_picker_available?nodes_ui_name(v->host_node):region_label(v->host_region), SIDE_W - 94);
+            char node_label[96];
+            gfx_text_fit(x + 20, y + 49, 24, C_CODE, v->node_picker_available?hosting_node_label(v,node_label,sizeof(node_label)):region_label(v->host_region), SIDE_W - 94);
         } else {
             char label[96];
             snprintf(label, sizeof(label), ui_text("%s unavailable"), region_label(v->host_region));
@@ -1788,6 +1821,8 @@ static const char *board_game_title(const View *v, u64 game, char *buffer, size_
 static const char *board_room_node(const View *v, int index)
 {
     if (!v->sources[index][0]) return ui_text("Main server");
+    if (v->node_rows[index].node_id >= NODE_CATALOG_COUNT && nodes_ui_valid(v->node_rows[index].node_id))
+        return nodes_ui_name(v->node_rows[index].node_id);
     if (strcmp(v->sources[index], REGION_PROVIDER_EU) == 0)
         return region_label(RelayRegionEurope);
     return provider_label(lobby_provider_index(v->sources[index]));
@@ -1798,7 +1833,7 @@ static const char *board_room_region(const View *v, int index)
     if (strcmp(v->sources[index], REGION_PROVIDER_EU) == 0)
         return ui_text("Europe");
     const uint32_t id = v->node_rows[index].node_id;
-    if (id >= NODE_CATALOG_COUNT) return ui_text("Region unverified");
+    if (id >= NODE_CATALOG_COUNT) return nodes_ui_region(nodes_ui_region_for(id));
     const LanywhereNode *node = &LanywhereNodes[id];
     return node->country[0] ? nodes_ui_country(node->country) : nodes_ui_region(node->region);
 }
@@ -2062,10 +2097,11 @@ static void draw(const View *v)
     gfx_rect(0, FOOTER_Y, GFX_W, 1, C_LINE);
     if (board) {
         char route[192];
+        char node_label[96];
         const bool hosting = has_direct_host(v);
         const char *title = hosting ? direct_host_title(v) : NULL;
         snprintf(route, sizeof(route), "%s · %s", ui_text(hosting ? "My room" : "Hosting line"),
-                 title ? title : nodes_ui_name(hosting ? v->direct_host.node_id : v->host_node));
+                 title ? title : hosting ? nodes_ui_name(v->direct_host.node_id) : hosting_node_label(v,node_label,sizeof(node_label)));
         gfx_round_rect(MARGIN, FOOTER_Y + 31, 8, 8, 4, C_OK);
         gfx_text_fit(MARGIN + 16, FOOTER_Y + 22, 19, C_OK, route, 352);
     }
@@ -2257,7 +2293,7 @@ static void read_direct_host(View *v)
     if (R_FAILED(serviceDispatch(&g_lanywhere, DIRECT_ROOM_HOST_IPC,
         .buffer_attrs = { SfBufferAttr_HipcMapAlias | SfBufferAttr_Out },
         .buffers = { { &host, sizeof(host) } })) ||
-        !host.epoch || host.node_id < 2 || host.node_id >= NODE_CATALOG_COUNT || !host.host_ip || host.reserved_ip ||
+        !host.epoch || host.node_id < 2 || !nodes_ui_valid(host.node_id) || !host.host_ip || host.reserved_ip ||
         !(host.flags & DirectRoomHostActive) || (host.flags & ~(DirectRoomHostActive | DirectRoomHostCanEdit)) ||
         host.reserved[0] || host.reserved[1] || !memcmp(host.bssid, (uint8_t[6]){0}, 6) ||
         !memcmp(host.network_id + 16, (uint8_t[16]){0}, 16) ||
@@ -2273,6 +2309,15 @@ static void read_direct_host(View *v)
 
 static void poll_lanywhere(View *v)
 {
+    if (v->node_picker_available) {
+        NodeHostInfo info = {0};
+        Result rc = serviceDispatch(&g_lanywhere, NODE_GET_HOST_INFO_IPC,
+            .buffer_attrs = { SfBufferAttr_Out | SfBufferAttr_HipcMapAlias },
+            .buffers = { { &info, sizeof(info) } });
+        v->host_info_valid = R_SUCCEEDED(rc) && info.version == 1 && info.status <= NodeHostSelected &&
+            !info.reserved && info.name[0] && memchr(info.name, '\0', sizeof(info.name));
+        if (v->host_info_valid) { v->host_info = info; v->host_node = info.node_id; }
+    }
     LanywhereStatus status = {0};
     if (R_SUCCEEDED(lanywhere_status(&status)) && status.state <= StateError) {
         status.code[sizeof(status.code) - 1] = '\0';
@@ -2435,7 +2480,8 @@ static void draw_no_service(bool incompatible)
     gfx_clear_gradient(C_BG_TOP, C_BG_BOTTOM);
     draw_brand();
     gfx_round_rect(MARGIN, 140, GFX_W - 2 * MARGIN, 200, 18, C_PANEL);
-    gfx_text(MARGIN + 28, 170, 28, C_TEXT, incompatible ?
+    gfx_text(MARGIN + 28, 170, 28, C_TEXT, !roomcircuit_storage_available() ?
+        ui_text("Restart to finish setup or check the SD card.") : incompatible ?
         TR("La app y el módulo son de versiones distintas", "The app and sysmodule versions do not match") :
         TR("Falta el componente de RoomCircuit", "The RoomCircuit component is missing"));
     gfx_text(MARGIN + 28, 222, 22, C_DIM, ui_text("Open Update to repair the installation."));
@@ -2482,18 +2528,43 @@ static bool update_install_ready(void *unused)
     return true;
 }
 
+static void select_module_storage(void)
+{
+    /* Do not block waiting for a missing module or infer its data root from
+     * a second filesystem read. Only the running module chooses the root. */
+    u8 present = 0;
+    const SmServiceName name = smEncodeName("lanywhr");
+    if (R_FAILED(tipcDispatchInOut(smGetServiceSessionTipc(), 65100, name, present)) || !(present & 1)) return;
+    Service service;
+    if (R_FAILED(smGetService(&service, "lanywhr"))) return;
+    u32 selection = 2;
+    Result rc = serviceDispatchOut(&service, 46, selection);
+    serviceClose(&service);
+    if (R_SUCCEEDED(rc) && selection <= 1) roomcircuit_storage_set_authoritative(selection == 1);
+}
+
 int main(int argc, char **argv)
 {
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     PadState pad;
     padInitializeDefault(&pad);
     hidInitializeTouchScreen();
-    detect_language();
+    roomcircuit_storage_init();
+    select_module_storage();
+    if (roomcircuit_storage_available()) detect_language();
+    else ui_set_language(false, false);
     (void)game_catalog_open(&g_catalog, game_catalog_bin, game_catalog_bin_size);
     if (!gfx_init())
         return 1;
     if (update_ui_initialize(argc > 0 ? argv[0] : NULL)) {
         (void)update_ui_open(&pad, NULL, NULL);
+        update_ui_shutdown();
+        gfx_exit();
+        return 0;
+    }
+
+    if (!roomcircuit_storage_available()) {
+        no_service(&pad, true);
         update_ui_shutdown();
         gfx_exit();
         return 0;
@@ -2606,7 +2677,10 @@ int main(int argc, char **argv)
             dirty = true;
         }
         if (now >= next_status) {
+            const NodeHostInfo previous_host = v.host_info;
+            const bool previous_valid = v.host_info_valid;
             poll_lanywhere(&v);
+            if (previous_valid != v.host_info_valid || memcmp(&previous_host, &v.host_info, sizeof(previous_host))) dirty = true;
             next_status = now + STATUS_POLL_MS;
         }
         if (v.external_confirm && (v.st.state == StateInRoom || v.st.state == StateConnecting)) {
@@ -2715,7 +2789,7 @@ int main(int argc, char **argv)
         if(v.node_directory && !v.appointment_game_id && !v.external_confirm && !show_matching(&v) && !v.private_room &&
            ((down&TOUCH_NODE_FILTER) || ((padGetButtons(&pad)&HidNpadButton_ZL)&&(down&HidNpadButton_ZR)))){
             if(nodes_ui_filters(&pad,&g_catalog,&v.game_filter,&v.region_filter)){
-                mutexLock(&g_list_lock);g_node_game_filter=v.game_filter;g_node_mask=nodes_ui_region_mask(v.region_filter);mutexUnlock(&g_list_lock);
+                mutexLock(&g_list_lock);g_node_game_filter=v.game_filter;g_node_region=v.region_filter;g_node_mask=nodes_ui_region_mask(v.region_filter);mutexUnlock(&g_list_lock);
                 v.page_index=0;v.sel=-1;v.selection=(LobbyRoomId){0};
                 v.game_rail_focused = false; v.game_filter_name[0] = 0;
                 v.count = thread_ok ? ListConnecting : ListUnavailable;
@@ -2961,7 +3035,8 @@ int main(int argc, char **argv)
             if(v.selection.code[0]){
                 const int index=v.node_directory?lobby_room_index_on(v.selection,v.groups,v.sources,(size_t)v.count):-1;
                 const bool gateway=index>=0&&v.node_rows[index].flags==NodeRoomGateway;
-                if(index<0 || nodes_ui_check_room(&pad,gateway?0:v.node_rows[index].node_id,gateway))select_room(&v);
+                if(index<0 || nodes_ui_check_room(&pad,gateway?0:v.node_rows[index].node_id,gateway,
+                                                   gateway ? NULL : &v.node_rows[index].locator))select_room(&v);
                 g_zh=ui_chinese();dirty=true;next_status=0;
             }
         } else if (v.private_room && (down & HidNpadButton_B)) {

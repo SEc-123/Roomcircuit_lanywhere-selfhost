@@ -37,8 +37,9 @@ class NativeLanPlayTransport(unittest.TestCase):
             executable = Path(temp) / "address"
             cpp.write_text(harness)
             subprocess.run(shlex.split(os.environ.get("CXX", "c++")) +
-                ["-std=c++17", "-D__SWITCH__", "-Wall", "-Wextra", "-Werror", str(cpp), "-o", str(executable)], check=True)
+                ["-std=c++17", "-D__SWITCH__", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "common"), str(cpp), "-o", str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
+            subprocess.run([str(executable), "current"], check=True)
 
     def test_switch_thread_priority_uses_stratosphere_conversion(self):
         implementation = ROOT / "console/Atmosphere-libs/libstratosphere/source/os/impl"

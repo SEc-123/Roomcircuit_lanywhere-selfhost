@@ -15,7 +15,7 @@ game_type=re.search(r'typedef struct\s*\{[^}]*\}\s*GameInfo;',source).group()
 functions='\n\n'.join(routes.function(source,'static '+name) for name in (
     'const GameInfo *local_game_info(', 'CatalogMatch room_catalog_match(', 'bool game_info_has_lcid(', 'const char *room_title(', 'const GameInfo *display_game_icon(', 'const char *room_title_note(', 'const char *provider_label(', 'const char *region_label(', 'void group_card('))
 node_source=(root/'app/source/nodes_ui.c').read_text(encoding='utf-8')
-functions='\n\n'.join(routes.function(node_source,name) for name in ('const char *nodes_ui_name(', 'const char *nodes_ui_region('))+'\n'+functions
+functions=routes.function(node_source,'const char *nodes_ui_region(')+'\n'+functions
 harness=r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -35,6 +35,9 @@ enum {C_ACCENT,C_BG_TOP,C_CARD,C_DIM,C_TEXT,C_OK,C_SEAT_OFF,C_WARN};
 ''' + game_type + r'''
 static bool g_zh;
 static GameCatalog g_catalog;static GameInfo fake;static int image_count,question_count;static char title[160];
+static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || id == 13; }
+static const char *nodes_ui_name(uint32_t id) { return id == 0 ? ui_text("Main server") : id == 13 ? "Russia LAN" : id < NODE_CATALOG_COUNT ? LanywhereNodes[id].name_en : "Unknown node"; }
+static uint8_t nodes_ui_region_for(uint32_t id) { (void)id; return NodeRegionEurope; }
 static const char private_owner[] = "Private room owner 073";
 static char details[160];
 static const GameInfo *game_info(u64 id) { assert(id==fake.id); return &fake; }

@@ -23,6 +23,10 @@ static Result fake_ns_result; static unsigned ns_calls;
 static Result nsInitialize(void) { ns_calls++; return fake_ns_result; }
 #define R_FAILED(x) ((x)!=0)
 #define RELAY_PROFILE_FIXED 1
+#define RC_LEGACY_PATH(name) "sdmc:/lanywhere/" name
+#define RC_CURRENT_PATH(name) "sdmc:/switch/RoomCircuit/data/" name
+static bool roomcircuit_storage_current(void) { return false; }
+static const char *rc_storage_path(bool current, const char *old, const char *new_path) { return current ? new_path : old; }
 #define TR(es,en) (en)
 ''' + writer + '\n' + init + '\n' + hint + r'''
 int main(void) {

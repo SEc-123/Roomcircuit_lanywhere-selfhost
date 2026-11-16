@@ -37,6 +37,8 @@ harness = r'''
 #include "ui_text.h"
 #include "../../common/game_identity_text.h"
 typedef uint8_t u8; typedef uint32_t u32; typedef uint64_t u64; typedef int32_t s32;
+typedef int Result;
+#define serviceDispatch(...) 1
 typedef struct { void *px; int w,h; } Image;
 #define TR(es,en) ui_tr((es),(en))
 #define R_SUCCEEDED(r) ((r)==0)

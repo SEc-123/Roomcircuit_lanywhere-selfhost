@@ -29,7 +29,7 @@ def function(source, signature):
 def selection_state(source):
     start = source.index('        constexpr u64 HostRouteEpoch')
     end = source.index('        // Called with g_lock held. A reserved match', start)
-    return (profile_prelude() + '\n[[maybe_unused]] static u32 g_host_node = 0;\n[[maybe_unused]] static sockaddr_in g_node_endpoints[NODE_CATALOG_COUNT]{};\n' + community_endpoint_functions(source) + '\n' + source[start:end]
+    return (profile_prelude() + '\n[[maybe_unused]] static u32 g_host_node = 0;\n[[maybe_unused]] static u32 g_selected_status = NodeHostSelected;\n[[maybe_unused]] static sockaddr_in g_node_endpoints[NODE_CATALOG_COUNT]{};\n' + community_endpoint_functions(source) + '\n' + source[start:end]
             .replace('void RememberDirectoryRegions(', '[[maybe_unused]] void RememberDirectoryRegions(')
             .replace('void ClearSelectionLocked(', '[[maybe_unused]] void ClearSelectionLocked(')
             .replace('void SelectRouteLocked(', '[[maybe_unused]] void SelectRouteLocked('))

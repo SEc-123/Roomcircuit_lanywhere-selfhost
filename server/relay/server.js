@@ -34,6 +34,7 @@ const { groupPage } = require('./group-page');
 const { create: createUnifiedLobby } = require('./unified-lobby');
 const regionalDirectory = require('./regional-directory');
 const nodeDirectory = require('./node-directory');
+const customNodeRegistry = require('./custom-node-registry');
 const directRoomMetadata = require('./direct-room-metadata');
 const nodeFriends = require('./node-friends');
 const nodeLocator = require('./node-locator');
@@ -93,7 +94,7 @@ const SELF_CAPABILITIES = (process.env.LANYWHERE_LANPLAY_REALM ? 65536 : 0) | 3 
     ((LANPLAY_PORT || process.env.LANYWHERE_LANPLAY_REALM) ? streamProtocol.LEGACY_CAPABILITY : 0) |
     (process.env.LANYWHERE_LANPLAY_REALM ? 0 : upstreamGateway.ROOM_PASSCODE_CAPABILITY |
         upstreamGateway.ROOM_ACCESS_CAPABILITY | upstreamGateway.UNIFIED_LOBBY_CAPABILITY |
-        pushProtocol.CAPABILITY | nodeDirectory.CAPABILITY | directRoomMetadata.CAPABILITY |
+        pushProtocol.CAPABILITY | nodeDirectory.CAPABILITY | directRoomMetadata.CAPABILITY | customNodeRegistry.CAPABILITY |
         (regionalEndpoint ? regionalDirectory.CAPABILITY : 0) |
         (communityEndpoint ? regionalDirectory.COMMUNITY_LOBBY_CAPABILITY : 0));
 const IDLE_MS = 20000;
@@ -143,6 +144,10 @@ try {
 } catch (error) {
     if (error.code !== 'ENOENT') throw error;
 }
+const customNodes = customNodeRegistry.load(process.env.ROOMCIRCUIT_CUSTOM_NODES, path.dirname(STATE_FILE));
+const builtinLanplayProviders = require('./lanplay-providers');
+const customLanplayProviders = customNodes.filter(node => node.enabled).map(node => ({ id: node.provider, host: node.host, port: node.port }));
+const allLanplayProviders = [...builtinLanplayProviders, ...customLanplayProviders];
 const appointments = appointmentStore.create({ filename: path.join(path.dirname(STATE_FILE), 'appointments.json') });
 const UDP_OVERHEAD = 28, TCP_OVERHEAD = 52;  // cabeceras IP/UDP e IP/TCP: también cuentan como tráfico
 
@@ -174,25 +179,25 @@ function rejectUnresolvedLcid(socket, gameId) {
     sendError(socket, E.UPDATE, 'actualiza LANywhere para entrar en esta sala');
     return true;
 }
-const realmProvider = realmId && require('./lanplay-providers').find(p => p.id === realmId);
+const realmProvider = realmId && allLanplayProviders.find(p => p.id === realmId);
 if (realmId && (!realmProvider || !process.send || CONTROL_BIND_ADDRESS !== '127.0.0.1' || UDP_BIND_ADDRESS !== '127.0.0.1'))
     throw new Error('LAN Play child realm must be supervised and loopback-only');
 const regionList = process.env.LANYWHERE_LANPLAY_PROVIDERS;
-const regionIds = regionList === undefined ? require('./lanplay-providers').map(p=>p.id) : regionList.split(',');
-if (regionIds.some(id=>!require('./lanplay-providers').some(p=>p.id===id)) || new Set(regionIds).size !== regionIds.length)
+const regionIds = regionList === undefined ? builtinLanplayProviders.map(p=>p.id) : regionList.split(',');
+if (regionIds.some(id=>!(realmId ? allLanplayProviders : builtinLanplayProviders).some(p=>p.id===id)) || new Set(regionIds).size !== regionIds.length)
     throw new Error('Invalid LAN Play provider allowlist');
 const providerDiagnostics = upstreamGateway.createDiagnostics({
-    providerIds: ['self', ...upstreamGateway.PUBLIC_PROVIDERS.map(p=>p.id), ...require('./lanplay-providers').map(p=>p.id)],
+    providerIds: ['self', ...upstreamGateway.PUBLIC_PROVIDERS.map(p=>p.id), ...allLanplayProviders.map(p=>p.id)],
     count: reason => stats.count('provider_' + reason),
     emit: event => log(`provider=${event.provider} reason=${event.reason} code=${event.code} events=${event.events}`),
 });
-const realms = !realmId && envInt('LANYWHERE_ENABLE_LANPLAY_UPSTREAM', 0, 0, 1) ? require('./lanplay-realms').create({ count, providers: require('./lanplay-providers').filter(p=>regionIds.includes(p.id)),
+const realms = !realmId && envInt('LANYWHERE_ENABLE_LANPLAY_UPSTREAM', 0, 0, 1) ? require('./lanplay-realms').create({ count, providers: [...builtinLanplayProviders.filter(p=>regionIds.includes(p.id)), ...customLanplayProviders],
     paused: () => paused, log: (...a) => log(...a), onEvent: providerDiagnostics.record }) : null;
-let realmTraffic = 0, realmTransportReady = false, realmNativePort = 0;
+let realmTraffic = 0, realmTransportReady = false, realmNativePort = 0, realmUpstreamAddress = null;
 let realmFirstDiscoveryWindow = false, realmReadySent = false, realmDiscoveryTimer = null;
 function realmReady() {
     if (realmId && realmTransportReady && realmNativePort && realmFirstDiscoveryWindow && !realmReadySent) {
-        realmReadySent = true; process.send?.({type:'ready', port:realmNativePort});
+        realmReadySent = true; process.send?.({type:'ready', port:realmNativePort, upstreamAddress:realmUpstreamAddress});
     }
 }
 if (realmId) {
@@ -225,7 +230,7 @@ const appointmentPush = realmId ? null : pushProtocol.create({
     send,
 });
 const unifiedLobby = realmId ? null : createUnifiedLobby({
-    providerIds: upstreams.lobbyProviders(), queryProvider: upstreams.queryLobby,
+    providerIds: upstreams.lobbyProviders().filter(id => !id.startsWith('custom-')), queryProvider: upstreams.queryLobby,
     selfRows: () => [...rooms.values()].filter(listedSelfGameRoom)
         .map(room => roomMetadata.summary(room, describeGameAccess(room))),
     community: communityEndpoint ? {
@@ -240,9 +245,25 @@ const unifiedLobby = realmId ? null : createUnifiedLobby({
     } : null,
 });
 
+const sharedNodeMetadata = realmId ? null : directRoomMetadata.create();
 const nodesLobby = realmId ? null : nodeDirectory.create({
+    metadata: sharedNodeMetadata,
     source: unifiedLobby.nodeSources,
     providerIds: upstreams.lobbyProviders(), communityDirect: Boolean(communityEndpoint),
+});
+const customLobby = realmId ? null : createUnifiedLobby({
+    providerIds: upstreams.lobbyProviders().filter(id => id.startsWith('custom-')),
+    queryProvider: upstreams.queryLobby, selfRows: () => [],
+});
+const extendedNodesLobby = realmId ? null : nodeDirectory.create({
+    metadata: sharedNodeMetadata,
+    source: () => {
+        const combined = unifiedLobby.nodeSources();
+        for (const [provider, rows] of customLobby.nodeSources()) if (provider !== 'self') combined.set(provider, rows);
+        return combined;
+    },
+    providerIds: upstreams.lobbyProviders(), communityDirect: Boolean(communityEndpoint),
+    nodes: [...require('./node-catalog').nodes, ...customNodes.filter(node => node.enabled)],
 });
 const friends = realmId ? null : nodeFriends.create({ enabledMask: nodesLobby.enabledMask });
 
@@ -786,16 +807,27 @@ function onFrame(socket, type, body) {
         if (paused || draining) return sendError(socket, E.BUSY, 'Direct room info is unavailable. Try again.');
         const ip = plainIp(socket.remoteAddress);
         if (!allowed(ip, 'directRoomMetadata')) return sendError(socket, E.BUSY, 'Direct room info is busy. Try again.');
-        return send(socket, directRoomMetadata.RESPONSE, nodesLobby.exchangeMetadata(body, ip));
+        return send(socket, directRoomMetadata.RESPONSE, (body.length >= 8 && body.readUInt32LE(4) >= customNodeRegistry.FIRST ? extendedNodesLobby : nodesLobby).exchangeMetadata(body, ip));
     }
     const annotatedDirectory = type === nodeDirectory.ANNOTATED_REQUEST;
-    if (annotatedDirectory || [nodeDirectory.CATALOG_REQUEST,nodeDirectory.REQUEST,nodeFriends.REQUEST].includes(type)) {
+    const extendedDirectory = type === customNodeRegistry.CATALOG_REQUEST || type === customNodeRegistry.LOBBY_REQUEST;
+    if (extendedDirectory || annotatedDirectory || [nodeDirectory.CATALOG_REQUEST,nodeDirectory.REQUEST,nodeFriends.REQUEST].includes(type)) {
         if (realmId || !upstreams.isSelf(socket) || socket.member || appointmentPush?.has(socket))
             return sendError(socket, E.BAD_REQUEST, 'Node selection requires an idle connection.');
         if (paused || draining) return sendError(socket, E.BUSY, 'Node selection is unavailable. Try again.');
-        if ((type === nodeDirectory.REQUEST || annotatedDirectory) && !allowed(plainIp(socket.remoteAddress),'unifiedLobby'))
+        if ((type === nodeDirectory.REQUEST || annotatedDirectory || extendedDirectory) && !allowed(plainIp(socket.remoteAddress),'unifiedLobby'))
             return sendError(socket,E.BUSY,'Node selection is busy. Try again.');
         upstreams.handleFrame(socket,type,body);
+        if (type === customNodeRegistry.CATALOG_REQUEST) {
+            if (body.length) return sendError(socket, E.BAD_REQUEST, 'Invalid custom node catalog request.');
+            const sources = customLobby.nodeSources();
+            return send(socket, customNodeRegistry.CATALOG_RESPONSE, customNodeRegistry.response(customNodes, sources));
+        }
+        if (type === customNodeRegistry.LOBBY_REQUEST) {
+            const page = extendedNodesLobby.page(body, true);
+            if (!page) return sendError(socket, E.BAD_REQUEST, 'Invalid custom node lobby request.');
+            return send(socket, customNodeRegistry.LOBBY_RESPONSE, page);
+        }
         if (type === nodeDirectory.CATALOG_REQUEST) {
             if (body.length) return sendError(socket,E.BAD_REQUEST,'Invalid node catalog request.');
             return send(socket,nodeDirectory.CATALOG_RESPONSE,nodesLobby.status());
@@ -1297,6 +1329,7 @@ require('./public').create({ stateDir: path.dirname(STATE_FILE), port: PUBLIC_PO
 const memberAt = (ip) => byIp13.get(ip) || null;
 const lanplay = require('./lanplay').create({
     port: LANPLAY_PORT, upstream: realmProvider || null,
+    onEndpoint: address => { realmUpstreamAddress = address; },
     onReady: () => { realmTransportReady = true; realmReady(); },
     onFirstScanSent: () => {
         if (realmId && !realmFirstDiscoveryWindow && !realmDiscoveryTimer) {
@@ -1327,6 +1360,8 @@ function beginDrain() {
     matches.drain();
     unifiedLobby?.shutdown();
     nodesLobby?.shutdown();
+    extendedNodesLobby?.shutdown();
+    customLobby?.shutdown();
     friends?.shutdown();
     appointmentPush?.shutdown();
     log('cerrando: no se aceptan nuevas salas ni uniones');

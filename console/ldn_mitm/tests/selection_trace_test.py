@@ -14,8 +14,13 @@ extract = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(extract)
 logger = (NATIVE / 'selection_trace.cpp').read_text()
 logger = '\n'.join(line for line in logger.splitlines() if not line.startswith(('#include', '#if', '#endif')))
-select = extract.function((NATIVE / 'lanywhere_relay.cpp').read_text(), 'Result SetHostNode(')
+logger = '#include "'+str(ROOT / 'common/roomcircuit_paths.h')+'"\nnamespace ams::mitm::storage { bool StorageUseCurrent() { return false; } }\n'+logger
+relay = (NATIVE / 'lanywhere_relay.cpp').read_text()
+select = (extract.function(relay, 'Result SetHostNodeInternal(u32 node, u64 expected_generation) {') + '\n' +
+          extract.function(relay, 'Result SetHostNode(u32 node) {'))
 fixture = r'''
+#include "node_lobby.h"
+#include "node_catalog.h"
 #include <algorithm>
 #include <cerrno>
 #include <atomic>
@@ -29,7 +34,7 @@ fixture = r'''
 #include <thread>
 #include <vector>
 #include <arpa/inet.h>
-using u8=uint8_t;using u32=uint32_t;using s64=int64_t;using Result=int;
+using u8=uint8_t;using u32=uint32_t;using u64=uint64_t;using s64=int64_t;using Result=int;
 #define GITDESCVER "0.8.8-test"
 #define R_FAILED(v) ((v)!=0)
 #define R_SUCCEEDED(v) ((v)==0)
@@ -69,8 +74,15 @@ void Record(Handle,const char*,uint32_t=0);
 }
 /* LOGGER */
 namespace selection_trace=ams::mitm::selection_trace;
-static constexpr u32 NODE_CATALOG_COUNT=13;
+
 static std::atomic<bool>g_direct_session=false;
+static std::atomic<u64>g_host_preference_generation{1};
+static u32 g_selected_status=NodeHostSelected;
+static NodeDynamicEntry g_selected_node{};
+static size_t NodeSlot(u32 id){return id<NODE_CATALOG_COUNT?id:NODE_TOTAL_CAPACITY;}
+static bool LookupNode(u32 id,NodeDynamicEntry*out){*out={};out->id=id;out->flags=1;return id<NODE_CATALOG_COUNT;}
+static bool SaveNodePreference(const NodeDynamicEntry&){return true;}
+static void StartPreferenceRetry(){}
 static std::mutex g_lock,g_match_lock,g_room_lifecycle_lock;
 enum class RelayState {Idle,InRoom,Connecting};
 static RelayState g_state=RelayState::Idle;
@@ -139,6 +151,6 @@ with tempfile.TemporaryDirectory(prefix='native-selection-trace-') as temporary:
     source, executable = directory / 'test.cpp', directory / 'test'
     source.write_text(fixture)
     subprocess.run(shlex.split(os.environ.get('CXX', 'c++')) + [
-        '-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread', str(source), '-o', str(executable)
+        '-I' + str(ROOT / 'common'), '-std=c++20', '-Wall', '-Wextra', '-Werror', '-pthread', str(source), '-o', str(executable)
     ], check=True)
     subprocess.run([str(executable)], check=True, timeout=10)

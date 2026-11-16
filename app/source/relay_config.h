@@ -3,9 +3,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "../../common/relay_profile.h"
+#include "../../common/roomcircuit_paths.h"
+#include "roomcircuit_storage.h"
 
-#define RELAY_CONFIG_DIR "sdmc:/lanywhere"
-#define RELAY_CONFIG_PATH RELAY_CONFIG_DIR "/config.ini"
+#define RELAY_CONFIG_DIR rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_DIR, RC_CURRENT_DIR)
+#define RELAY_CONFIG_PATH rc_storage_path(roomcircuit_storage_current(), RC_LEGACY_PATH("config.ini"), RC_CURRENT_PATH("config.ini"))
 #define RELAY_DEFAULT_PORT 11460
 #define RELAY_IPV4_SIZE 16
 

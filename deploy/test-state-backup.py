@@ -72,6 +72,26 @@ class StateBackupTest(unittest.TestCase):
         self.assertEqual(self.traffic.read_bytes(), counter(self.month, 100))
         self.assertEqual(appointments.read_bytes(), scheduled)
 
+    def test_custom_node_registry_and_identity_cannot_roll_back(self):
+        identities = self.files / 'custom-node-identities.json'
+        registry = self.files / 'custom-nodes.json'
+        original = {'13': 'moscow.example.org:11451'}
+        identities.write_text(json.dumps(original))
+        registry.write_text(json.dumps({'version': 1, 'nodes': [{'id': 13, 'host': 'moscow.example.org',
+                                                                  'port': 11451, 'region': 2, 'name': 'Moscow',
+                                                                  'enabled': True}]}))
+        archive = self.valid_backup()
+        contents = STATE.read_archive(archive)
+        self.assertIn('custom-node-identities.json', contents)
+        self.assertIn('custom-nodes.json', contents)
+        identities.write_text(json.dumps(original | {'14': 'other.example.org:11451'}))
+        with self.assertRaisesRegex(ValueError, 'discard or reuse'):
+            STATE.restore(archive)
+        self.assertEqual(json.loads(identities.read_text())['14'], 'other.example.org:11451')
+        identities.write_text(json.dumps(original))
+        STATE.restore(archive)
+        self.assertEqual(json.loads(registry.read_text())['nodes'][0]['id'], 13)
+
     def test_counter_cannot_move_backwards_or_replace_corrupt_current_state(self):
         path = self.valid_backup()
         old = self.archive('old.tar.gz', [('relay.env', INITIAL_ENV), ('traffic.json', counter('2000-01', 900))])

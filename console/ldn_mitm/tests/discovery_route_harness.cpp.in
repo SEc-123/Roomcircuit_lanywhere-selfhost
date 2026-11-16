@@ -1,5 +1,7 @@
 #include "node_catalog.h"
 #include "node_lobby.h"
+#include "roomcircuit_paths.h"
+namespace storage { inline bool StorageUseCurrent(){ return false; } }
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -43,7 +45,8 @@ constexpr u32 GroupPageEnd=UINT32_MAX,CapabilityPages=2,CapabilityFilteredFind=1
 constexpr u8 Features=1,T_SelectProvider=0x20,T_ProviderSelected=0xa0,T_Caps=0x0b,T_CapsReply=0x89,
  T_Error=0x85,T_Find=8,T_FindPage=0x0c,T_FindFilter=0x0d,T_Groups=0x87,T_Page=0x8a,T_Join=2;
 constexpr int ConnectTimeoutMs=1000,MatchIoTimeoutMs=500;
-constexpr const char *ConfigPath="sdmc:/lanywhere/config.ini";
+constexpr const char *ConfigPath(){return "sdmc:/lanywhere/config.ini";}
+
 namespace os {
  using SdkMutex=std::mutex;
  struct Span {s64 ms; s64 GetMilliSeconds()const{return ms;}};
@@ -150,7 +153,7 @@ static Result Enter(u8 type,const u8 *body,size_t size,const sockaddr_in *pinned
  if(joined){*joined={};joined->discovery.ipv4=entered_server.sin_addr.s_addr;joined->discovery.port=entered_server.sin_port;util::Strlcpy(joined->discovery.provider,provider,sizeof(joined->discovery.provider));joined->room_token=91;joined->room_epoch=11;std::memcpy(joined->room_code,"ABC234",6);}return 0;
 }
 static void config(u16 port,const char *provider="lanywhere-public",bool pub=true){
- std::scoped_lock lock(g_lock);fs::files[ConfigPath]=std::make_shared<fs::Data>(fs::Data{"server=127.0.0.1\nport="+std::to_string(port)+"\nnetwork="+provider+"\npublic="+(pub?"1":"0")+"\napodo=Tester\n"});
+ std::scoped_lock lock(g_lock);fs::files[ConfigPath()]=std::make_shared<fs::Data>(fs::Data{"server=127.0.0.1\nport="+std::to_string(port)+"\nnetwork="+provider+"\npublic="+(pub?"1":"0")+"\napodo=Tester\n"});
  fs::denied=fs::fail_size=fs::short_read=false;
 }
 static void write_all(int fd,const u8 *p,size_t n){while(n){auto s=::send(fd,p,n,0);if(s<=0)return;p+=s;n-=s;}}
@@ -185,10 +188,10 @@ int main(){
   assert(nickname()==u8"家里的 Switch" && settings_attempts==1 && settings_reads==1 && settings_exits==1);
   assert(fs::files.empty() && fs::writes==0 && fs::creates==0);
   config(9);
-  const std::string original=fs::files[ConfigPath]->value;
+  const std::string original=fs::files[ConfigPath()]->value;
   assert(nickname()==u8"家里的 Switch" && settings_attempts==2);
   device_name="Couch's Switch";
-  assert(nickname()=="Couchs Switch" && fs::files[ConfigPath]->value==original);
+  assert(nickname()=="Couchs Switch" && fs::files[ConfigPath()]->value==original);
   device_name="1234567890123456789012345";
   assert(nickname()=="12345678901234567890");
   device_name=std::string("AB")+"中国主机中国主机中国主机";
@@ -205,12 +208,12 @@ int main(){
   settings_read_fails=false;
   for(const std::string &bad:{std::string("Switch\nnetwork=self"),std::string("Good\xc0\x80"),std::string(128,'x'),std::string(" "),std::string("X")}) {
    device_name=bad;
-   assert(nickname()=="Player" && fs::files[ConfigPath]->value==original);
+   assert(nickname()=="Player" && fs::files[ConfigPath()]->value==original);
    ++checks;
   }
   device_name="Recovered Switch";
   assert(nickname()==device_name && fs::writes==0 && fs::creates==0 && fs::read_opens==0 && !settings_open);
-  assert(fs::files[ConfigPath]->value==original);
+  assert(fs::files[ConfigPath()]->value==original);
   checks+=10;
  }
  {
@@ -219,13 +222,17 @@ int main(){
   assert(CaptureDiscoveryRoute(&route) && route.public_enabled);
   config(9,"lanywhere-public",false);
   assert(CaptureDiscoveryRoute(&route) && !route.public_enabled);
-  checks+=2;
+  g_selected_status=NodeHostUnavailable;
+  assert(CaptureDiscoveryRoute(&route)); // browsing remains available while hosting node is offline
+  g_selected_status=NodeHostSelected;
+  assert(CaptureDiscoveryRoute(&route));
+  checks+=4;
  }
  if (RELAY_PROFILE_FIXED) {
   fs::files.clear();DiscoveryRoute route{};assert(CaptureDiscoveryRoute(&route)&&std::string(route.provider)=="self"&&route.port==htons(11460));checks++;
   config(9,"lanywhere-public");assert(CaptureDiscoveryRoute(&route)&&std::string(route.provider)=="lanywhere-public"&&route.port==htons(11460));checks++;
   for(const std::string &bad:{std::string("network=invalid\n"),std::string("network=self\nnetwork=lanywhere-public\n"),std::string(512,'x'),std::string("network=self\n\0tail",18)}){
-   fs::files[ConfigPath]=std::make_shared<fs::Data>(fs::Data{bad});fs::writes=fs::creates=0;assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0&&std::string(nick)==device_name);checks++;
+   fs::files[ConfigPath()]=std::make_shared<fs::Data>(fs::Data{bad});fs::writes=fs::creates=0;assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0&&std::string(nick)==device_name);checks++;
   }
   config(9);for(int mode=0;mode<3;mode++){fs::denied=mode==0;fs::fail_size=mode==1;fs::short_read=mode==2;fs::writes=fs::creates=0;assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0);checks++;}fs::denied=fs::fail_size=fs::short_read=false;
   std::printf("Actual fixed-profile config/nickname slices: %u scenarios passed.\n",checks);return 0;
@@ -303,9 +310,9 @@ int main(){
  }
  for(u8 error_code:{u8(7),u8(8),u8(4)}){Relay relay(0);relay.reject_select=true;relay.select_error=error_code;config(relay.port);DiscoveryRoute route{};assert(CaptureDiscoveryRoute(&route));sockaddr_in server{};char provider[33]{};assert(ResolveDiscoveryRoute(route,&server,provider));const char *error=nullptr;assert(ConnectServer(server,&error,100,provider)<0);assert(std::string(error)==(error_code==7?"External network is busy. Try later.":error_code==8?"Update relay to use external networks.":"External network is unavailable."));checks++;}
  for(const std::string &bad: {std::string("network=bogus\n"),std::string("network=self\nnetwork=lanywhere-public\n"),std::string(512,'x'),std::string("network=self\n\0tail",18)}){
-  fs::files[ConfigPath]=std::make_shared<fs::Data>(fs::Data{bad});fs::writes=fs::creates=0;DiscoveryRoute route{};assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0&&std::string(nick)==device_name);checks++;
+  fs::files[ConfigPath()]=std::make_shared<fs::Data>(fs::Data{bad});fs::writes=fs::creates=0;DiscoveryRoute route{};assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0&&std::string(nick)==device_name);checks++;
  }
  config(other.port);for(int mode=0;mode<3;mode++){fs::denied=mode==0;fs::fail_size=mode==1;fs::short_read=mode==2;fs::writes=fs::creates=0;DiscoveryRoute route{};assert(!CaptureDiscoveryRoute(&route));char nick[32];Nickname(nick,sizeof(nick));assert(fs::writes==0&&fs::creates==0);checks++;}fs::denied=fs::fail_size=fs::short_read=false;
- config(other.port);fs::files["sdmc:/lanywhere/config.ini.bak"]=fs::files[ConfigPath];fs::files.erase(ConfigPath);DiscoveryRoute recovered{};assert(CaptureDiscoveryRoute(&recovered)&&std::string(recovered.provider)=="lanywhere-public");checks++;
+ config(other.port);fs::files["sdmc:/lanywhere/config.ini.bak"]=fs::files[ConfigPath()];fs::files.erase(ConfigPath());DiscoveryRoute recovered{};assert(CaptureDiscoveryRoute(&recovered)&&std::string(recovered.provider)=="lanywhere-public");checks++;
  std::printf("Actual native discovery/config/join slices: %u scenarios passed; no upstream network used.\n",checks);
 }

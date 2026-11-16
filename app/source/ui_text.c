@@ -5,6 +5,15 @@
 typedef struct { const char *en; const char *zh; } UiTranslation;
 
 static const UiTranslation translations[] = {
+    {"Move conflicting switch/RoomCircuit/RoomCircuit.nro, then retry.", "请移走冲突的 switch/RoomCircuit/RoomCircuit.nro 后重试。"},
+    {"Move conflicting switch/.overlays/RoomCircuit.ovl, then retry.", "请移走冲突的 switch/.overlays/RoomCircuit.ovl 后重试。"},
+    {"Custom nodes unavailable. Check nodes.ini.", "自定义节点不可用，请检查 nodes.ini。"},
+    {"Restart to finish setup or check the SD card.", "请重启完成安装，或检查 SD 卡。"},
+    {"Checking", "检查中"},
+    {"Could not start the room connection. Try again.", "无法启动房间连接，请重试。"},
+    {"No probe response.", "未收到测速回应。"},
+    {"Invalid custom node catalog request.", "自定义节点目录请求无效。"},
+    {"Invalid custom node lobby request.", "自定义节点大厅请求无效。"},
     {"Nodes", "节点"},
     {"Required", "需密码"},
     {"Lobby", "大厅"},

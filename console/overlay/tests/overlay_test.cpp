@@ -9,6 +9,8 @@ static bool present=true,ignore_set=false;static int opens=0,sets=0;static u64 t
 static LanywhereOverlayStatus status{};
 static LanywhereOverlayMatch match{};
 static RoomPasscodeHost passcode_host{};
+static NodeHostInfo host_node{};
+static NodeActiveRouteInfo active_route{};
 static RoomAccessChange last_access{};
 static u32 share_status = RoomPasscodeOk;
 static unsigned share_count = 0;
@@ -23,6 +25,9 @@ Result mockDispatch(Service*,u32 command,const void*in,size_t in_size,void*out,s
  if(command==65100){*(u8*)out=present;return 0;}
  if(command==65003||command==65005){++sets;if(!ignore_set)(command==65003?logging:enabled)=*(const u32*)in;return 0;}
  if(command==10){*(u32*)out=protocol;return 0;}
+ if(command==46){*(u32*)out=0;return 0;}
+ if(command==NODE_GET_HOST_INFO_IPC){assert(params.buffers[0].size==sizeof(host_node));std::memcpy(params.buffers[0].ptr,&host_node,sizeof(host_node));return 0;}
+ if(command==NODE_GET_ACTIVE_ROUTE_IPC){assert(params.buffers[0].size==sizeof(active_route));std::memcpy(params.buffers[0].ptr,&active_route,sizeof(active_route));return 0;}
  if(command==3){std::memcpy(out,&status,size);return 0;}if(command==9){std::memcpy(out,&match,size);return 0;}
  if (command == ROOM_PASSCODE_IPC_HOST) {
      assert(size == sizeof(passcode_host));
@@ -44,7 +49,7 @@ SmServiceName smEncodeName(const char*){return {1};}TipcService*smGetServiceSess
 Result setInitialize(){return 0;}void setExit(){}Result setGetSystemLanguage(u64*out){*out=0;return 0;}Result setMakeLanguage(u64,SetLanguage*out){*out=SetLanguage_ENUS;return 0;}
 u64 armGetSystemTick(){return ticks;}u64 armGetSystemTickFreq(){return 1000;}
 }
-void reset(){enabled=1;logging=0;protocol=5;fail_command=0;present=true;ignore_set=false;opens=sets=0;ticks=1;status={};match={};commands.clear();g_chinese=false;closeServices();}
+void reset(){enabled=1;logging=0;protocol=5;fail_command=0;present=true;ignore_set=false;opens=sets=0;ticks=1;status={};match={};host_node={};host_node.version=1;host_node.status=NodeHostReady;std::strcpy(host_node.name,"Main server");active_route={};active_route.version=1;commands.clear();g_chinese=false;closeServices();}
 
 static tsl::elm::ListItem *findItem(tsl::elm::Element *tree, const char *text) {
     auto *frame = dynamic_cast<tsl::elm::OverlayFrame *>(tree);
@@ -168,6 +173,22 @@ int main(){
  reset();connectServices();status.state=2;status.member_count=2;std::memcpy(status.code,"ABCDEF",6);refresh();
  MainGui gui;std::unique_ptr<tsl::elm::Element>ui(gui.createUI());auto*frame=dynamic_cast<tsl::elm::OverlayFrame*>(ui.get());assert(frame&&frame->title=="RoomCircuit");
  auto*list=dynamic_cast<tsl::elm::List*>(frame->content);bool room=false,players=false;for(auto*p:list->items){auto*i=dynamic_cast<tsl::elm::ListItem*>(p);if(!i)continue;room|=i->text=="Room"&&i->value=="ABCDEF";players|=i->text=="Room members"&&i->value=="2 / 8";}assert(room&&players);
+ auto *node = findItem(ui.get(), "Hosting node");assert(node && node->value=="Main server");
+ auto *route = findItem(ui.get(), "Room node");assert(route && route->value=="—");
+ std::strcpy(active_route.name,"Europe LAN");active_route.status=NodeRouteSelected;ticks+=1000;gui.update();assert(route->value=="Europe LAN · Selected");
+ active_route.status=NodeRouteConnected;ticks+=1000;gui.update();assert(route->value=="Europe LAN");
+ active_route.status=NodeRouteRecovering;ticks+=1000;gui.update();assert(route->value=="Europe LAN · Reconnecting");
+ active_route.status=NodeRouteUnavailable;ticks+=1000;gui.update();assert(route->value=="Europe LAN · Unavailable");
+ active_route.status=NodeRouteNone;ticks+=1000;gui.update();assert(route->value=="—");
+ active_route.status=5;ticks+=1000;gui.update();assert(route->value=="Unavailable");active_route.status=NodeRouteNone;
+ fail_command=NODE_GET_ACTIVE_ROUTE_IPC;ticks+=1000;gui.update();assert(route->value=="Unavailable");fail_command=0;
+ std::strcpy(host_node.name, "Russia LAN");host_node.status=NodeHostUnavailable;ticks+=1000;gui.update();assert(node->value=="Russia LAN · Unavailable");
+ host_node.status=NodeHostPending;ticks+=1000;gui.update();assert(node->value=="Russia LAN · Pending");
+ host_node.status=NodeHostReady;ticks+=1000;gui.update();assert(node->value=="Russia LAN");
+ host_node.status=NodeHostSelected;ticks+=1000;gui.update();assert(node->value=="Russia LAN");
+ fail_command=NODE_GET_HOST_INFO_IPC;ticks+=1000;gui.update();assert(node->value=="Unavailable");fail_command=0;
+ host_node.version=2;ticks+=1000;gui.update();assert(node->value=="Unavailable");host_node.version=1;
+ std::memset(host_node.name,'x',sizeof(host_node.name));ticks+=1000;gui.update();assert(node->value=="Unavailable");std::strcpy(host_node.name,"Main server");
  auto requests=commands.size();gui.update();assert(commands.size()==requests);ticks+=1000;gui.update();assert(commands.size()>requests);
  Overlay overlay;before=sets;commands.clear();overlay.onHide();overlay.exitServices();assert(sets==before&&commands.empty());
  // Failed IPC cannot leak stale, partial or malformed replies into status controls.

@@ -47,7 +47,14 @@ typedef struct {
 } NodeView;
 static NodeView view;
 static int view_lock;
+static uint32_t dynamic_generation;
 static bool initialized=true, friend_created, reverse_after_draw;
+static NodeHostInfo current_host_info;static bool current_host_valid;
+static void refresh_host_info(Service *service){(void)service;}
+static bool nodes_ui_refresh_catalog(Service *service){(void)service;return true;}
+static uint32_t node_id(uint32_t slot){return slot < NODE_SHARED_CAPACITY ? slot : NODE_LOCAL_BASE + slot - NODE_SHARED_CAPACITY;}
+static uint32_t node_slot(uint32_t id){return id < NODE_SHARED_CAPACITY ? id : id >= NODE_LOCAL_BASE && id < NODE_LOCAL_BASE + NODE_LOCAL_CAPACITY ? NODE_SHARED_CAPACITY + id - NODE_LOCAL_BASE : NODE_ID_INVALID;}
+static bool nodes_ui_valid(uint32_t id){return id < NODE_CATALOG_COUNT;}
 static uint32_t picked, visits;
 static uint32_t ipc_result, trace_result;
 static NodeSelectionTracePhase trace_phases[4];

@@ -1,4 +1,6 @@
 #include "@CODEC@"
+#include "roomcircuit_paths.h"
+namespace ams::mitm::storage { bool current = false; inline bool StorageUseCurrent(){ return current; } }
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -30,7 +32,7 @@ int ReadFile(size_t *bytes, FileHandle file, int64_t offset, void *out, size_t c
     const auto &data = files[file.path]; *bytes = std::min(capacity, data.size());
     std::memcpy(out, data.data(), *bytes); return 0;
 }
-int CreateDirectory(const char *path) { assert(std::string(path) == "sdmc:/lanywhere");return read_only ? 3 : 0; }
+int CreateDirectory(const char *path) { assert(std::string(path) == (ams::mitm::storage::current ? RC_CURRENT_DIR : RC_LEGACY_DIR));return read_only ? 3 : 0; }
 int DeleteFile(const char *path) { if(read_only)return 3;return files.erase(path) ? 0 : 1; }
 int CreateFile(const char *path, size_t size) {
     if (read_only) return 3;
@@ -59,11 +61,15 @@ constexpr uint32_t Network = 0x0a0d0000u;
 @ADDRESS@
 }
 using namespace ams::mitm::lanplay;
-static constexpr const char *Path = "sdmc:/lanywhere/lanplay-ip.bin";
-static constexpr const char *TemporaryPath = "sdmc:/lanywhere/lanplay-ip.bin.tmp";
-static constexpr const char *PreviousPath = "sdmc:/lanywhere/lanplay-ip.bin.previous";
+static const char *Path;
+static const char *TemporaryPath;
+static const char *PreviousPath;
 std::vector<uint8_t> Record(uint32_t address) { std::vector<uint8_t> out(8);std::memcpy(out.data(),"LPIP",4);Put32(out.data()+4,address);return out; }
-int main() {
+int main(int argc, char **) {
+    ams::mitm::storage::current = argc > 1;
+    Path = rc_storage_path(ams::mitm::storage::current, RC_LEGACY_PATH("lanplay-ip.bin"), RC_CURRENT_PATH("lanplay-ip.bin"));
+    TemporaryPath = rc_storage_path(ams::mitm::storage::current, RC_LEGACY_PATH("lanplay-ip.bin.tmp"), RC_CURRENT_PATH("lanplay-ip.bin.tmp"));
+    PreviousPath = rc_storage_path(ams::mitm::storage::current, RC_LEGACY_PATH("lanplay-ip.bin.previous"), RC_CURRENT_PATH("lanplay-ip.bin.previous"));
     namespace fs=ams::fs;
     random_values={0,0xffff,0x2501,0xfefe,0x1234};
     assert(VirtualAddress(false)==0x0a0d1234 && random_values.empty());

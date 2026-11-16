@@ -5,6 +5,19 @@
 #include <stdint.h>
 
 #define NODE_LOBBY_CAPABILITY 32768u
+#define NODE_DYNAMIC_CAPABILITY 262144u
+#define NODE_SHARED_CAPACITY 24u
+#define NODE_LOCAL_BASE 0x80000000u
+#define NODE_LOCAL_CAPACITY 7u
+#define NODE_TOTAL_CAPACITY (NODE_SHARED_CAPACITY + NODE_LOCAL_CAPACITY)
+#define NODE_DYNAMIC_CATALOG_REQUEST 0x38u
+#define NODE_DYNAMIC_CATALOG_RESPONSE 0xb8u
+#define NODE_DYNAMIC_LOBBY_REQUEST 0x39u
+#define NODE_DYNAMIC_LOBBY_RESPONSE 0xb9u
+#define NODE_GET_CATALOG_IPC 42u
+#define NODE_SET_LOCAL_IPC 43u
+#define NODE_GET_HOST_INFO_IPC 44u
+#define NODE_GET_ACTIVE_ROUTE_IPC 45u
 #define NODE_CATALOG_REQUEST 0x32u
 #define NODE_CATALOG_RESPONSE 0xb2u
 #define NODE_LOBBY_REQUEST 0x33u
@@ -27,6 +40,41 @@ enum NodeFriendOperation { NodeFriendCreate = 1, NodeFriendJoin, NodeFriendRepor
 enum NodeFriendStatus { NodeFriendOk, NodeFriendExpired, NodeFriendInvalid, NodeFriendFull, NodeFriendBusy };
 enum NodeProbeKind { NodeProbeTcp = 1, NodeProbeUdp = 2 };
 enum NodeProbeStatus { NodeProbePending, NodeProbeMeasured, NodeProbeUnreachable };
+
+enum NodeRouteStatus { NodeRouteNone = 0, NodeRouteSelected = 1, NodeRouteConnected = 2, NodeRouteRecovering = 3, NodeRouteUnavailable = 4 };
+enum NodeHostStatus { NodeHostPending = 0, NodeHostReady = 1, NodeHostUnavailable = 2, NodeHostSelected = 3 };
+/* host here is a display-only, possibly truncated value; never use it for routing. */
+typedef struct {
+    uint32_t version, node_id, status, protocol;
+    uint16_t port;
+    uint8_t region, reserved;
+    char name[48];
+    char host[92];
+} NodeHostInfo;
+
+/* node_id/host describe the active room or selected join route, not host preference. */
+typedef struct {
+    uint32_t version, node_id, status, protocol;
+    uint16_t port;
+    uint8_t region, reserved;
+    char name[48];
+    char host[92];
+} NodeActiveRouteInfo;
+
+typedef struct {
+    uint32_t id;
+    uint8_t protocol, region, reserved0[2];
+    uint16_t port, flags;
+    char host[128];
+    char name[48];
+    uint8_t ipv4[4]; /* Central-validated route pin, network byte order. */
+} NodeDynamicEntry;
+
+typedef struct {
+    uint32_t version, count, enabled, available;
+    NodeDynamicEntry nodes[NODE_SHARED_CAPACITY - 13u + NODE_LOCAL_CAPACITY];
+} NodeDynamicCatalog;
+
 
 typedef struct {
     uint8_t network_id[32];
@@ -108,6 +156,10 @@ typedef struct {
 #else
 #define NODE_STATIC_ASSERT(expr, text) _Static_assert(expr, text)
 #endif
+NODE_STATIC_ASSERT(sizeof(NodeActiveRouteInfo) == 160, "active route IPC layout");
+NODE_STATIC_ASSERT(sizeof(NodeHostInfo) == 160, "node host IPC layout");
+NODE_STATIC_ASSERT(sizeof(NodeDynamicEntry) == 192, "dynamic node wire layout");
+NODE_STATIC_ASSERT(sizeof(NodeDynamicCatalog) == 3472, "dynamic node catalog IPC layout");
 NODE_STATIC_ASSERT(sizeof(NodeRoomLocator) == 64, "node locator layout");
 NODE_STATIC_ASSERT(sizeof(NodeRoomWire) == NODE_LOBBY_ROW_SIZE, "node room row layout");
 NODE_STATIC_ASSERT(sizeof(NodeRoomsRequest) == 24, "node request IPC layout");

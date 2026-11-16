@@ -1,6 +1,6 @@
 static void config(u16 port,const char*provider="self"){
  std::scoped_lock lock(g_lock);fs::denied=fs::fail_size=fs::short_read=false;
- fs::files[ConfigPath]=std::make_shared<fs::Data>(fs::Data{"server=127.0.0.1\nport="+std::to_string(port)+"\nnetwork="+provider+"\npublic=1\napodo=Tester\n"});
+ fs::files[ConfigPath()]=std::make_shared<fs::Data>(fs::Data{"server=127.0.0.1\nport="+std::to_string(port)+"\nnetwork="+provider+"\npublic=1\napodo=Tester\n"});
 }
 static std::vector<u8> load(const char*path){FILE*f=std::fopen(path,"rb");assert(f);std::vector<u8>b(360);assert(std::fread(b.data(),1,b.size(),f)==b.size()&&std::fgetc(f)==EOF);std::fclose(f);return b;}
 static bool allzero(const AppointmentPushFrame&f){const u8*p=reinterpret_cast<const u8*>(&f);return std::all_of(p,p+sizeof(f),[](u8 c){return c==0;});}

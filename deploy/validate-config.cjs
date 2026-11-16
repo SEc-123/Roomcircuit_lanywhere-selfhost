@@ -53,6 +53,9 @@ function validateConfig(source, { localAddresses = Object.values(os.networkInter
                 throw new Error(`${prefix}: ${key} must be a generated 32-byte base64url token`);
         } else if (key === 'LANYWHERE_EU_RELAY') {
             try { parseEndpoint(value); } catch (error) { throw new Error(`${prefix}: ${error.message}`); }
+        } else if (key === 'ROOMCIRCUIT_CUSTOM_NODES') {
+            if (value !== '/var/lib/switch-online/custom-nodes.json')
+                throw new Error(`${prefix}: ${key} must be /var/lib/switch-online/custom-nodes.json`);
         } else if (key === 'LANYWHERE_UPDATE_DIR') {
             if (!path.isAbsolute(value) || value.includes('\0'))
                 throw new Error(`${prefix}: ${key} must be an absolute directory`);

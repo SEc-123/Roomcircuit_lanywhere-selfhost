@@ -44,6 +44,11 @@ static const GuidePage pages_zh[] = {
         "关闭游戏，确认下载并安装。设置和约局会保留。",
         "更新完成后，退出并重启进入虚拟系统。"
     }, "也可以按 LS 检查更新。安装时请保持开机。" },
+    { "自定义节点", {
+        "在 switch/RoomCircuit/nodes.ini 添加节点。",
+        "保存文件后重新打开节点列表。",
+        "未收录的节点需双方设置相同地址并选择。"
+    }, "管理员收录的节点及房间会显示在统一大厅。" },
 };
 static const GuidePage pages_en[] = {
     { "Host a room", {
@@ -86,6 +91,11 @@ static const GuidePage pages_en[] = {
         "Close the game, then confirm Download and install.",
         "When finished, exit and restart into your virtual system."
     }, "You can check manually with LS. Keep the console on while installing." },
+    { "Custom nodes", {
+        "Add nodes to switch/RoomCircuit/nodes.ini.",
+        "Save the file and reopen the node list.",
+        "For local nodes, both players select the same address."
+    }, "Published nodes and rooms appear in the shared lobby." },
 };
 
 enum { PageCount = sizeof(pages_zh) / sizeof(pages_zh[0]), Margin = 56, Footer = 648 };
