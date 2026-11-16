@@ -132,8 +132,13 @@ test('full ScanFilter finds a compatible room beyond 96 unrelated rooms before p
             const mismatch = Buffer.from(body); mismatch[at] ^= 1;
             finder.send(0x0d, mismatch); const empty = await finder.frame(0x8a);
             if (at === 10) assert.equal(empty[4], 6); // scene 6 has 100 genuine matches.
-            else assert.equal(empty[4], 0);
+            else if (at === 32) {
+                assert.equal(empty[4], 1); // type mask 3 still includes the published type 2.
+                assert.equal(empty.toString('ascii', 5, 11), target.code);
+            } else assert.equal(empty[4], 0);
         }
+        const disjoint = Buffer.from(body); disjoint.writeUInt32LE(1, 32);
+        finder.send(0x0d, disjoint); assert.equal((await finder.frame(0x8a))[4], 0);
         const invalid = Buffer.from(body); invalid[42] = 33;
         finder.send(0x0d, invalid); assert.equal((await finder.frame(0x85))[0], 4);
     } finally {

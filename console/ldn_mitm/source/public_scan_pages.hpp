@@ -7,7 +7,7 @@ namespace ams::mitm::ldn {
                              uint32_t network_type, uint32_t ssid, uint32_t scene) {
         return (!(filter.flag & game) || filter.networkId.intentId.localCommunicationId == info.networkId.intentId.localCommunicationId) &&
                (!(filter.flag & session) || filter.networkId.sessionId == info.networkId.sessionId) &&
-               (!(filter.flag & network_type) || filter.networkType == info.common.networkType) &&
+               (!(filter.flag & network_type) || (filter.networkType & info.common.networkType) != 0) &&
                (!(filter.flag & ssid) || filter.ssid == info.common.ssid) &&
                (!(filter.flag & scene) || filter.networkId.intentId.sceneId == info.networkId.intentId.sceneId);
     }

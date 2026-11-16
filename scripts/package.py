@@ -152,7 +152,7 @@ def package_files(version, server, port, embedded):
     elif server is not None:
         setup = f"打开应用，确认服务器显示为 {server}:{port}。"
     entries["lanywhere/INSTALL.zh-CN.txt"] = (
-        f"RoomCircuit {version}（Beta，跨网真机验收待完成）\n\n"
+        f"RoomCircuit {version}\n\n"
         "安装：将 atmosphere 和 switch 合并到 SD 卡根目录，再重启进入虚拟系统。\n"
         "从相册打开 RoomCircuit。按 − 或点「约局」可预约。\n"
         "有新版时，应用顶部高亮提示。按 LS 可检查更新。关闭游戏后安装，完成后重启虚拟系统。\n"

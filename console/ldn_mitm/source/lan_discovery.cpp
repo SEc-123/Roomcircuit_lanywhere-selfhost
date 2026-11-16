@@ -214,7 +214,9 @@ namespace ams::mitm::ldn {
     Result LANDiscovery::setAdvertiseData(const u8 *data, uint16_t size) {
         std::scoped_lock lifecycle(this->lifecycleMutex);
         std::scoped_lock lock(this->pollMutex);
-        if (!this->initialized || this->state != CommState::AccessPointCreated || (size && !data)) return MAKERESULT(LdnModuleId, 32);
+        if (!this->initialized ||
+            (this->state != CommState::AccessPoint && this->state != CommState::AccessPointCreated) ||
+            (size && !data)) return MAKERESULT(LdnModuleId, 32);
         if (size > AdvertiseDataSizeMax) {
             return MAKERESULT(ModuleID, 10);
         }
@@ -226,7 +228,9 @@ namespace ams::mitm::ldn {
         }
         this->networkInfo.ldn.advertiseDataSize = size;
 
-        this->updateNodes();
+        // Games may set their advertisement after OpenAccessPoint, before
+        // CreateNetwork. Keep it for creation and publish only an active network.
+        if (this->state == CommState::AccessPointCreated) this->updateNodes();
 
         return 0;
     }
@@ -451,7 +455,8 @@ namespace ams::mitm::ldn {
         if (!count || (*count && !pOutNetwork)) return MAKERESULT(LdnModuleId, 32);
         {
             std::scoped_lock lock(this->pollMutex);
-            if (!this->initialized || !this->udp || filter.ssid.length > SsidLengthMax) {
+            if (!this->initialized || !this->udp ||
+                ((filter.flag & ScanFilterFlag_Ssid) && filter.ssid.length > SsidLengthMax)) {
                 *count = 0;
                 return MAKERESULT(LdnModuleId, 32);
             }

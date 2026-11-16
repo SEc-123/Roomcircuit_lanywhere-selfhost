@@ -188,12 +188,15 @@ test('uses real local communication filters, prefers fullest eligible room, and 
     assert.equal(chosen.code, fuller.code);
     assert.equal(chosen.info.readUInt16LE(10), fields.scene);
     assert.equal(chosen.info.readUInt16LE(0x96), fields.version);
-    for (const mismatch of [{ scene: 45 }, { type: 3 }, { ssid: 'different' }, { session: Buffer.alloc(16, 1) }, { version: 9 },
+    for (const mismatch of [{ scene: 45 }, { type: 1 }, { ssid: 'different' }, { session: Buffer.alloc(16, 1) }, { version: 9 },
         { target: versionMismatch.code }, { target: otherGame.code }]) {
         const exact = request({ ...fields, ...mismatch });
         assert.equal((await reservation(visitor, exact)).state, S.WAITING);
         assert.equal((await cancel(visitor, exact)).state, S.CLOSED);
     }
+    const combinedType = request({ ...fields, type: 3 });
+    assert.equal((await reservation(visitor, combinedType)).code, fuller.code, 'combined type includes the published network');
+    assert.equal((await cancel(visitor, combinedType)).state, S.CLOSED);
     const ownGame = request({ ...fields, game: OTHER_GAME });
     assert.equal((await reservation(visitor, ownGame)).code, otherGame.code);
     assert.equal((await cancel(visitor, ownGame)).state, S.CLOSED);
@@ -273,4 +276,27 @@ test('drain stops admission while active peers exchange UDP and SIGTERM checkpoi
     assert.deepEqual(await exited, [0, null]);
     const traffic = JSON.parse(await fs.readFile(path.join(state, 'traffic.json'), 'utf8'));
     assert.ok(traffic.bytes > 0);
+});
+
+
+test('scan criteria ignore unused SSID bytes and match combined network-type masks', () => {
+    const matchmaking = require('./matchmaking');
+    const info = Buffer.alloc(0x480);
+    info[0x4b] = 2;
+    const room = { gameId: GAME, code: 'ABC234', published: { info } };
+    const body = Buffer.alloc(101);
+    body.writeBigUInt64LE(GAME);
+    body[42] = 255;
+    body.writeUInt32LE(1 | 4, 92);
+    for (const mask of [0, 1, 2, 3, 4, 6, 0x80000000, 0xffffffff]) {
+        body.writeUInt32LE(mask, 32);
+        const request = matchmaking.discoveryRequest(body);
+        assert(request, 'disabled SSID bytes are not validation input');
+        assert.equal(Boolean(matchmaking.matches(room, request.criteria)), (mask & 2) !== 0);
+    }
+    body.writeUInt32LE(1, 92);
+    body.writeUInt32LE(0xffffffff, 32);
+    assert(matchmaking.matches(room, matchmaking.discoveryRequest(body).criteria), 'disabled type is ignored');
+    body.writeUInt32LE(1 | 16, 92);
+    assert.equal(matchmaking.discoveryRequest(body), null, 'enabled oversized SSID remains invalid');
 });

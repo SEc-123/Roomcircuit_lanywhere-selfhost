@@ -16,7 +16,7 @@ function scanCriteria(filter, features) {
     const networkType = filter.readUInt32LE(32);
     const ssidLength = filter[42];
     if ((flags & ~SCAN_FLAGS) || !(flags & FLAG.GAME) || !gameId ||
-        ((flags & FLAG.TYPE) && networkType > 255) || ((flags & FLAG.SSID) && ssidLength > 32)) return null;
+        ((flags & FLAG.SSID) && ssidLength > 32)) return null;
     return { gameId, features, target: '', version: null,
         scene: flags & FLAG.SCENE ? filter.readUInt16LE(10) : null,
         session: flags & FLAG.SESSION ? Buffer.from(filter.subarray(16, 32)) : null,
@@ -63,7 +63,7 @@ function matches(room, criteria) {
         (criteria.version === null || hostVersion(info) === criteria.version) &&
         (criteria.scene === null || info.readUInt16LE(10) === criteria.scene) &&
         (!criteria.session || info.subarray(16, 32).equals(criteria.session)) &&
-        (criteria.type === null || info[0x4b] === criteria.type) &&
+        (criteria.type === null || (info[0x4b] & criteria.type) !== 0) &&
         (!criteria.ssid || (info[0x26] === criteria.ssid.length && info.subarray(0x27, 0x27 + info[0x26]).equals(criteria.ssid)));
 }
 

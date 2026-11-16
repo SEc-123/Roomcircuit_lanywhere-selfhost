@@ -1,4 +1,4 @@
-RoomCircuit 0.8.8 Beta
+RoomCircuit 0.8.9
 
 中文
 

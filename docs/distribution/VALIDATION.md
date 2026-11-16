@@ -95,3 +95,12 @@ Both supplied audit reports were checked against the pinned sources. Confirmed l
 See the [finding dispositions and remaining boundaries](AUDIT-REVIEW-0.8.6.md). This candidate remains local: no production deployment, update-feed change or publication. Testing an existing 0.8.6 installation requires replacing the SD files because equal-version manifests do not offer an upgrade.
 
 中文：两份报告已按固定源码复核，确认的问题已整改。127 组宿主回归及最终扫描变更后的六项相关回归通过，三个 Switch 组件构建和源码指纹校验通过。本轮未部署或发布；实机、双机游戏和真实断网恢复仍待验收。已装 0.8.6 时请手动覆盖本地测试包。
+
+
+## 0.8.9 regular release
+
+The 0.8.6 audit introduced two LDN input-contract regressions. An inactive SSID field could reject Scan before any network operation, and SetAdvertiseData rejected the supported OpenAccessPoint → SetAdvertiseData → CreateNetwork sequence. Both were reproduced against the old actual methods and corrected. The new contract regression covers 64 scan flag/provider combinations, pre-creation advertisements retained through publication, replacement/clear/size limits, and combined network-type masks across public, reserved and direct matching. The relay applies the same full-width network-type mask semantics.
+
+The reporter confirmed that the previously reported selection freeze no longer reproduced on the latest regular and diagnostic builds, then reported Duck Game's immediate local-search failure. The fixes above address reproducible protocol regressions matching the failure stage. Duck Game itself and a two-console search/join still require the reporter's physical retest. The issue remains open for that result.
+
+The default palette is OLED black. Thread resource errors and unexpected UDP probe replies have dedicated regressions. Validation distinguishes host fixtures, real loopback sockets, Switch cross-builds and reported console results.

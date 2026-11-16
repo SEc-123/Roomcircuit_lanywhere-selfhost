@@ -459,7 +459,7 @@ struct Impl {
             return false;
         if ((flags & 2) && std::memcmp(scan_filter + 16, info + 16, 16))
             return false;
-        if ((flags & 4) && Le32(scan_filter + 32) != info[0x4b])
+        if ((flags & 4) && !(Le32(scan_filter + 32) & info[0x4b]))
             return false;
         if ((flags & 8) && std::memcmp(scan_filter + 36, info + 0x20, 6))
             return false;

@@ -2009,8 +2009,9 @@ namespace ams::mitm::lanywhere {
                 (!(flags & ldn::ScanFilterFlag_SceneId) || id.intentId.sceneId == le16(filter + 10)) &&
                 (!(flags & ldn::ScanFilterFlag_SessionId) ||
                     (id.sessionId.high == le64(filter + 16) && id.sessionId.low == le64(filter + 24))) &&
-                (!(flags & ldn::ScanFilterFlag_NetworkType) || info.common.networkType == le32(filter + 32)) &&
-                (!(flags & ldn::ScanFilterFlag_Ssid) || (info.common.ssid.length == filter[42] &&
+                (!(flags & ldn::ScanFilterFlag_NetworkType) || (info.common.networkType & le32(filter + 32)) != 0) &&
+                (!(flags & ldn::ScanFilterFlag_Ssid) || (filter[42] <= ldn::SsidLengthMax &&
+                    info.common.ssid.length == filter[42] &&
                     std::memcmp(info.common.ssid.raw, filter + 43, filter[42]) == 0));
         }
 
