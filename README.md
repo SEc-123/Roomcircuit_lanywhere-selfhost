@@ -64,4 +64,3 @@ Use the [full SD ZIP](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/
 
 Based on [LANywhere by augustocco](https://github.com/augustocco/lanywhere) and [ldn_mitm](https://github.com/spacemeowx2/ldn_mitm). [Third-party notices](third_party/README.md) · [GPL-2.0-only](LICENSE).
 
-Development assisted by OpenAI Codex. Portions of the code were AI-generated.
