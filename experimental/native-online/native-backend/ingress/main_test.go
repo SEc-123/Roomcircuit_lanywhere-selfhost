@@ -213,6 +213,42 @@ func TestMalformedHelloAndRouteConfig(t *testing.T) {
 	}
 }
 
+func TestNoSNIDisabled(t *testing.T) {
+	backend, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	front, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer front.Close()
+	c := configuration{Listen: front.Addr().String(), Routes: map[string]route{
+		"accounts.nintendo.com": {Address: backend.Addr().String()},
+	}}
+	if err := validate(c); err != nil {
+		t.Fatal(err)
+	}
+	go serve(front, c)
+	_, err = tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", front.Addr().String(),
+		&tls.Config{ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12})
+	if err == nil {
+		t.Fatal("connection without SNI must be rejected")
+	}
+	if err := backend.(*net.TCPListener).SetDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := backend.Accept()
+	if err == nil {
+		conn.Close()
+		t.Fatal("no-SNI request reached the backend")
+	}
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Fatalf("unexpected backend error: %v", err)
+	}
+}
+
 func TestFragmentedClientHello(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()

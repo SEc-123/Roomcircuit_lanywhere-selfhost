@@ -50,6 +50,7 @@ jobs:
           python3 native-validation/build-inputs/test_prepare.py
           python3 native-validation/preflight/test_check.py
           python3 native-validation/https-endpoint/test_prepare_endpoint.py
+          python3 native-validation/https-endpoint/test_local_profile.py
   username-postgres-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15

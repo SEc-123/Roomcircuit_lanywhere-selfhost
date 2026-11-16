@@ -74,8 +74,12 @@ func validate(c configuration) error {
 		}
 		return nil
 	}
-	if err := check(c.NoSNI); err != nil {
-		return err
+	if c.NoSNI.Address != "" {
+		if err := check(c.NoSNI); err != nil {
+			return err
+		}
+	} else if c.NoSNI.ProxyV1 {
+		return errors.New("disabled no-SNI route cannot use PROXY")
 	}
 	for name, r := range c.Routes {
 		if !validName(name) {
@@ -253,7 +257,7 @@ func bridge(client net.Conn, c configuration) {
 	}
 	r, ok := c.Routes[name]
 	if name == "" {
-		r, ok = c.NoSNI, true
+		r, ok = c.NoSNI, c.NoSNI.Address != ""
 	}
 	if !ok {
 		return

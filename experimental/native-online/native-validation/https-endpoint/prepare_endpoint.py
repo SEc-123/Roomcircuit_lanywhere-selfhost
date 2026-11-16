@@ -60,7 +60,8 @@ def create(ca_path, key_path, address, names, destination):
         shutil.copyfile(key_path,tmp/'ca.key');(tmp/'ca.key').chmod(0o600)
         san = 'IP:'+str(ip)+''.join(',DNS:'+name for name in names)
         (tmp/'leaf.ext').write_text('basicConstraints=critical,CA:FALSE\nsubjectAltName='+san+
-            '\nextendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n')
+            '\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature,keyEncipherment\n'
+            'subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n')
         run('openssl','x509','-req','-in',str(tmp/'server.csr'),'-CA',str(tmp/'ca.pem'),
             '-CAkey',str(tmp/'ca.key'),'-CAcreateserial','-days','7','-extfile',str(tmp/'leaf.ext'),
             '-out',str(work/'server.pem'))
