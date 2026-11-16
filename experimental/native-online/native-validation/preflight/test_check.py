@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from check import probe
 
@@ -50,26 +51,38 @@ class Checks(unittest.TestCase):
             p = Path(directory)
             subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
                 '-days', '1', '-keyout', str(p/'ca.key'), '-out', str(p/'ca.pem'),
-                '-subj', '/CN=Test CA', '-addext', 'basicConstraints=critical,CA:TRUE'],
+                '-subj', '/CN=Test CA', '-addext', 'basicConstraints=critical,CA:TRUE',
+                '-addext', 'keyUsage=critical,keyCertSign,cRLSign'],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(['openssl', 'req', '-newkey', 'rsa:2048', '-nodes',
                 '-keyout', str(p/'leaf.key'), '-out', str(p/'leaf.csr'), '-subj', '/CN='+HOST],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            (p/'ext').write_text('subjectAltName=DNS:'+HOST+'\nextendedKeyUsage=serverAuth\n')
+            (p/'ext').write_text('basicConstraints=critical,CA:FALSE\n'
+                'keyUsage=critical,digitalSignature,keyEncipherment\n'
+                'subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n'
+                'subjectAltName=DNS:'+HOST+'\nextendedKeyUsage=serverAuth\n')
             subprocess.run(['openssl', 'x509', '-req', '-in', str(p/'leaf.csr'), '-CA', str(p/'ca.pem'),
                 '-CAkey', str(p/'ca.key'), '-CAcreateserial', '-days', '1', '-extfile', str(p/'ext'),
                 '-out', str(p/'leaf.pem')], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             s = Server(p/'leaf.pem', p/'leaf.key')
             self.addCleanup(s.close)
             port = s.listener.getsockname()[1]
-            good = probe('127.0.0.1', port, [HOST], str(p/'ca.pem'), 2)
-            self.assertTrue(good['all_tls_verified'])
-            wrong = probe('127.0.0.1', port, [WRONG], str(p/'ca.pem'), 2)
-            self.assertFalse(wrong['all_tls_verified'])
-            self.assertEqual(wrong['checks'][0]['stage'], 'certificate')
-            untrusted = probe('127.0.0.1', port, [HOST], None, 2)
-            self.assertFalse(untrusted['all_tls_verified'])
-            self.assertEqual(untrusted['checks'][0]['stage'], 'certificate')
+            default_context = ssl.create_default_context
+            def strict_context(*args, **kwargs):
+                ctx = default_context(*args, **kwargs)
+                ctx.verify_flags |= ssl.VERIFY_X509_STRICT
+                return ctx
+            # Python 3.13 enables strict X.509 verification by default. Verify
+            # the fixture remains valid under that policy on older runtimes too.
+            with patch('check.ssl.create_default_context', side_effect=strict_context):
+                good = probe('127.0.0.1', port, [HOST], str(p/'ca.pem'), 2)
+                self.assertTrue(good['all_tls_verified'], good)
+                wrong = probe('127.0.0.1', port, [WRONG], str(p/'ca.pem'), 2)
+                self.assertFalse(wrong['all_tls_verified'])
+                self.assertEqual(wrong['checks'][0]['stage'], 'certificate')
+                untrusted = probe('127.0.0.1', port, [HOST], None, 2)
+                self.assertFalse(untrusted['all_tls_verified'])
+                self.assertEqual(untrusted['checks'][0]['stage'], 'certificate')
             for kwargs in [dict(address='example.com',port=port,names=[HOST]),
                            dict(address='127.0.0.1',port=0,names=[HOST]),
                            dict(address='127.0.0.1',port=port,names=['example.com']),
