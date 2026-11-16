@@ -1,0 +1,53 @@
+{
+  "agreedTerms": "object",
+  "analyticsOptedIn": "bool",
+  "analyticsOptedInUpdatedAt": "int",
+  "analyticsPermissions": {
+    "dataCollection": {
+      "editable": {"admin": "bool", "self": "bool"},
+      "permitted": "bool",
+      "updatedAt": "int",
+      "userConfirmed": "bool"
+    },
+    "internalAnalysis": {
+      "editable": {"admin": "bool", "self": "bool"},
+      "permitted": "bool",
+      "updatedAt": "int",
+      "userConfirmed": "bool"
+    },
+    "targetMarketing": {
+      "editable": {"admin": "bool", "self": "bool"},
+      "permitted": "bool",
+      "updatedAt": "int",
+      "userConfirmed": "bool"
+    }
+  },
+  "birthday": "str",
+  "clientFriendsOptedIn": "bool",
+  "clientFriendsOptedInUpdatedAt": "int",
+  "country": "str",
+  "createdAt": "int",
+  "eachEmailOptedIn": {
+    "deals": {"optedIn": "bool", "updatedAt": "int"},
+    "survey": {"optedIn": "bool", "updatedAt": "int"}
+  },
+  "email": "str",
+  "emailOptedIn": "bool",
+  "emailOptedInUpdatedAt": "int",
+  "emailVerified": "bool",
+  "gender": "str",
+  "iconUri": "str",
+  "id": "str",
+  "isChild": "bool",
+  "language": "str",
+  "links": {},
+  "loginId": null,
+  "nickname": "str",
+  "phoneNumberEnabled": "bool",
+  "region": null,
+  "screenName": "str",
+  "summary": {"nintendo": {"hasMembership": "bool"}},
+  "termsAgreementRequired": "bool",
+  "timezone": {"id": "str", "name": "str", "utcOffset": "str", "utcOffsetSeconds": "int"},
+  "updatedAt": "int"
+}

@@ -1,0 +1,18 @@
+--- a/stratosphere/ams_mitm/source/fs_mitm/fs_mitm_service.hpp
++++ b/stratosphere/ams_mitm/source/fs_mitm/fs_mitm_service.hpp
+@@ -63,6 +63,15 @@ namespace ams::mitm::fs {
+             }
+ 
+             static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
++                if (client_info.program_id == ncm::SystemProgramId::Ssl) {
++                    /* Check the active boot before the HOME-menu fallback. */
++                    u64 emummc_active = 0;
++                    const auto result = spl::smc::GetConfig(std::addressof(emummc_active), 1,
++                                                            spl::ConfigItem::ExosphereEmummcType);
++                    /* AMS 1.12.0 reports 1 for either supported emuMMC type. */
++                    return result == spl::smc::Result::Success && emummc_active == 1;
++                }
++
+                 static std::atomic_bool has_launched_qlaunch = false;
+ 
+                 /* TODO: intercepting everything seems to cause issues with sleep mode, for some reason. */

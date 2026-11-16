@@ -1,0 +1,113 @@
+--- a/stratosphere/ams_mitm/source/fs_mitm/fs_mitm_service.hpp
++++ b/stratosphere/ams_mitm/source/fs_mitm/fs_mitm_service.hpp
+@@ -62,14 +62,18 @@
+                 return false;
+             }
+ 
++            static bool IsPrivateNetworkEmummc() {
++                u64 emummc_active = 0;
++                const auto result = spl::smc::GetConfig(std::addressof(emummc_active), 1,
++                                                        spl::ConfigItem::ExosphereEmummcType);
++                /* AMS 1.12.0 reports 1 for either supported emuMMC type. */
++                return result == spl::smc::Result::Success && emummc_active == 1;
++            }
++
+             static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
+                 if (client_info.program_id == ncm::SystemProgramId::Ssl) {
+                     /* Check the active boot before the HOME-menu fallback. */
+-                    u64 emummc_active = 0;
+-                    const auto result = spl::smc::GetConfig(std::addressof(emummc_active), 1,
+-                                                            spl::ConfigItem::ExosphereEmummcType);
+-                    /* AMS 1.12.0 reports 1 for either supported emuMMC type. */
+-                    return result == spl::smc::Result::Success && emummc_active == 1;
++                    return IsPrivateNetworkEmummc();
+                 }
+ 
+                 static std::atomic_bool has_launched_qlaunch = false;
+--- a/stratosphere/ams_mitm/source/fs_mitm/fs_mitm_service.cpp
++++ b/stratosphere/ams_mitm/source/fs_mitm/fs_mitm_service.cpp
+@@ -23,6 +23,7 @@
+ #include "fsmitm_layered_romfs_storage.hpp"
+ #include "fsmitm_save_utils.hpp"
+ #include "fsmitm_readonly_layered_filesystem.hpp"
++#include "roomcircuit_private_certstore_format.hpp"
+ 
+ namespace ams::mitm::fs {
+ 
+@@ -38,6 +39,53 @@
+         constinit bool g_is_boot0_custom_public_key = false;
+ 
+         constinit fssrv::impl::ProgramIndexMapInfoManager g_program_index_map_info_manager;
++
++        class PrivateCertStoreStorage final : public MemoryStorage {
++            private:
++                std::unique_ptr<u8[]> m_image;
++                RemoteStorage m_original;
++            public:
++                PrivateCertStoreStorage(::FsStorage &original, std::unique_ptr<u8[]> image, s64 size)
++                    : MemoryStorage(image.get(), size), m_image(std::move(image)), m_original(original) { }
++
++                Result Write(s64 offset, const void *buffer, size_t size) override {
++                    AMS_UNUSED(offset, buffer, size);
++                    R_THROW(ams::fs::ResultUnsupportedOperation());
++                }
++        };
++
++        Result LoadPrivateCertStore(std::unique_ptr<u8[]> *out_image, s64 *out_size) {
++            FsFile digest_file;
++            R_TRY(mitm::fs::OpenAtmosphereSdFile(std::addressof(digest_file), private_certstore::DigestPath, OpenMode_Read));
++            ON_SCOPE_EXIT { fsFileClose(std::addressof(digest_file)); };
++            s64 digest_size;
++            R_TRY(fsFileGetSize(std::addressof(digest_file), std::addressof(digest_size)));
++            char sidecar[private_certstore::SidecarSize];
++            R_UNLESS(digest_size == sizeof(sidecar), ams::fs::ResultInvalidSize());
++            u64 read;
++            R_TRY(fsFileRead(std::addressof(digest_file), 0, sidecar, sizeof(sidecar), FsReadOption_None, std::addressof(read)));
++            R_UNLESS(read == sizeof(sidecar), ams::fs::ResultInvalidSize());
++
++            FsFile image_file;
++            R_TRY(mitm::fs::OpenAtmosphereSdFile(std::addressof(image_file), private_certstore::ImagePath, OpenMode_Read));
++            ON_SCOPE_EXIT { fsFileClose(std::addressof(image_file)); };
++            s64 image_size;
++            R_TRY(fsFileGetSize(std::addressof(image_file), std::addressof(image_size)));
++            R_UNLESS(image_size >= static_cast<s64>(private_certstore::DataOffset) &&
++                     image_size <= static_cast<s64>(private_certstore::MaxImageSize), ams::fs::ResultInvalidSize());
++            const size_t size = static_cast<size_t>(image_size);
++            auto image = std::unique_ptr<u8[]>(new (std::nothrow) u8[size]);
++            R_UNLESS(image != nullptr, ams::fs::ResultAllocationMemoryFailedNew());
++            R_TRY(fsFileRead(std::addressof(image_file), 0, image.get(), size, FsReadOption_None, std::addressof(read)));
++            R_UNLESS(read == size && private_certstore::ValidateImage(image.get(), size), ams::fs::ResultInvalidSize());
++
++            u8 actual_digest[32];
++            crypto::GenerateSha256(actual_digest, sizeof(actual_digest), image.get(), size);
++            R_UNLESS(private_certstore::MatchDigest(sidecar, actual_digest), ams::fs::ResultInvalidArgument());
++            *out_image = std::move(image);
++            *out_size = image_size;
++            R_SUCCEED();
++        }
+ 
+         bool IsBoot0CustomPublicKey(::FsStorage &storage) {
+             if (AMS_UNLIKELY(!g_detected_boot0_kind)) {
+@@ -330,6 +378,22 @@
+     }
+ 
+     Result FsMitmService::OpenDataStorageByDataId(sf::Out<sf::SharedPointer<ams::fssrv::sf::IStorage>> out, ncm::DataId _data_id, u8 storage_id) {
++        if (m_client_info.program_id == ncm::SystemProgramId::Ssl &&
++            _data_id.value == ncm::SystemDataId::CertStore.value && storage_id == NcmStorageId_BuiltInSystem) {
++            R_UNLESS(IsPrivateNetworkEmummc(), sm::mitm::ResultShouldForwardToSession());
++            std::unique_ptr<u8[]> image;
++            s64 size;
++            R_UNLESS(R_SUCCEEDED(LoadPrivateCertStore(std::addressof(image), std::addressof(size))),
++                     sm::mitm::ResultShouldForwardToSession());
++            FsStorage original;
++            R_TRY(fsOpenDataStorageByDataIdFwd(m_forward_service.get(), std::addressof(original), _data_id.value,
++                                               static_cast<NcmStorageId>(storage_id)));
++            const sf::cmif::DomainObjectId object_id{serviceGetObjectId(std::addressof(original.s))};
++            out.SetValue(MakeSharedStorage(std::make_shared<PrivateCertStoreStorage>(original, std::move(image), size)),
++                         object_id);
++            R_SUCCEED();
++        }
++
+         /* Only mitm if we should override contents for the current process. */
+         R_UNLESS(m_client_info.override_status.IsProgramSpecific(), sm::mitm::ResultShouldForwardToSession());
+ 

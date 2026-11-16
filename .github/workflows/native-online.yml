@@ -1,0 +1,43 @@
+name: Verify experimental native online
+on:
+  push:
+    paths:
+      - 'experimental/native-online/**'
+      - '.github/workflows/native-online.yml'
+  pull_request:
+    paths:
+      - 'experimental/native-online/**'
+      - '.github/workflows/native-online.yml'
+permissions:
+  contents: read
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: false
+      - name: Test account broker
+        working-directory: experimental/native-online/native-backend
+        run: go test -race -mod=readonly ./...
+      - name: Test native account adapter
+        working-directory: experimental/native-online/native-backend/nx-adapter
+        run: go test -race -mod=readonly ./...
+      - name: Test TLS ingress
+        working-directory: experimental/native-online/native-backend/ingress
+        run: go test -race -mod=readonly ./...
+      - name: Test emuMMC startup boundary
+        working-directory: experimental/native-online/native-validation/emummc-startup
+        run: sh test-startup.sh
+      - name: Test TLS, DNS, and certificate-store parsing
+        working-directory: experimental/native-online
+        run: |
+          go test -race native-client/tls_scope_test.go
+          c++ -std=c++20 -Wall -Wextra -Werror native-client/test_private_dns.cpp -o "$RUNNER_TEMP/native-dns-test"
+          "$RUNNER_TEMP/native-dns-test"
+          cc -std=c11 -Wall -Wextra -Werror -c native-validation/trust-store/store.c -o "$RUNNER_TEMP/native-store.o"
+          c++ -std=c++20 -Wall -Wextra -Werror native-client/test_private_certstore.cpp "$RUNNER_TEMP/native-store.o" -o "$RUNNER_TEMP/native-store-test"
+          "$RUNNER_TEMP/native-store-test"
