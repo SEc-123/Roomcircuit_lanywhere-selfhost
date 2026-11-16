@@ -73,6 +73,12 @@ func TestRoomCircuitRuntimeProfiles(t *testing.T) {
 		}
 		t.Run(profile.name, func(t *testing.T) {
 			waitRuntimeHealth(t, profile)
+			if fixture.application != runtimeTitleID(profile.name) {
+				if _, reply := runtimeLogin(t, clientTLS, profile, tokens[0]); !reply.IsError {
+					t.Fatal("a credential for another title was accepted")
+				}
+				return
+			}
 			if _, reply := runtimeLogin(t, clientTLS, profile, "invalid-test-credential"); !reply.IsError {
 				t.Fatal("runtime minted a ticket for an invalid account token")
 			}
@@ -197,6 +203,7 @@ func TestRoomCircuitRuntimeSecureAdmission(t *testing.T) {
 	var shortTokenActive atomic.Bool
 	shortTokenActive.Store(true)
 	var admitted atomic.Bool
+	var wrongTitle atomic.Bool
 	var pidStatus, pidChecks atomic.Int32
 	pidStatus.Store(http.StatusOK)
 	authority := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +235,11 @@ func TestRoomCircuitRuntimeSecureAdmission(t *testing.T) {
 		} else {
 			admitted.Store(true)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"pid": pid, "baas_user_id": fmt.Sprintf("%016x", pid), "account_id": "owned-test-account"})
+		application := runtimeTitleID(profile.name)
+		if wrongTitle.Load() {
+			application = runtimeTitleID("mario-party-superstars")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"pid": pid, "baas_user_id": fmt.Sprintf("%016x", pid), "account_id": "owned-test-account", "application_id": application})
 	}))
 	t.Cleanup(authority.Close)
 	process, clientTLS := newTestRuntime(t, profile.name, authority.URL, key)
@@ -257,9 +268,13 @@ func TestRoomCircuitRuntimeSecureAdmission(t *testing.T) {
 	unavailable := runtimeSecurePeer(t, clientTLS, profile, auth)
 	assertRuntimeConnectRejected(t, unavailable, 3)
 	pidStatus.Store(http.StatusOK)
+	wrongTitle.Store(true)
+	wrongScope := runtimeSecurePeer(t, clientTLS, profile, auth)
+	assertRuntimeConnectRejected(t, wrongScope, 4)
+	wrongTitle.Store(false)
 	resumed := runtimeSecurePeer(t, clientTLS, profile, auth)
-	resumed.handshake(resumed.secureConnectPayload(4))
-	if pidChecks.Load() != 4 {
+	resumed.handshake(resumed.secureConnectPayload(5))
+	if pidChecks.Load() != 5 {
 		t.Fatal("the restarted process did not consult live admission for each reconnect")
 	}
 	if _, expiredLogin := runtimeLogin(t, clientTLS, profile, credential); !expiredLogin.IsError {
@@ -268,15 +283,17 @@ func TestRoomCircuitRuntimeSecureAdmission(t *testing.T) {
 
 	pidStatus.Store(http.StatusForbidden)
 	revoked := runtimeSecurePeer(t, clientTLS, profile, auth)
-	assertRuntimeConnectRejected(t, revoked, 5)
+	assertRuntimeConnectRejected(t, revoked, 6)
+	pidStatus.Store(http.StatusOK)
+	wrongTitle.Store(true)
 	if err := resumed.conn.SetReadDeadline(time.Now().Add(35 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	_, err := io.Copy(io.Discard, resumed.conn)
 	if network, ok := err.(net.Error); ok && network.Timeout() {
-		t.Fatal("the live secure connection survived a definitive authorization revocation")
+		t.Fatal("the live secure connection survived a mismatched title authorization")
 	}
-	if checks := pidChecks.Load(); checks < 6 {
+	if checks := pidChecks.Load(); checks < 7 {
 		t.Fatal("the runtime disconnected without performing its periodic lease check")
 	}
 }
@@ -304,6 +321,7 @@ func assertRuntimeConnectRejected(t *testing.T, peer *client, cid uint32) {
 type runtimeFixture struct {
 	endpoint, key, host, guest string
 	hostPID, guestPID          uint64
+	application                string
 }
 
 func readRuntimeFixture(t *testing.T, path string) runtimeFixture {
@@ -322,12 +340,13 @@ func readRuntimeFixture(t *testing.T, path string) runtimeFixture {
 		t.Fatal("local account fixture owner or size is invalid")
 	}
 	var stored struct {
-		Endpoint string      `json:"RC_IDENTITY_URL"`
-		Key      string      `json:"RC_IDENTITY_KEY"`
-		Host     string      `json:"RC_HOST_TOKEN"`
-		Guest    string      `json:"RC_GUEST_TOKEN"`
-		HostPID  json.Number `json:"RC_HOST_PID"`
-		GuestPID json.Number `json:"RC_GUEST_PID"`
+		Endpoint    string      `json:"RC_IDENTITY_URL"`
+		Key         string      `json:"RC_IDENTITY_KEY"`
+		Host        string      `json:"RC_HOST_TOKEN"`
+		Guest       string      `json:"RC_GUEST_TOKEN"`
+		HostPID     json.Number `json:"RC_HOST_PID"`
+		GuestPID    json.Number `json:"RC_GUEST_PID"`
+		Application string      `json:"RC_APPLICATION_ID"`
 	}
 	body, err := io.ReadAll(io.LimitReader(file, 8193))
 	if err != nil || len(body) > 8192 || json.Unmarshal(body, &stored) != nil {
@@ -336,10 +355,10 @@ func readRuntimeFixture(t *testing.T, path string) runtimeFixture {
 	hostPID, hostError := strconv.ParseUint(stored.HostPID.String(), 10, 64)
 	guestPID, guestError := strconv.ParseUint(stored.GuestPID.String(), 10, 64)
 	if stored.Endpoint == "" || stored.Key == "" || stored.Host == "" || stored.Guest == "" || stored.Host == stored.Guest ||
-		hostError != nil || guestError != nil || hostPID == 0 || guestPID == 0 || hostPID == guestPID {
+		hostError != nil || guestError != nil || hostPID == 0 || guestPID == 0 || hostPID == guestPID || (stored.Application != runtimeTitleID("mario-party-superstars") && stored.Application != runtimeTitleID("pico-park")) {
 		t.Fatal("local account fixture must contain two distinct authenticated identities")
 	}
-	return runtimeFixture{stored.Endpoint, stored.Key, stored.Host, stored.Guest, hostPID, guestPID}
+	return runtimeFixture{stored.Endpoint, stored.Key, stored.Host, stored.Guest, hostPID, guestPID, stored.Application}
 }
 
 func waitRuntimeHealth(t *testing.T, profile title) {

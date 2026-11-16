@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.2'
@@ -54,12 +56,30 @@ jobs:
   username-postgres-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        title: [mario-party-superstars, pico-park]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check out pinned NEX source
+        uses: actions/checkout@v4
+        with:
+          repository: openpak/switch-nex
+          ref: 2af4741d321f9d9f9aa45f96454137f86130c288
+          path: .native-nex-source
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.2'
           cache: false
-      - name: Run disposable PostgreSQL and account-to-game identity flow
+      - name: Download pinned Go modules
+        working-directory: .native-nex-source
+        run: go mod download
+      - name: Test isolated username grant and title-scoped NEX flow
         working-directory: experimental/native-online/native-backend
-        run: python3 -B username-core/e2e.py
+        env:
+          TEST_TITLE: ${{ matrix.title }}
+        run: python3 -B username-core/e2e.py --nex-source "$GITHUB_WORKSPACE/.native-nex-source" --title "$TEST_TITLE"

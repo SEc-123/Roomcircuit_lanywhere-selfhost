@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"runtime"
 	"strings"
 	"testing"
@@ -93,5 +95,58 @@ func TestEdgeLimitsTwoRealTCPSourceAddresses(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
 		t.Fatalf("second source unfairly rate limited: %d", res.StatusCode)
+	}
+}
+
+func TestUsernameApprovalAlwaysReleasesTemporaryLogin(t *testing.T) {
+	const value = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, tc := range []struct {
+		name     string
+		status   int
+		body     string
+		decision string
+		want     int
+	}{
+		{"malformed response", 200, "{", "approve", 503},
+		{"missing account", 200, `{}`, "approve", 503},
+		{"error response with session", 401, `{}`, "approve", 401},
+		{"player denies", 200, `{"account_id":"fixture"}`, "deny", 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logout := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/login":
+					http.SetCookie(w, &http.Cookie{Name: "openpak_session", Value: value})
+					w.WriteHeader(tc.status)
+					_, _ = io.WriteString(w, tc.body)
+				case "/v1/logout":
+					if r.Header.Get("Authorization") != "Bearer "+value {
+						t.Error("missing private session")
+					}
+					logout++
+					w.WriteHeader(204)
+				default:
+					t.Error("unexpected core request")
+					w.WriteHeader(500)
+				}
+			}))
+			defer upstream.Close()
+			s := &service{usernameRealm: true, accountURL: upstream.URL, issuerURL: "https://own.test", client: upstream.Client(), pending: map[string]*challenge{"ABCD": {state: "pending", deviceKey: strings.Repeat("a", 64), expires: time.Now().Add(time.Minute)}}, grants: make(map[string]grant)}
+			form := url.Values{"csrf_token": {"csrf"}, "user_code": {"ABCD"}, "decision": {tc.decision}, "username": {"tester"}, "password": {"test-password"}}
+			req := httptest.NewRequest("POST", "https://own.test/device", strings.NewReader(form.Encode()))
+			req.RemoteAddr = "198.51.100.10:1234"
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Origin", "https://own.test")
+			req.AddCookie(&http.Cookie{Name: "rc_device_form", Value: "csrf"})
+			w := httptest.NewRecorder()
+			s.approve(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("status=%d want=%d", w.Code, tc.want)
+			}
+			if logout != 1 {
+				t.Fatalf("temporary sessions cleaned=%d", logout)
+			}
+		})
 	}
 }

@@ -135,7 +135,7 @@ def main(restart=None, expected_issuer=None, receipt_path=None):
 
     account.write_fixture(LAB / 'game-test.json', {'RC_IDENTITY_URL': PRIVATE, 'RC_IDENTITY_KEY': game_key,
         'RC_HOST_TOKEN': sessions[0][1], 'RC_GUEST_TOKEN': sessions[1][1],
-        'RC_HOST_PID': sessions[0][0], 'RC_GUEST_PID': sessions[1][0]})
+        'RC_HOST_PID': sessions[0][0], 'RC_GUEST_PID': sessions[1][0], 'RC_APPLICATION_ID': APP})
     result = {'owned_browser_approvals':2,'native_route_device_accounts':2,
         'valid_federation_then_login':2,'default_deny_before_federation':True,'wrong_owner_rejected':True,
         'membership_scoped_to_active_grant':True,'signed_identity_purpose_checked':True,'private_pid_revalidation_requires_live_login':True,

@@ -44,6 +44,40 @@ func TestUsernameOAuthFormAndAccountLogin(t *testing.T) {
 	}
 }
 
+func TestUsernameOAuthTemporarySessionClosedAcrossRepeatedFailures(t *testing.T) {
+	created, closed := 0, 0
+	account := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/login":
+			created++
+			http.SetCookie(w, &http.Cookie{Name: "openpak_session", Value: "temporary-session"})
+			respond(w, 200, map[string]string{"account_id": "own-account"})
+		case "/v1/logout":
+			cookie, err := r.Cookie("openpak_session")
+			if err != nil || cookie.Value != "temporary-session" {
+				t.Error("logout did not use the issued session")
+			}
+			closed++
+			w.WriteHeader(204)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer account.Close()
+	broker := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+	defer broker.Close()
+	flow := &linkOAuth{a: &adapter{client: account.Client(), na: &naIssuer{origin: "https://account.own.test"}},
+		browser: broker.URL, account: account.URL, client: broker.Client(), usernameRealm: true}
+	for i := 0; i < 25; i++ {
+		if _, status := flow.brokerApproval(context.Background(), "player", "test-password"); status != 503 {
+			t.Fatalf("attempt %d: expected unavailable broker, got %d", i, status)
+		}
+	}
+	if created != 25 || closed != created {
+		t.Fatalf("temporary sessions created=%d closed=%d", created, closed)
+	}
+}
+
 func TestUsernameOAuthInternalBrokerAndSourceLimits(t *testing.T) {
 	const privateKey = "local-internal-test-key"
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

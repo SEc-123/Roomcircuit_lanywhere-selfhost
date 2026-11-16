@@ -249,6 +249,27 @@ func (s *linkOAuth) call(ctx context.Context, path, mime, cookie string, body []
 	return s.client.Do(req)
 }
 
+// The username realm issues a core session on every login. The OAuth bridge
+// uses it only for the account ID and must not consume a long-lived session
+// slot after approval, including when the caller has already disconnected.
+func (s *linkOAuth) closeUsernameSession(value string) {
+	if !s.usernameRealm || value == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", s.account+"/v1/logout", nil)
+	if err != nil {
+		return
+	}
+	req.AddCookie(&http.Cookie{Name: "openpak_session", Value: value})
+	res, err := s.a.client.Do(req)
+	if err == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1024))
+		res.Body.Close()
+	}
+}
+
 func (s *linkOAuth) brokerApproval(ctx context.Context, loginName, password string) (browserTokens, int) {
 	var credentials browserTokens
 	loginField := "email"
@@ -264,6 +285,14 @@ func (s *linkOAuth) brokerApproval(ctx context.Context, loginName, password stri
 	login, err := s.a.client.Do(loginRequest)
 	if err != nil {
 		return credentials, 503
+	}
+	if s.usernameRealm {
+		for _, cookie := range login.Cookies() {
+			if cookie.Name == "openpak_session" && cookie.Value != "" {
+				defer s.closeUsernameSession(cookie.Value)
+				break
+			}
+		}
 	}
 	var profile struct {
 		Account string `json:"account_id"`

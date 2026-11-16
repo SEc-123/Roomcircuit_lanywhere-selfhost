@@ -25,6 +25,19 @@ const (
 	runtimeTicketSkew   = time.Minute
 )
 
+// These application IDs identify the actual title whose NEX endpoint is in
+// use. They must be checked against the authenticated adapter response.
+func runtimeTitleID(name string) string {
+	switch name {
+	case "mario-party-superstars":
+		return "01006fe013472000"
+	case "pico-park":
+		return "01004ea00df70000"
+	default:
+		return ""
+	}
+}
+
 func runtimeConfiguration(require bool, identity, key, ticket, station, bind, proxy, selected string) ([]byte, error) {
 	if !require {
 		return nil, errors.New("identity enforcement is required")

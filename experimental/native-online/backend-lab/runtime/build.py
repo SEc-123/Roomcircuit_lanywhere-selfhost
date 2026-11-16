@@ -55,7 +55,9 @@ def patched_main(path):
          '\t\torEnv(*identityKey, "NX_INTERNAL_KEY"),\n\t)\n',
          '\tids := newIdentity(identity, key)\n'),
         ('svc := newService(t, *stationAddress, recall, ids)',
-         'svc := newService(t, *stationAddress, recall, ids, ticketSecret)'),
+         'titleIdentity := newIdentity(identity, key)\n'
+         '\t\ttitleIdentity.application = runtimeTitleID(t.name)\n'
+         '\t\tsvc := newService(t, *stationAddress, recall, titleIdentity, ticketSecret)'),
         ('serveHealth(fmt.Sprintf(":%d", t.base+2), svc, voice)',
          'serveHealth(net.JoinHostPort("127.0.0.1", strconv.Itoa(t.base+2)), svc, voice)'),
         ('listenTitle(fmt.Sprintf(":%d", t.base), tlsCfg.Clone())',
@@ -94,6 +96,14 @@ def patched_main(path):
 
 def patched_identity(path):
     source = pinned_source(path, IDENTITY_SHA256)
+    source = replace_once(source, 'AccountID string `json:"account_id"`\n}',
+        'AccountID string `json:"account_id"`\n\tApplication string `json:"application_id"`\n}')
+    source = replace_once(source, '\turl    string\n\tkey    string\n\tclient *http.Client',
+        '\turl    string\n\tkey    string\n\tclient *http.Client\n\tapplication string')
+    source = replace_once(source,
+        '\tif p.PID == 0 || p.BaasUserID == "" {',
+        '\tif i.application != "" && p.Application != i.application { return nil, errNoAccount }\n'
+        '\tif p.PID == 0 || p.BaasUserID == "" {')
     source = replace_once(source, 'client: &http.Client{Timeout: 5 * time.Second},',
         'client: &http.Client{Timeout: 5 * time.Second,\n'
         '\t\t\tCheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},')

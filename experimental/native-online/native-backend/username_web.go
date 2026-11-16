@@ -15,6 +15,24 @@ import (
 	"time"
 )
 
+// The account session is used only to authorize this linking request. Use a
+// fresh timeout so a disconnected browser cannot prevent cleanup.
+func (s *service) logoutTemporaryUsernameSession(session string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", s.accountURL+"/v1/logout", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+session)
+	res, err := s.client.Do(req)
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
+	res.Body.Close()
+}
+
 type edgeBucket struct {
 	start time.Time
 	count int

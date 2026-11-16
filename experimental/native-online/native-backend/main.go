@@ -263,6 +263,16 @@ func (s *service) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer login.Body.Close()
+	var session string
+	for _, c := range login.Cookies() {
+		if c.Name == "openpak_session" {
+			session = c.Value
+			break
+		}
+	}
+	if s.usernameRealm && session != "" {
+		defer s.logoutTemporaryUsernameSession(session)
+	}
 	if login.StatusCode == 202 {
 		reject(w, 403, "second_factor_required")
 		return
@@ -277,13 +287,6 @@ func (s *service) approve(w http.ResponseWriter, r *http.Request) {
 	if json.NewDecoder(io.LimitReader(login.Body, 4096)).Decode(&profile) != nil || profile.Account == "" {
 		reject(w, 503, "account_unavailable")
 		return
-	}
-	var session string
-	for _, c := range login.Cookies() {
-		if c.Name == "openpak_session" {
-			session = c.Value
-			break
-		}
 	}
 	if session == "" {
 		reject(w, 503, "account_unavailable")
