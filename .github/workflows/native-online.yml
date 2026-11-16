@@ -86,6 +86,13 @@ jobs:
       - name: Download pinned Go modules
         working-directory: .native-nex-source
         run: go mod download
+      - name: Prepare offline staging build dependencies
+        if: matrix.title == 'mario-party-superstars'
+        working-directory: experimental/native-online
+        run: |
+          for module in account-lab native-backend native-backend/username-core native-backend/nx-adapter native-backend/staging-profile/register-gateway; do
+            (cd "$module" && go mod download)
+          done
       - name: Verify staging profile generation
         if: matrix.title == 'mario-party-superstars'
         working-directory: experimental/native-online/native-backend/staging-profile
