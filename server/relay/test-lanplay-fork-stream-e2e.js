@@ -1,6 +1,7 @@
 'use strict';
 // Real relay server + independent fork-format UDP peer; no Switch device is emulated.
 const assert=require('assert'),fs=require('fs'),os=require('os'),path=require('path'),{spawn}=require('child_process');
+const {once}=require('node:events');
 const P=require('./tcp-stream-protocol');
 const {ForkPeer,Console,networkInfo,nodeInfo,until,sleep,PORT,LP_PORT,GAME,NODES,NS,LDN}=require('./test-lanplay-fork');
 function legacy(type,owner,id,port=0,data=Buffer.alloc(0)){const h=Buffer.alloc(8);h[0]=type;h[1]=owner;h.writeUInt16LE(id,2);h.writeUInt16LE(port,4);h.writeUInt16LE(data.length,6);return Buffer.concat([h,data]);}
@@ -24,5 +25,13 @@ async function run(){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'lany-fork-s
  host.send(0x24,cmd(guest.virt,P.OP.DATA,1,id,nonce,{seq:0n},Buffer.from('response')));raw=(await until(()=>guest.received.shift(),3000,'legacy return')).body;assert.equal(raw[0],2);assert.equal(raw[1],1);assert.equal(raw.readUInt16LE(2),55);assert.equal(raw.subarray(8).toString(),'response');h=P.parse(await host.frame(0xa4));assert.equal(h.op,P.OP.WINDOW);
  guest.game(host.ip,host.ip,legacy(3,0,55),11453);h=P.parse(await host.frame(0xa4));assert.equal(h.op,P.OP.RST);
  console.log('Actual server + fork wire: both TCP origins, legacy readiness, early-data buffering, credit and whole-close passed (UDP best effort)');
- }finally{for(const x of all)try{x.close()}catch{}server.kill('SIGTERM');await sleep(150);fs.rmSync(dir,{recursive:true,force:true});}}
+ }finally{
+  for(const x of all)try{x.close()}catch{}
+  if(server.exitCode===null&&server.signalCode===null){
+   const exited=once(server,'exit');server.kill('SIGTERM');
+   await Promise.race([exited,sleep(3000)]);
+   if(server.exitCode===null&&server.signalCode===null){server.kill('SIGKILL');await exited;}
+  }
+  fs.rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100});
+ }}
 run().catch(e=>{console.error(e);process.exitCode=1;});
