@@ -41,10 +41,11 @@ type approvedDevice struct {
 }
 
 type accountAuthority struct {
-	key      string
-	links    accountv1.LinksClient
-	accounts accountv1.IdentityClient
-	events   accountv1.EventsClient
+	key           string
+	links         accountv1.LinksClient
+	accounts      accountv1.IdentityClient
+	events        accountv1.EventsClient
+	usernameRealm bool
 }
 
 type durableGrants struct {
@@ -72,7 +73,7 @@ func coreAuthority(addr, key string) (*accountAuthority, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &accountAuthority{key, accountv1.NewLinksClient(conn), accountv1.NewIdentityClient(conn), accountv1.NewEventsClient(conn)}, nil
+	return &accountAuthority{key: key, links: accountv1.NewLinksClient(conn), accounts: accountv1.NewIdentityClient(conn), events: accountv1.NewEventsClient(conn)}, nil
 }
 
 func (a *accountAuthority) verify(ctx context.Context, item approvedDevice) (*accountv1.GetAccountResponse, int, bool) {
@@ -87,7 +88,7 @@ func (a *accountAuthority) verify(ctx context.Context, item approvedDevice) (*ac
 		return nil, 503, false
 	}
 	profile, err := a.accounts.GetAccount(ctx, &accountv1.GetAccountRequest{AccountId: item.Account})
-	if status.Code(err) == codes.NotFound || (err == nil && (profile.GetStatus() != accountv1.AccountStatus_ACCOUNT_STATUS_ACTIVE || !profile.GetEmailVerified())) {
+	if status.Code(err) == codes.NotFound || (err == nil && (profile.GetStatus() != accountv1.AccountStatus_ACCOUNT_STATUS_ACTIVE || (!a.usernameRealm && !profile.GetEmailVerified()) || (a.usernameRealm && (profile.GetEmailVerified() || profile.GetEmail() != "" || profile.GetHandle() == "")))) {
 		return nil, 403, false
 	}
 	if err != nil {
@@ -217,6 +218,9 @@ func (s *service) liveGrant(ctx context.Context, id string, item approvedDevice,
 	}
 	value := map[string]any{"account_id": item.Account, "pid": item.PID, "baas_user_id": fmt.Sprintf("%016x", item.PID),
 		"nickname": profile.GetDisplayName(), "country": profile.GetCountry(), "friends": []string{}, "grant_id": id}
+	if s.authority.usernameRealm {
+		value["account_type"] = "username"
+	}
 	if application != "" {
 		value["application_id"] = application
 	}
@@ -389,6 +393,14 @@ func (s *service) accountProfile(w http.ResponseWriter, r *http.Request) {
 		nickname = nickname[:len(nickname)-size]
 	}
 	_, birthdayErr := time.Parse("2006-01-02", profile.GetBirthday())
+	if s.authority.usernameRealm {
+		if nickname == "" || profile.GetEmail() != "" || profile.GetEmailVerified() {
+			reject(w, 409, "invalid_username_profile")
+			return
+		}
+		response(w, 200, map[string]any{"id": fmt.Sprintf("%016x", item.PID), "nickname": nickname, "email": "", "emailVerified": false, "account_type": "username", "country": "", "birthday": "", "termsAgreementRequired": false, "summary": map[string]any{"nintendo": map[string]bool{"hasMembership": true}}})
+		return
+	}
 	if nickname == "" || len(profile.GetCountry()) != 2 || birthdayErr != nil || profile.GetEmail() == "" {
 		reject(w, http.StatusConflict, "complete_account_profile")
 		return

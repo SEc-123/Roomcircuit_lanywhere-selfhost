@@ -67,19 +67,21 @@ type claims struct {
 }
 
 type service struct {
-	issuerURL    string
-	accountURL   string
-	linksURL     string
-	linksKey     string
-	gameKey      string
-	signing      *rsa.PrivateKey
-	client       *http.Client
-	mu           sync.Mutex
-	pending      map[string]*challenge
-	grants       map[string]grant
-	durable      *durableGrants
-	authority    *accountAuthority
-	applications map[string]bool
+	issuerURL     string
+	accountURL    string
+	linksURL      string
+	linksKey      string
+	gameKey       string
+	signing       *rsa.PrivateKey
+	client        *http.Client
+	mu            sync.Mutex
+	pending       map[string]*challenge
+	grants        map[string]grant
+	durable       *durableGrants
+	authority     *accountAuthority
+	applications  map[string]bool
+	usernameRealm bool
+	edge          edgeLimiter
 }
 
 func (s *service) supportedApplication(id string) bool {
@@ -174,7 +176,7 @@ func (s *service) authorize(w http.ResponseWriter, r *http.Request) {
 	response(w, 201, map[string]any{"device_code": device, "user_code": code, "verification_uri": page, "verification_uri_complete": page + "?user_code=" + code, "expires_in": int(challengeTTL / time.Second), "interval": int(pollInterval / time.Second)})
 }
 
-var devicePage = template.Must(template.New("device").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Link this Switch to RoomCircuit</title><main><h1>Link this Switch to RoomCircuit</h1><p>Confirm the code on your Switch to sign in once for supported online games.</p><form method="post" action="/device"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><label>Device code <input name="user_code" value="{{.Code}}" required autocomplete="off"></label><br><label>Email <input name="email" type="email" autocomplete="username" required></label><br><label>Password <input name="password" type="password" autocomplete="current-password" required></label><br><button name="decision" value="approve">Approve device</button> <button name="decision" value="deny">Deny</button></form></main></html>`))
+var devicePage = template.Must(template.New("device").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Link this Switch to RoomCircuit</title><main><h1>Link this Switch to RoomCircuit</h1><p>Confirm the code on your Switch to sign in once for supported online games.</p><form method="post" action="/device"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><label>Device code <input name="user_code" value="{{.Code}}" required autocomplete="off"></label><br>{{if .Username}}<label>Username <input name="username" autocomplete="username" required></label>{{else}}<label>Email <input name="email" type="email" autocomplete="username" required></label>{{end}}<br><label>Password <input name="password" type="password" autocomplete="current-password" required></label><br><button name="decision" value="approve">Approve device</button> <button name="decision" value="deny">Deny</button></form>{{if .Username}}<p><a href="/register">Create account</a></p>{{end}}</main></html>`))
 
 func (s *service) browser(w http.ResponseWriter, r *http.Request) {
 	csrf := randomHex(24)
@@ -182,7 +184,7 @@ func (s *service) browser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
-	_ = devicePage.Execute(w, map[string]string{"Code": r.URL.Query().Get("user_code"), "CSRF": csrf})
+	_ = devicePage.Execute(w, map[string]any{"Code": r.URL.Query().Get("user_code"), "CSRF": csrf, "Username": s.usernameRealm})
 }
 
 func (s *service) relay(r *http.Request, path string, data any, header string, key string) (*http.Response, error) {
@@ -202,6 +204,10 @@ func (s *service) relay(r *http.Request, path string, data any, header string, k
 }
 
 func (s *service) approve(w http.ResponseWriter, r *http.Request) {
+	if s.usernameRealm && !s.trustedInternal(r) && !s.edge.allow(r, "login", 100) {
+		reject(w, 429, "rate_limited")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := r.ParseForm(); err != nil {
 		reject(w, 400, "invalid_request")
@@ -241,12 +247,17 @@ func (s *service) approve(w http.ResponseWriter, r *http.Request) {
 			item.state = "pending"
 		}
 	}()
-	email, password := r.PostForm.Get("email"), r.PostForm.Get("password")
-	if email == "" || password == "" || len(password) > 256 {
+	name, password := r.PostForm.Get("email"), r.PostForm.Get("password")
+	credentialField := "email"
+	if s.usernameRealm {
+		name = r.PostForm.Get("username")
+		credentialField = "username"
+	}
+	if name == "" || password == "" || len(password) > 256 {
 		reject(w, 400, "invalid_request")
 		return
 	}
-	login, err := s.relay(r, s.accountURL+"/v1/login", map[string]string{"email": email, "password": password}, "", "")
+	login, err := s.relay(r, s.accountURL+"/v1/login", map[string]string{credentialField: name, "password": password}, "", "")
 	if err != nil {
 		reject(w, 503, "account_unavailable")
 		return
@@ -609,6 +620,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	realm := os.Getenv("RC_ACCOUNT_REALM")
+	if realm != "" && realm != "email" && realm != "username" {
+		log.Fatal("unknown account realm")
+	}
+	if realm == "username" {
+		if err := s.validateUsernameRealm(); err != nil {
+			log.Fatal("username realm verification failed")
+		}
+		s.usernameRealm = true
+		s.authority.usernameRealm = true
+	}
 	s.durable, err = openDurableGrants(os.Getenv("RC_DEVICE_GRANT_STATE"))
 	if err != nil {
 		log.Fatal(err)
@@ -620,6 +642,10 @@ func main() {
 	health := func(w http.ResponseWriter, _ *http.Request) { response(w, 200, map[string]string{"status": "ok"}) }
 	public.HandleFunc("GET /healthz", health)
 	private.HandleFunc("GET /healthz", health)
+	if s.usernameRealm {
+		public.HandleFunc("GET /register", s.usernamePage)
+		public.HandleFunc("POST /register", s.usernameRegister)
+	}
 	public.HandleFunc("POST /v1/device/authorize", s.authorize)
 	public.HandleFunc("GET /device", s.browser)
 	public.HandleFunc("POST /device", s.approve)

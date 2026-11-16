@@ -115,7 +115,8 @@ func (b *nativeBAAS) snapshot(who player, record nativeProfile) wire.BaaSUserInp
 	}
 	return wire.BaaSUserInput{
 		ID: who.User, DeviceBindingID: baasBindingID(who), CDNOrigin: b.cdn, Country: country,
-		Birthday: record.Birthday, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
+		UsernameOnly: who.AccountType == "username",
+		Birthday:     record.Birthday, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
 		BlocksUpdatedAt: record.CreatedAt, FriendsUpdatedAt: record.CreatedAt,
 		Profile: record.Profile, DeviceIDs: deviceIDs,
 		Account: account,

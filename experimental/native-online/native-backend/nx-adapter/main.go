@@ -40,6 +40,7 @@ type player struct {
 	PID         uint64 `json:"pid"`
 	User        string `json:"baas_user_id"`
 	Account     string `json:"account_id"`
+	AccountType string `json:"account_type,omitempty"`
 	Nickname    string `json:"nickname"`
 	Country     string `json:"country"`
 	Application string `json:"application_id"`
@@ -152,7 +153,8 @@ func (a *adapter) grantRequest(ctx context.Context, path string, claims map[stri
 	defer res.Body.Close()
 	switch res.StatusCode {
 	case 200:
-		if json.NewDecoder(io.LimitReader(res.Body, 8192)).Decode(&who) != nil || who.PID == 0 || who.User == "" || who.Account == "" || who.Application != a.application {
+		if json.NewDecoder(io.LimitReader(res.Body, 8192)).Decode(&who) != nil || who.PID == 0 || who.User == "" || who.Account == "" || who.Application != a.application ||
+			(who.AccountType != "" && who.AccountType != "email" && who.AccountType != "username") {
 			return player{}, 503
 		}
 		return who, 200
@@ -165,7 +167,8 @@ func (a *adapter) grantRequest(ctx context.Context, path string, claims map[stri
 
 func (a *adapter) userInput(who player, id string, created, linked int64, hasAccount bool) (wire.BaaSUserInput, error) {
 	input := wire.BaaSUserInput{ID: who.User, DeviceBindingID: id, Country: who.Country, CDNOrigin: a.issuer,
-		CreatedAt: created, UpdatedAt: created, DeviceIDs: []string{id},
+		UsernameOnly: who.AccountType == "username",
+		CreatedAt:    created, UpdatedAt: created, DeviceIDs: []string{id},
 		Profile: wire.BaaSProfile{Nickname: who.Nickname, NicknameUpdatedAt: created}}
 	if a.baas != nil {
 		input.CDNOrigin = a.baas.cdn

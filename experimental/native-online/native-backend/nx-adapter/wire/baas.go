@@ -43,7 +43,9 @@ type BaaSPermissions struct {
 }
 
 type BaaSUserInput struct {
-	ID, DeviceBindingID, CDNOrigin, Country, Birthday       string
+	ID, DeviceBindingID, CDNOrigin, Country, Birthday string
+	// UsernameOnly must derive from an authenticated realm identity.
+	UsernameOnly                                            bool
 	CreatedAt, UpdatedAt, BlocksUpdatedAt, FriendsUpdatedAt int64
 	Profile                                                 BaaSProfile
 	DeviceIDs                                               []string
@@ -125,7 +127,7 @@ func BuildBaaSUser(input BaaSUserInput) (BaaSUser, error) {
 		return BaaSUser{}, invalid("BAAS user or binding ID")
 	}
 	linked := input.Account != nil
-	if (linked || input.Country != "") && !validCountry(input.Country) {
+	if ((!input.UsernameOnly && linked) || input.Country != "") && !validCountry(input.Country) {
 		return BaaSUser{}, invalid("BAAS country")
 	}
 	if !validText(input.Profile.Nickname, 32, !linked) || !validText(input.Profile.AccountBlob, maxProfileBlobBytes, true) {

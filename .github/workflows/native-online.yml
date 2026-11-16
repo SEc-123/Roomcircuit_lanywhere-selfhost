@@ -23,6 +23,9 @@ jobs:
       - name: Test account broker
         working-directory: experimental/native-online/native-backend
         run: go test -race -mod=readonly ./...
+      - name: Test username account core
+        working-directory: experimental/native-online/native-backend/username-core
+        run: go test -race -mod=readonly ./...
       - name: Test native account adapter
         working-directory: experimental/native-online/native-backend/nx-adapter
         run: go test -race -mod=readonly ./...
@@ -47,3 +50,15 @@ jobs:
           python3 native-validation/build-inputs/test_prepare.py
           python3 native-validation/preflight/test_check.py
           python3 native-validation/https-endpoint/test_prepare_endpoint.py
+  username-postgres-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: false
+      - name: Run disposable PostgreSQL and account-to-game identity flow
+        working-directory: experimental/native-online/native-backend
+        run: python3 -B username-core/e2e.py

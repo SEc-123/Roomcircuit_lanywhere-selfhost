@@ -6,10 +6,12 @@ The backend includes independent account linking, authorization and selected gam
 
 **Development configuration:** Builds require an explicit independent CA and server address. Preparing credentials, checking TLS, and compiling the candidate do not activate DNS or boot profiles. Server routes, device enrollment and physical-console acceptance are still required; this is not an installation package.
 
-The account and game services are development fixtures; they are not connected to the public RoomCircuit release. Source and licenses are retained in this directory. No runtime account data, private keys or device reports are included.
+A username-only account realm is under development; it requires no email address or email verification. Account and game services are development fixtures; they are not connected to the public RoomCircuit release. Source and licenses are retained in this directory. No runtime account data, private keys or device reports are included.
 
 - [Account and game service](native-backend/README.md)
 - [Native account adapter](native-backend/nx-adapter/README.md)
 - [Game protocol runtime](backend-lab/runtime/README.md)
 - [Client experiments](native-client/README.md)
 - [HOS 19 protocol notes](native-validation/backend/hos19-account-contract.md)
+
+- [Username-only account core](native-backend/username-core/README.md)

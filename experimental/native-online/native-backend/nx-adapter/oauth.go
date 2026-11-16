@@ -57,16 +57,60 @@ type browserTokens struct {
 }
 
 type linkOAuth struct {
-	a       *adapter
-	client  *http.Client
-	browser string
-	account string
-	mu      sync.Mutex
-	flows   map[string]oauthFlow
-	codes   map[[32]byte]oauthCode
+	a               *adapter
+	client          *http.Client
+	browser         string
+	account         string
+	usernameRealm   bool
+	registrationURL string
+	mu              sync.Mutex
+	flows           map[string]oauthFlow
+	codes           map[[32]byte]oauthCode
+	rates           map[string]oauthRate
 }
 
-var linkForm = template.Must(template.New("link").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Link this Switch to RoomCircuit</title><main><h1>Link this Switch to RoomCircuit</h1><p>Sign in once for supported online games.</p><form method="post" action="/connect/1.0.0/authorize"><input type="hidden" name="form_token" value="{{.Token}}"><label>Email <input type="email" name="email" autocomplete="username" required></label><br><label>Password <input type="password" name="password" autocomplete="current-password" required></label><br><button>Approve device</button></form></main></html>`))
+type oauthRate struct {
+	started time.Time
+	count   int
+}
+
+// The socket peer is authoritative. A TLS-passthrough proxy may aggregate
+// clients at one IP; never trust an unauthenticated forwarding header.
+func (s *linkOAuth) allowBrowser(r *http.Request, stage string, max int) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	ip := net.ParseIP(host)
+	if err != nil || ip == nil {
+		return false
+	}
+	key, now := stage+":"+ip.String(), time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rates == nil {
+		s.rates = make(map[string]oauthRate)
+	}
+	if len(s.rates) >= 4096 {
+		for k, item := range s.rates {
+			if now.Sub(item.started) >= 15*time.Minute {
+				delete(s.rates, k)
+			}
+		}
+		if len(s.rates) >= 4096 {
+			return false
+		}
+	}
+	item := s.rates[key]
+	if item.started.IsZero() || now.Sub(item.started) >= 15*time.Minute {
+		item = oauthRate{started: now}
+	}
+	if item.count >= max {
+		return false
+	}
+	item.count++
+	s.rates[key] = item
+	return true
+}
+
+var linkForm = template.Must(template.New("link").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Link this Switch to RoomCircuit</title><main><h1>Link this Switch to RoomCircuit</h1><p>Sign in once for supported online games.</p><form method="post" action="/connect/1.0.0/authorize"><input type="hidden" name="form_token" value="{{.Token}}">{{if .UsernameRealm}}<label>Username <input name="username" autocomplete="username" required></label>{{else}}<label>Email <input type="email" name="email" autocomplete="username" required></label>{{end}}<br><label>Password <input type="password" name="password" autocomplete="current-password" required></label><br><button>Approve device</button></form>{{if .RegistrationURL}}<p><a href="{{.RegistrationURL}}">Create account</a></p>{{end}}</main></html>`))
 var verifierPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{43,128}$`)
 var oauthScope = regexp.MustCompile(`^[A-Za-z0-9_.:/-]{1,64}$`)
 var nativeOAuthClientID = regexp.MustCompile(`^[0-9a-f]{16}$`)
@@ -143,6 +187,10 @@ func (s *linkOAuth) prune(now time.Time) {
 }
 
 func (s *linkOAuth) begin(w http.ResponseWriter, r *http.Request) {
+	if !s.allowBrowser(r, "begin", 120) {
+		naError(w, 429, "too_many_link_requests")
+		return
+	}
 	q := r.URL.Query()
 	client := q.Get("client_id")
 	redirect := s.a.na.audiences[client]
@@ -176,7 +224,7 @@ func (s *linkOAuth) begin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
-	_ = linkForm.Execute(w, map[string]string{"Token": form})
+	_ = linkForm.Execute(w, map[string]any{"Token": form, "UsernameRealm": s.usernameRealm, "RegistrationURL": s.registrationURL})
 }
 
 func (s *linkOAuth) call(ctx context.Context, path, mime, cookie string, body []byte) (*http.Response, error) {
@@ -195,12 +243,19 @@ func (s *linkOAuth) call(ctx context.Context, path, mime, cookie string, body []
 		req.Header.Set("Cookie", cookie)
 		req.Header.Set("Origin", s.browser)
 	}
+	if s.usernameRealm {
+		req.Header.Set("X-Internal-Key", s.a.grantKey)
+	}
 	return s.client.Do(req)
 }
 
-func (s *linkOAuth) brokerApproval(ctx context.Context, email, password string) (browserTokens, int) {
+func (s *linkOAuth) brokerApproval(ctx context.Context, loginName, password string) (browserTokens, int) {
 	var credentials browserTokens
-	loginBody, _ := json.Marshal(map[string]string{"email": email, "password": password})
+	loginField := "email"
+	if s.usernameRealm {
+		loginField = "username"
+	}
+	loginBody, _ := json.Marshal(map[string]string{loginField: loginName, "password": password})
 	loginRequest, err := http.NewRequestWithContext(ctx, "POST", s.account+"/v1/login", bytes.NewReader(loginBody))
 	if err != nil {
 		return credentials, 503
@@ -257,7 +312,7 @@ func (s *linkOAuth) brokerApproval(ctx context.Context, email, password string) 
 	if page.StatusCode != 200 || csrf == "" {
 		return credentials, 503
 	}
-	form := url.Values{"user_code": {pending.Public}, "csrf_token": {csrf}, "email": {email}, "password": {password}, "decision": {"approve"}}
+	form := url.Values{"user_code": {pending.Public}, "csrf_token": {csrf}, loginField: {loginName}, "password": {password}, "decision": {"approve"}}
 	approved, err := s.call(ctx, "/device", "application/x-www-form-urlencoded", "rc_device_form="+csrf, []byte(form.Encode()))
 	if err != nil {
 		return credentials, 503
@@ -283,6 +338,10 @@ func (s *linkOAuth) brokerApproval(ctx context.Context, email, password string) 
 }
 
 func (s *linkOAuth) approve(w http.ResponseWriter, r *http.Request) {
+	if !s.allowBrowser(r, "approve", 20) {
+		naError(w, 429, "too_many_link_requests")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if r.ParseForm() != nil {
 		naError(w, 400, "invalid_request")
@@ -293,8 +352,12 @@ func (s *linkOAuth) approve(w http.ResponseWriter, r *http.Request) {
 		naError(w, 403, "invalid_browser_session")
 		return
 	}
-	email, password := r.PostForm.Get("email"), r.PostForm.Get("password")
-	if email == "" || password == "" || len(password) > 256 {
+	loginField := "email"
+	if s.usernameRealm {
+		loginField = "username"
+	}
+	loginName, password := r.PostForm.Get(loginField), r.PostForm.Get("password")
+	if loginName == "" || password == "" || len(password) > 256 {
 		naError(w, 400, "invalid_request")
 		return
 	}
@@ -309,7 +372,7 @@ func (s *linkOAuth) approve(w http.ResponseWriter, r *http.Request) {
 	flow.verifying = true
 	s.flows[cookie.Value] = flow
 	s.mu.Unlock()
-	credentials, status := s.brokerApproval(r.Context(), email, password)
+	credentials, status := s.brokerApproval(r.Context(), loginName, password)
 	s.mu.Lock()
 	delete(s.flows, cookie.Value)
 	if status != 200 || !time.Now().Before(flow.expires) {
@@ -604,6 +667,7 @@ func (a *adapter) ownProfile(w http.ResponseWriter, r *http.Request) {
 		var profile struct {
 			ID                     string `json:"id"`
 			Nickname               string `json:"nickname"`
+			AccountType            string `json:"account_type"`
 			Email                  string `json:"email"`
 			Country                string `json:"country"`
 			Birthday               string `json:"birthday"`
@@ -615,8 +679,15 @@ func (a *adapter) ownProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		id := naSubject(who)
+		// Only the authenticated private broker can assert a username account.
+		// Unrecognized types fail closed instead of relaxing email checks.
+		if profile.AccountType != "" && profile.AccountType != "email" && profile.AccountType != "username" {
+			naError(w, 503, "account_service_unavailable")
+			return
+		}
 		result, err := wire.BuildNAProfile(wire.NAProfileInput{ID: id, AccessSubject: id, Nickname: profile.Nickname,
 			Email: profile.Email, Country: profile.Country, Birthday: profile.Birthday, EmailVerified: profile.EmailVerified,
+			UsernameOnly:           profile.AccountType == "username",
 			TermsAgreementRequired: profile.TermsAgreementRequired, VerifiedRealmMembership: who.GrantID != ""})
 		if err != nil {
 			naError(w, 409, "complete_account_profile")
@@ -650,7 +721,8 @@ func (a *adapter) oauth(mux *http.ServeMux) error {
 		return errors.New("own browser grant service CA is invalid")
 	}
 	originString := os.Getenv("NX_LAB_BROWSER_ORIGIN")
-	if _, ok := origin(originString, "https"); !ok {
+	brokerOrigin, ok := origin(originString, "https")
+	if !ok || !net.ParseIP(brokerOrigin.Hostname()).IsLoopback() {
 		return errors.New("browser grant service requires a trusted HTTPS origin")
 	}
 	accountURL := os.Getenv("NX_LAB_ACCOUNT_URL")
@@ -694,7 +766,19 @@ func (a *adapter) oauth(mux *http.ServeMux) error {
 	if err != nil {
 		return err
 	}
-	s := &linkOAuth{a: a, browser: originString, account: accountURL,
+	realm := os.Getenv("NX_LAB_ACCOUNT_REALM")
+	if realm != "" && realm != "email" && realm != "username" {
+		return errors.New("account realm must be email or username")
+	}
+	registration := os.Getenv("NX_LAB_REGISTRATION_URL")
+	if registration != "" {
+		u, err := url.Parse(registration)
+		if realm != "username" || err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+			u.Path != "/register" || u.RawQuery != "" || u.Fragment != "" || strings.EqualFold(u.Hostname(), "localhost") || net.ParseIP(u.Hostname()).IsLoopback() {
+			return errors.New("registration URL must be an own reachable HTTPS /register endpoint")
+		}
+	}
+	s := &linkOAuth{a: a, browser: originString, account: accountURL, usernameRealm: realm == "username", registrationURL: registration,
 		client: &http.Client{Timeout: 8 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		flows:  make(map[string]oauthFlow), codes: make(map[[32]byte]oauthCode)}
 	mux.HandleFunc("GET /connect/1.0.0/authorize", s.begin)

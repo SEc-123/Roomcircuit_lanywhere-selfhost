@@ -28,3 +28,9 @@ Device links live in PostgreSQL. Keep the broker's owner-only `RC_DEVICE_GRANT_S
 A linked device can sign in again after its refresh credential expires. A revoked grant or disabled account is denied. Browser approval covers the configured RoomCircuit title directory and each credential carries its exact title scope.
 
 The upstream `nx-baas` daemon has separate shop, Penne and parental-control services as mandatory startup dependencies. BCAT is optional. This lab uses the documented token-proof pattern and its own actual grant check. It does not launch the full daemon, issue platform entitlement, or enroll a physical console. The current HOS 19.0.1 console setup and a retail game's online-menu connection remain hardware acceptance steps.
+
+## Username-only realm
+
+The separate [username core](username-core/README.md) requires only a username and password. Select `RC_ACCOUNT_REALM=username` on the broker and identity bridge, and `NX_LAB_ACCOUNT_REALM=username` on the adapter. The broker validates the private HTTP and gRPC realm markers before accepting unverified, email-free profiles. Email-based realms retain their existing verification check.
+
+Registration must use an independent HTTPS listener that preserves the client socket address. The current transparent SNI relay causes the broker to see a loopback peer, so it must not be used as the registration entry point. Forwarded IP headers are not trusted. Public listeners and certificates are not yet deployed or verified.

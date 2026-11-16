@@ -164,6 +164,54 @@ func TestNAProfileShapeUsesVerifiedOwnValues(t *testing.T) {
 	}
 }
 
+func TestNAUsernameOnlyProfileDoesNotInventPersonalData(t *testing.T) {
+	input := NAProfileInput{ID: naID, AccessSubject: naID, Nickname: "player", UsernameOnly: true}
+	profile, err := BuildNAProfile(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Email != "" || profile.EmailVerified || profile.Birthday != "" || profile.Country != "" ||
+		profile.ScreenName != input.Nickname || profile.Summary.Nintendo.HasMembership {
+		t.Fatal("username-only profile invented personal data, a verified email, or a grant")
+	}
+	for name, mutate := range map[string]func(*NAProfileInput){
+		"unverified external email":   func(v *NAProfileInput) { v.Email = "player@example.test" },
+		"verified flag without email": func(v *NAProfileInput) { v.EmailVerified = true },
+		"invalid optional country":    func(v *NAProfileInput) { v.Country = "invalid" },
+		"invalid optional birthday":   func(v *NAProfileInput) { v.Birthday = "2026-02-29" },
+		"another account":             func(v *NAProfileInput) { v.AccessSubject = otherID },
+	} {
+		t.Run(name, func(t *testing.T) {
+			copy := input
+			mutate(&copy)
+			if _, err := BuildNAProfile(copy); err == nil {
+				t.Fatal("accepted an invalid username profile")
+			}
+		})
+	}
+	input.Country, input.Birthday = "IE", "2001-04-07"
+	if _, err := BuildNAProfile(input); err != nil {
+		t.Fatalf("valid optional profile data rejected: %v", err)
+	}
+}
+
+func TestUsernameOnlyBaaSLinkedProfileDoesNotInventCountry(t *testing.T) {
+	input := testUser()
+	input.Country = ""
+	if _, err := BuildBaaSUser(input); !errors.Is(err, ErrInvalidField) {
+		t.Fatal("ordinary linked account accepted missing country")
+	}
+	input.UsernameOnly = true
+	profile, err := BuildBaaSUser(input)
+	if err != nil || profile.Country != "" {
+		t.Fatalf("username account did not preserve unspecified country: %v", err)
+	}
+	input.Country = "???"
+	if _, err := BuildBaaSUser(input); !errors.Is(err, ErrInvalidField) {
+		t.Fatal("username account accepted invalid provided country")
+	}
+}
+
 func TestBaaSErrorScopeAndShape(t *testing.T) {
 	const issuer = "https://accounts.roomcircuit.example.test"
 	value, err := BuildBaaSError(issuer, 403, "wrong_device_owner", "Forbidden", "Permission denied", "/1.0.0/users/"+userID)

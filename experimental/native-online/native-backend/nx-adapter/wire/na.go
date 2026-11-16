@@ -77,6 +77,9 @@ type NAMembershipSummary struct {
 type NAProfileInput struct {
 	ID, AccessSubject, Nickname, Email, Country, Birthday, IconURI, Language, Gender string
 	EmailVerified, IsChild, PhoneNumberEnabled, TermsAgreementRequired               bool
+	// UsernameOnly is set only after the caller verifies the separate local
+	// username-account policy. It does not imply an email has been verified.
+	UsernameOnly bool
 	// VerifiedRealmMembership represents only a live independent game grant
 	// verified by the caller for this profile. A compatibility field name
 	// does not change the issuer or grant any external subscription.
@@ -117,14 +120,28 @@ func BuildNAProfile(input NAProfileInput) (NAProfile, error) {
 	if err := requireOwner(input.AccessSubject, input.ID); err != nil {
 		return NAProfile{}, err
 	}
-	if !validText(input.Nickname, 32, false) || !validCountry(input.Country) || !validDate(input.Birthday) ||
-		!input.EmailVerified || input.CreatedAt < 0 || input.UpdatedAt < input.CreatedAt ||
+	if !validText(input.Nickname, 32, false) || input.CreatedAt < 0 || input.UpdatedAt < input.CreatedAt ||
 		!validText(input.Language, 24, true) || !validText(input.Gender, 32, true) {
-		return NAProfile{}, invalid("verified account profile")
+		return NAProfile{}, invalid("account profile")
 	}
-	screenName, err := maskAddress(input.Email)
-	if err != nil {
-		return NAProfile{}, err
+	screenName := ""
+	if input.UsernameOnly {
+		if input.Email != "" || input.EmailVerified ||
+			(input.Country != "" && !validCountry(input.Country)) ||
+			(input.Birthday != "" && !validDate(input.Birthday)) {
+			return NAProfile{}, invalid("username account profile")
+		}
+		// No unprovided address, birth date or location is invented.
+		screenName = input.Nickname
+	} else {
+		if !input.EmailVerified || !validCountry(input.Country) || !validDate(input.Birthday) {
+			return NAProfile{}, invalid("verified account profile")
+		}
+		var err error
+		screenName, err = maskAddress(input.Email)
+		if err != nil {
+			return NAProfile{}, err
+		}
 	}
 	if input.IconURI != "" {
 		if !validText(input.IconURI, 2048, false) {
