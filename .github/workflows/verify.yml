@@ -17,11 +17,14 @@ jobs:
       - name: Install host image test dependency
         run: sudo apt-get update && sudo apt-get install -y pkg-config libturbojpeg0-dev libsodium-dev
       - name: Relay protocol and multiplayer checks
+        env:
+          ROOMCIRCUIT_TEST_ENET: '1'
         run: npm test -- --report "$RUNNER_TEMP/switch-online-tests.json"
       - name: Shell syntax
         run: |
           bash -n scripts/build-macos.sh
           bash -n scripts/toolchain/build-switch.sh
           bash -n deploy/install-systemd.sh
+          bash -n deploy/start-crossplay-test.sh
       - name: Release and deployment helper syntax
         run: python3 -m py_compile scripts/package.py scripts/release-bundle.py scripts/toolchain/verify_switch_build.py deploy/state-backup.py

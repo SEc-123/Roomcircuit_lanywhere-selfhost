@@ -140,6 +140,15 @@ try {
         if (error.code !== 'ENOENT') throw error;
     }
     await suite('LAN Play gateway', process.execPath, ['server/relay/test-lanplay.js']);
+    await suite('Cross-platform LDN discovery, joins, UDP, TCP and isolation', process.execPath,
+        ['--test', 'server/relay/emulator-bridge.test.js', 'server/ryuldn/test-streams.js']);
+    if (process.env.ROOMCIRCUIT_TEST_ENET === '1') {
+        await suite('Eden ENet worker and reference client build', 'sh', ['server/eden/build.sh'], {
+            ...process.env, ROOMCIRCUIT_ENET_BUILD_TEST: '1',
+        });
+        await suite('Eden ENet transport', process.execPath, ['server/eden/test-host.js']);
+        await suite('Eden to Switch wire crossplay', process.execPath, ['server/eden/test-crossplay.js']);
+    }
     await suite('UDP fragment memory and replay bounds', process.execPath, ['--test', 'server/relay/test-udp-fragments.js']);
     await suite('UDP v2 MTU-safe public wire protocol', process.execPath, ['--test', 'server/relay/test-udp-v2.js']);
     await suite('LAN Play isolation and fragment safety', process.execPath, ['--test', 'server/relay/test-lanplay-safety.js']);

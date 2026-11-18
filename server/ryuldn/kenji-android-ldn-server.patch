@@ -1,0 +1,164 @@
+diff --git a/src/KenjinxAndroid/app/src/main/java/org/kenjinx/android/views/SettingViews.kt b/src/KenjinxAndroid/app/src/main/java/org/kenjinx/android/views/SettingViews.kt
+index 9180016..05f9228 100644
+--- a/src/KenjinxAndroid/app/src/main/java/org/kenjinx/android/views/SettingViews.kt
++++ b/src/KenjinxAndroid/app/src/main/java/org/kenjinx/android/views/SettingViews.kt
+@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
+ import android.content.Intent
+ import android.os.Build
+ import android.provider.DocumentsContract
++import android.util.AtomicFile
+ import androidx.compose.foundation.interaction.MutableInteractionSource
+ import androidx.compose.foundation.layout.Arrangement
+ import androidx.compose.foundation.layout.Column
+@@ -42,6 +43,7 @@ import androidx.compose.material3.IconButton
+ import androidx.compose.material3.Label
+ import androidx.compose.material3.LinearProgressIndicator
+ import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedTextField
+ import androidx.compose.material3.PlainTooltip
+ import androidx.compose.material3.Scaffold
+ import androidx.compose.material3.Slider
+@@ -64,6 +66,8 @@ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.delay
+ import kotlinx.coroutines.launch
++import java.io.File
++import java.io.IOException
+ import kotlin.concurrent.thread
+ import kotlin.math.roundToInt
+ import org.kenjinx.android.MainActivity
+@@ -1414,6 +1418,7 @@ class SettingViews {
+                             enableFsIntegrityChecks.SwitchSelector(label = "Fs Integrity Check")
+                             ignoreMissingServices.SwitchSelector(label = "Ignore Missing Services")
+                             enablePerformanceMode.SwitchSelector(label = "Performance Mode")
++                            LocalWirelessServerSetting()
+                         }
+                     }
+                     ExpandableView(onCardArrowClick = { }, title = "CPU", icon = Icons.Outlined.Memory) {
+@@ -1549,6 +1554,53 @@ class SettingViews {
+             }
+         }
+
++        @Composable
++        private fun LocalWirelessServerSetting() {
++            val file = remember { AtomicFile(File(MainActivity.AppPath, "local-wireless-server.txt")) }
++            val saved = remember {
++                mutableStateOf(try {
++                    if (file.baseFile.length() <= 256) file.readFully().decodeToString().trim() else ""
++                } catch (_: IOException) {
++                    ""
++                })
++            }
++            val edit = remember { mutableStateOf(saved.value) }
++            val error = remember { mutableStateOf(false) }
++            val host = edit.value.trim()
++            val valid = host.isEmpty() || host.split('.').all {
++                it.matches(Regex("[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"))
++            }
++            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
++                OutlinedTextField(
++                    value = edit.value,
++                    onValueChange = { if (it.length <= 253) edit.value = it },
++                    modifier = Modifier.fillMaxWidth(),
++                    label = { Text("Local wireless server") },
++                    placeholder = { Text("Off") },
++                    singleLine = true,
++                    isError = !valid || error.value
++                )
++                Button(enabled = valid && saved.value != host, onClick = {
++                    error.value = try {
++                        val stream = file.startWrite()
++                        try {
++                            stream.write(host.encodeToByteArray())
++                            file.finishWrite(stream)
++                        } catch (failure: IOException) {
++                            file.failWrite(stream)
++                            throw failure
++                        }
++                        saved.value = host
++                        false
++                    } catch (_: IOException) {
++                        true
++                    }
++                }) {
++                    Text(if (error.value) "Retry" else "Save")
++                }
++            }
++        }
++
+         // ---- Overlay position dropdown ----
+         @Composable
+         fun OverlayPositionDropdown(
+diff --git a/src/LibKenjinx/LibKenjinx.cs b/src/LibKenjinx/LibKenjinx.cs
+index 4b68e2b..54bd852 100644
+--- a/src/LibKenjinx/LibKenjinx.cs
++++ b/src/LibKenjinx/LibKenjinx.cs
+@@ -863,6 +863,33 @@ namespace LibKenjinx
+             }
+         }
+
++        private static string ReadLocalWirelessServer()
++        {
++            string path = Path.Combine(AppDataManager.BaseDirPath, "local-wireless-server.txt");
++            try
++            {
++                using FileStream file = File.OpenRead(path);
++                if (file.Length > 256)
++                {
++                    return string.Empty;
++                }
++
++                using StreamReader reader = new(file);
++                string host = reader.ReadToEnd().Trim();
++                return Uri.CheckHostName(host) is UriHostNameType.Dns or UriHostNameType.IPv4
++                    ? host
++                    : string.Empty;
++            }
++            catch (IOException)
++            {
++                return string.Empty;
++            }
++            catch (UnauthorizedAccessException)
++            {
++                return string.Empty;
++            }
++        }
++
+         public bool InitializeContext(MemoryManagerMode memoryManagerMode,
+                                       bool useHypervisor,
+                                       MemoryConfiguration memoryConfiguration,
+@@ -898,6 +925,9 @@ namespace LibKenjinx
+             EnableJitCacheEviction = enableJitCacheEviction;
+             EnableFsIntegrityChecks = enableFsIntegrityChecks;
+
++            string localWirelessServer = ReadLocalWirelessServer();
++            bool customLdn = localWirelessServer.Length != 0;
++
+             HLEConfiguration configuration = new(VirtualFileSystem,
+                                                                   LibHacHorizonManager,
+                                                                   ContentManager,
+@@ -912,7 +942,7 @@ namespace LibKenjinx
+                                                                   vSyncMode,
+                                                                   enableDockedMode,
+                                                                   enablePtc,
+-                                                                  enableInternetAccess,
++                                                                  enableInternetAccess && !customLdn,
+                                                                   EnableFsIntegrityChecks ? IntegrityCheckLevel.ErrorOnInvalid : IntegrityCheckLevel.None,
+                                                                   fsGlobalAccessLogMode,
+                                                                   0,
+@@ -923,10 +953,12 @@ namespace LibKenjinx
+                                                                   100,
+                                                                   useHypervisor,
+                                                                   "",
+-                                                                  Ryujinx.Common.Configuration.Multiplayer.MultiplayerMode.Disabled,
+-                                                                  false,
+-                                                                  "",
++                                                                  customLdn
++                                                                      ? Ryujinx.Common.Configuration.Multiplayer.MultiplayerMode.LdnRyu
++                                                                      : Ryujinx.Common.Configuration.Multiplayer.MultiplayerMode.Disabled,
++                                                                  customLdn,
+                                                                   "",
++                                                                  localWirelessServer,
+                                                                   60);
+
+             EmulationContext = new Switch(configuration);

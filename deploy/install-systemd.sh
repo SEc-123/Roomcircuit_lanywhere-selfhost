@@ -47,11 +47,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
-relay_files=(custom-node-registry.js node-catalog.js node-directory.js node-locator.js node-friends.js direct-room-metadata.js server.js stats.js public.js lanplay.js lanplay-fork.js lanplay-fork-tcp.js dashboard.html operations.js traffic-store.js appointments.js appointment-push.js matchmaking.js group-page.js unified-lobby.js regional-directory.js udp-fragments.js upstream-gateway.js room-metadata.js lanplay-providers.js lanplay-realms.js tcp-stream-protocol.js tcp-streams.js inbound-deadline.js update-format.js update-distribution.js)
+relay_files=(custom-node-registry.js node-catalog.js node-directory.js node-locator.js node-friends.js direct-room-metadata.js server.js stats.js public.js lanplay.js lanplay-fork.js lanplay-fork-tcp.js dashboard.html operations.js traffic-store.js appointments.js appointment-push.js matchmaking.js group-page.js unified-lobby.js regional-directory.js udp-fragments.js upstream-gateway.js room-metadata.js lanplay-providers.js lanplay-realms.js tcp-stream-protocol.js tcp-streams.js inbound-deadline.js update-format.js update-distribution.js emulator-bridge.js emulator-services.js)
+crossplay_files=(eden/host.js ryuldn/protocol.js ryuldn/server.js ryuldn/streams.js)
 ops_files=(manage-custom-nodes.cjs healthcheck.cjs validate-config.cjs metrics.cjs smoke-relay.cjs smoke-relay-v2.cjs)
 for file in "${relay_files[@]}"; do
     install -m 0644 "$root/server/relay/$file" "$stage/$file"
 done
+install -d -m 0755 "$stage/eden" "$stage/ryuldn"
+for file in "${crossplay_files[@]}"; do
+    install -m 0644 "$root/server/$file" "$stage/$file"
+done
+enet_dir="${ROOMCIRCUIT_ENET_BUILD_DIR:-$root/server/eden/build}"
+if [[ -x "$enet_dir/enet-host" && -r "$enet_dir/ENet-LICENSE" ]]; then
+    install -d -m 0755 "$stage/eden/build"
+    install -m 0755 "$enet_dir/enet-host" "$stage/eden/build/enet-host"
+    install -m 0644 "$enet_dir/ENet-LICENSE" "$stage/eden/build/ENet-LICENSE"
+    crossplay_files+=(eden/build/enet-host eden/build/ENet-LICENSE)
+fi
 install -m 0644 "$root/common/node-catalog.json" "$stage/node-catalog.json"
 for file in "${ops_files[@]}"; do
     install -m 0644 "$root/deploy/$file" "$stage/$file"
@@ -60,7 +72,7 @@ install -m 0644 "$root/LICENSE" "$stage/LICENSE"
 sed "s|/usr/bin/node|$node_bin|g" "$root/deploy/$unit" > "$stage/$unit"
 chmod 0755 "$stage"
 
-release_id=$(cd "$stage" && sha256sum -- "${relay_files[@]}" "${ops_files[@]}" node-catalog.json LICENSE "$unit" | sha256sum | cut -c 1-24)
+release_id=$(cd "$stage" && sha256sum -- "${relay_files[@]}" "${crossplay_files[@]}" "${ops_files[@]}" node-catalog.json LICENSE "$unit" | sha256sum | cut -c 1-24)
 release=$app_dir/releases/$release_id
 if [[ ! -d $release ]]; then
     mv -T -- "$stage" "$release"

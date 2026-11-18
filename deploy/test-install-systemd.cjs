@@ -21,8 +21,14 @@ async function fixture(t, { healthFail, rollbackFail }) {
     await fs.mkdir(bin);
     let source = await fs.readFile(installer, 'utf8');
     const relayFiles = source.match(/^relay_files=\(([^)]+)\)/m)[1].split(/\s+/);
+    const crossplayFiles = source.match(/^crossplay_files=\(([^)]+)\)/m)[1].split(/\s+/);
     const opsFiles = source.match(/^ops_files=\(([^)]+)\)/m)[1].split(/\s+/);
     for (const name of relayFiles) await fs.writeFile(path.join(project, 'server/relay', name), `fixture ${name}\n`);
+    for (const name of crossplayFiles) {
+        const filename = path.join(project, 'server', name);
+        await fs.mkdir(path.dirname(filename), { recursive: true });
+        await fs.writeFile(filename, `fixture ${name}\n`);
+    }
     for (const name of opsFiles) await fs.writeFile(path.join(project, 'deploy', name), `fixture ${name}\n`);
     await fs.writeFile(path.join(project, 'LICENSE'), 'fixture license');
     await fs.writeFile(path.join(project, 'deploy/relay.env.example'), 'LANYWHERE_CAP_GB=100\n');

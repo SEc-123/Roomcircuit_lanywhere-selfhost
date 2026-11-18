@@ -64,6 +64,12 @@ const STATS_PORT = envInt('LANYWHERE_STATS_PORT', 11461, 0, 65535);
 const PUBLIC_PORT = envInt('LANYWHERE_PUBLIC_PORT', 11463, 0, 65535);
 const OPS_PORT = envInt('LANYWHERE_OPS_PORT', 0, 0, 65535);
 const LANPLAY_PORT = envInt('LANYWHERE_LANPLAY_PORT', 0, 0, 65535);
+const LANPLAY_BIND = process.env.LANYWHERE_LANPLAY_BIND_ADDRESS || '0.0.0.0';
+if (!net.isIPv4(LANPLAY_BIND)) throw new Error('Invalid LAN Play bind address');
+const EDEN_PORT = envInt('ROOMCIRCUIT_EDEN_PORT', 0, 0, 65535);
+const RYULDN_PORT = envInt('ROOMCIRCUIT_RYULDN_PORT', 0, 0, 65535);
+const EMULATOR_ADDRESS = process.env.ROOMCIRCUIT_EMULATOR_BIND || '127.0.0.1';
+if (!net.isIPv4(EMULATOR_ADDRESS)) throw new Error('Invalid emulator bind address');
 const CONTROL_BIND_ADDRESS = process.env.LANYWHERE_CONTROL_BIND_ADDRESS;
 if (CONTROL_BIND_ADDRESS !== undefined && !net.isIP(CONTROL_BIND_ADDRESS)) throw new Error('Invalid control bind address');
 const UPSTREAM_BIND_ADDRESS = process.env.LANYWHERE_UPSTREAM_BIND_ADDRESS ?? '0.0.0.0';
@@ -76,8 +82,9 @@ const communityDirect = envInt('LANYWHERE_ENABLE_COMMUNITY_DIRECT', 0, 0, 1);
 const communityProvider = communityDirect && !process.env.LANYWHERE_LANPLAY_REALM &&
     publicProviders.find(provider => provider.id === upstreamGateway.PUBLIC_PROVIDER_ID);
 const communityEndpoint = communityProvider ? regionalDirectory.parseEndpoint(`${communityProvider.host}:${communityProvider.port}`) : null;
-const tcpPorts = [PORT, STATS_PORT, PUBLIC_PORT, OPS_PORT].filter(Boolean);
-if (new Set(tcpPorts).size !== tcpPorts.length || (PORT && PORT === LANPLAY_PORT))
+const tcpPorts = [PORT, STATS_PORT, PUBLIC_PORT, OPS_PORT, RYULDN_PORT].filter(Boolean);
+const udpPorts = [PORT, LANPLAY_PORT, EDEN_PORT].filter(Boolean);
+if (new Set(tcpPorts).size !== tcpPorts.length || new Set(udpPorts).size !== udpPorts.length)
     throw new Error('los puertos del servidor se superponen');
 
 const capSetting = process.env.LANYWHERE_CAP_GB ?? '8000';
@@ -170,6 +177,7 @@ const roomAuthRates = new WeakMap();
 const rooms = new Map();    // código → { code, gameId, members: Array(8), published }
 const byToken = new Map();  // token → miembro
 const byIp13 = new Map();   // IP 10.13 → miembro (salas en la red de LAN Play)
+let emulatorBridge = null;
 let ready = false, draining = false, shutdownTimer = null;
 const realmId = process.env.LANYWHERE_LANPLAY_REALM;
 // Self must receive the caller's resolved NACP communication ID. The legacy
@@ -279,7 +287,7 @@ function allocIp13() {
     for (let n = 0; n < 1000; n++) {
         const ip = (NET13 | ((1 + crypto.randomInt(254)) << 8) | (1 + crypto.randomInt(254))) >>> 0;
         if (ip === ((NET13 | 0x2501) >>> 0) || ip === ((NET13 | 0xfefe) >>> 0)) continue;
-        if (byIp13.has(ip) || (lanplay && lanplay.taken(ip))) continue;
+        if (byIp13.has(ip) || lanplay?.taken(ip) || emulatorBridge?.taken(ip)) continue;
         return ip;
     }
     return 0;
@@ -724,7 +732,10 @@ function leave(member, why) {
     if (byIp13.get(member.ip) === member) byIp13.delete(member.ip);
     clearTimeout(member.grace);
     clearTimeout(member.admission);
-    if (member.socket) member.socket.member = null;
+    if (member.socket) {
+        member.socket.member = null;
+        member.socket.onLeave?.(why, member);
+    }
     if (room.published && room.published.member === member) room.published = null;
     for (const m of others(room, member)) send(m.socket, T.MEMBER_LEFT, Buffer.from([member.index]));
     const left = room.members.filter(Boolean).length;
@@ -1328,7 +1339,7 @@ require('./public').create({ stateDir: path.dirname(STATE_FILE), port: PUBLIC_PO
 // Pasarela LAN Play (Ryujinx): miembros virtuales que usan las mismas salas.
 const memberAt = (ip) => byIp13.get(ip) || null;
 const lanplay = require('./lanplay').create({
-    port: LANPLAY_PORT, upstream: realmProvider || null,
+    port: LANPLAY_PORT, bindAddress: LANPLAY_BIND, upstream: realmProvider || null,
     onEndpoint: address => { realmUpstreamAddress = address; },
     onReady: () => { realmTransportReady = true; realmReady(); },
     onFirstScanSent: () => {
@@ -1339,11 +1350,33 @@ const lanplay = require('./lanplay').create({
     },
     onFailure: () => { if (realmId) { process.send?.({type:'failed'}); beginShutdown(); } },
     log, rooms, count: bytes => { count(bytes); if (realmId) realmTraffic += bytes; }, paused: () => paused, memberAt, isOpen,
+    reservedIp: ip => Boolean(emulatorBridge?.taken(ip)),
     frame: (socket, type, body) => onFrame(socket, type, body),
     forwardData,
     dataUnsupported: (member, reason) => {
         if (member && active(member)) unsupportedDatagram(member, reason);
     },
+});
+const emulatorServices = [];
+if (!realmId && (EDEN_PORT || RYULDN_PORT)) {
+    emulatorBridge = require('./emulator-bridge').create({
+        rooms, frame: onFrame, forwardData, isOpen, allocateIp: allocIp13, memberAt,
+        paused: () => paused || draining, count, streams, log,
+    });
+    const { createEden, createRyuLdn } = require('./emulator-services');
+    if (EDEN_PORT) emulatorServices.push(createEden({
+        bridge: emulatorBridge, host: EMULATOR_ADDRESS, port: EDEN_PORT, log,
+        binary: process.env.ROOMCIRCUIT_ENET_BINARY,
+    }));
+    if (RYULDN_PORT) emulatorServices.push(createRyuLdn({
+        bridge: emulatorBridge, host: EMULATOR_ADDRESS, port: RYULDN_PORT, log,
+    }));
+}
+const emulatorReady = Promise.all(emulatorServices.map(service => service.ready));
+emulatorReady.catch(error => {
+    if (draining) return;
+    log(`emulator listener failed: ${error.message}`);
+    process.exit(1);
 });
 stats = require('./stats').create({ stateDir: path.dirname(STATE_FILE), port: STATS_PORT, snapshot, traffic,
                                     capBytes: CAP_BYTES, paused: () => paused });
@@ -1375,6 +1408,8 @@ async function finishShutdown() {
     streams.shutdown();
     updates.shutdown();
     upstreams.shutdown();
+    emulatorBridge?.close();
+    await Promise.allSettled(emulatorServices.map(service => service.close()));
     lanplay?.close();
     if (realms) await realms.shutdown();
     saveTraffic();
@@ -1401,7 +1436,7 @@ tcp.listen({ port: PORT, ...(CONTROL_BIND_ADDRESS ? { host: CONTROL_BIND_ADDRESS
     const port = tcp.address().port;
     log(`control TCP en ${port}; tráfico del mes ${(traffic.bytes / 1e9).toFixed(2)} GB de ${CAP_BYTES / 1e9} GB`);
     udp.bind(port, UDP_BIND_ADDRESS, () => {
-        ready = true; realmNativePort = port; realmReady();
+        emulatorReady.then(() => { ready = true; realmNativePort = port; realmReady(); }, () => {});
         log(`datos UDP en ${port}`);
     });
 });

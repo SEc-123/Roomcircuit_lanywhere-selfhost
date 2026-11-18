@@ -10,7 +10,7 @@ function fixture(options = {}) {
     let socket, paused = false, now = 100000;
     const sent = [], data = [], intervals = [], rooms = new Map(), native = new Map();
     const dgram = { createSocket() {
-        socket = new EventEmitter(); socket.bind = (_, fn) => fn?.(); socket.close = () => {};
+        socket = new EventEmitter(); socket.bind = (_port, _address, onListening) => onListening?.(); socket.close = () => {};
         socket.getSendQueueSize = () => 0;
         socket.send = (buf, port, address, cb) => { sent.push({ buf: Buffer.from(buf), port, address }); cb?.(); };
         return socket;

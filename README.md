@@ -21,6 +21,8 @@ You need a Switch running Atmosphère, an internet connection, and a game with a
 
 ## Play
 
+For emulator and mobile interoperability, see the [crossplay preview](docs/CROSSPLAY.md).
+
 ### Host a room
 
 1. From the lobby, press **Y** to open **Nodes**. Choose a node and press **A**. In the picker, press **R** to filter by region, **X** to retest, or **L** to test with friends.

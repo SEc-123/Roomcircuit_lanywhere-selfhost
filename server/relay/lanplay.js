@@ -341,7 +341,8 @@ class Tcp {
 // --- La pasarela -------------------------------------------------------------------------------------------------
 function create({ port, log, rooms, count, paused, frame, forwardData, memberAt, isOpen,
                   dataBytes = 512 * 1024, dataPackets = 1000, upstream = null, onReady = () => {}, onFailure = () => {},
-                  dataUnsupported = () => {}, onFirstScanSent = () => {}, onEndpoint = () => {} }) {
+                  dataUnsupported = () => {}, onFirstScanSent = () => {}, onEndpoint = () => {},
+                  reservedIp = () => false, bindAddress = '0.0.0.0' }) {
     if (!port && !upstream) return null;
     const sock = dgram.createSocket('udp4');
     // A client transport has exactly one pinned, allowlisted relay endpoint.
@@ -376,7 +377,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
     // Consola (miembro no virtual de una sala en la red 10.13) con esa IP: la pasarela responde por ella.
     const consoleAt = (ip) => {
         const m = memberAt(ip);
-        return m && !(m.socket && m.socket.virtual) ? m : null;
+        return m && !m.socket?.lanPlayPeer ? m : null;
     };
 
     function allowTraffic(address, direction, bytes) {
@@ -391,7 +392,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
         return rate[`${direction}Bytes`] <= dataBytes && rate[`${direction}Packets`] <= dataPackets;
     }
     function ownsSource(client, ip, learn = false) {
-        if (((ip & MASK) >>> 0) !== NET || ip === NET || ip === BCAST || ip === gatewayIp || consoleAt(ip)) return false;
+        if (((ip & MASK) >>> 0) !== NET || ip === NET || ip === BCAST || ip === gatewayIp || consoleAt(ip) || reservedIp(ip)) return false;
         const owner = byIp.get(ip);
         if (owner) return owner === client;
         if (!learn || client.ips.size >= (upstream ? 128 : MAX_IPS_PER_CLIENT)) return false;
@@ -438,10 +439,39 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
         }
     }
 
+    function lanMember(ip) {
+        const member = memberAt(ip);
+        return member?.socket?.lanPlayPeer ? member : null;
+    }
+    function sameGame(source, target) {
+        const room = source?.room;
+        return room && target?.room === room && room.published?.connected?.has(source) &&
+            room.published.connected.has(target);
+    }
+    function mixedGame(member) {
+        return member?.room?.members.some(player => player?.socket?.emulatorBridge);
+    }
+    function rawGame(client, src, dst, kind, body) {
+        if (upstream && client === upstreamClient) return;
+        const member = lanMember(src);
+        const restrict = mixedGame(member);
+        if (dst !== BCAST && dst !== 0xffffffff) {
+            const target = lanMember(dst);
+            if ((!restrict && !mixedGame(target)) || sameGame(member, target)) sendTo(byIp.get(dst), kind, body, true);
+            return;
+        }
+        for (const candidate of clients.values()) {
+            if (candidate === client) continue;
+            const attached = [...candidate.ips].map(lanMember).filter(Boolean);
+            if ((!restrict && !attached.some(mixedGame)) || attached.some(target => sameGame(member, target)))
+                sendTo(candidate, kind, body, true);
+        }
+    }
+
     // Miembro virtual: un participante del lado LAN Play (un emulador) dentro de una sala, con su IP 10.13.
     function virtualMember(publicAddress, ip13, onFrame, legacyTcp = false) {
         const vs = {
-            virtual: true, legacyTcp, destroyed: false, remoteAddress: publicAddress, member: null, ip13,
+            virtual: true, lanPlayPeer: true, legacyTcp, destroyed: false, remoteAddress: publicAddress, member: null, ip13,
             endpoint: byIp.get(ip13),
             deliver: (type, body) => {
                 if (type === StreamWire.RESPONSE && vs.forkTcp) return vs.forkTcp.receiveControl(body);
@@ -449,7 +479,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             },
             data: (from, dst, portsPayload) => {
                 // Paquete de una consola de la sala para el emulador (entre emuladores ya va por LAN Play).
-                if ((from.socket && from.socket.virtual) || byIp.get(ip13) !== vs.endpoint) return;
+                if (from.socket?.lanPlayPeer || byIp.get(ip13) !== vs.endpoint) return;
                 const sport = portsPayload.readUInt16LE(0), dport = portsPayload.readUInt16LE(2);
                 const to = dst === ip13 ? ip13 : BCAST;
                 traffic.down++; traffic.downBytes += portsPayload.length - 4;
@@ -497,7 +527,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             if (!room.net13 || !isOpen(room)) continue;
             const existing = bridges.get(room.code);
             if (existing && existing.origin === 'emu') continue;  // ese grupo ya lo ve por LAN Play
-            if (pub.member.socket && pub.member.socket.virtual) continue;
+            if (pub.member.socket?.lanPlayPeer) continue;
             bridge(room.code, 'console');
             sendTo(client, P.IPV4, udpPacket(pub.member.ip, LDN_PORT, src, sport, ldnFrame(LT.SCAN_RESP, pub.info)));
         }
@@ -819,7 +849,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
     function connectConsole(b, index, nodeInfo) {
         const room = rooms.get(b.code);
         const m = room && room.members[index];
-        if (!m || (m.socket && m.socket.virtual)) return;
+        if (!m || m.socket?.lanPlayPeer) return;
         const prior = b.fork?.pending?.get(index);
         if (prior && prior.member === m && prior.epoch === b.fork.key && prior.node.equals(nodeInfo)) return;
         closeConsole(b, index);
@@ -879,7 +909,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
         if (p.mf || p.off) {
             // Fragmento IP (Ryujinx parte los datagramas de más de 1480 bytes): los emuladores lo reciben tal cual;
             // para las consolas se reensambla.
-            if (!toGateway) deliverIpv4(p.dst, pkt, client);
+            if (!toGateway) rawGame(client, p.src, p.dst, P.IPV4, pkt);
             traffic.frags++;
             const whole = reassemble(client, p);
             if (whole && whole.proto === 17 && whole.body.length >= 8) {
@@ -895,19 +925,24 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             reply.writeUInt16BE(fold(sum16(reply)), 2);
             return sendTo(client, P.IPV4, ipv4(p.dst, p.src, 1, reply));
         }
+        let ldnControl = false;
         if (p.proto === 17 && p.body.length >= 8) {
             const udpLen = p.body.readUInt16BE(4); if (udpLen < 8 || udpLen > p.body.length) return;
             const sport = p.body.readUInt16BE(0), dport = p.body.readUInt16BE(2);
             const data = p.body.subarray(8, udpLen);
             if (dport === LDN_PORT) {
                 for (const f of ldnRead({}, data)) {
+                    if ((f.type === LT.SCAN && !f.data.length) ||
+                        (f.type === LT.SCAN_RESP && f.data.length === NETWORK_INFO_SIZE))
+                        ldnControl = true;
                     if (p.id === Fork.CONTROL && (p.dst === BCAST || p.dst === 0xffffffff)) {
                         if (f.type === LT.CONNECT) forkConnect(client, p.src, f.data);
                         else if (f.type === LT.SYNC) forkHostSync(p.src, f.data, f.seq);
                         else if (f.type === 4) forkHeartbeat(p.src, f.data);
                         else if (f.type === 5) forkBye(p.src, f.data);
                     }
-                    if (f.type === LT.SCAN && (p.dst === BCAST || p.dst === 0xffffffff)) answerScan(client, p.src, sport);
+                    if (f.type === LT.SCAN && (p.dst === BCAST || p.dst === 0xffffffff || p.dst === gatewayIp))
+                        answerScan(client, p.src, sport);
                     else if (f.type === LT.SCAN_RESP && f.data.length === NETWORK_INFO_SIZE) {
                         const forkControl = p.id === Fork.CONTROL && (p.dst === BCAST || p.dst === 0xffffffff);
                         if (p.dst === gatewayIp || forkControl) onEmuGroup(client, p.src, f.data, forkControl);
@@ -920,8 +955,15 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
                 if (toGateway) return;
             }
         }
-        if (p.proto === 6 && toGateway) return onTcp(client, p);
-        deliverIpv4(p.dst, pkt, client);  // reenvío normal entre emuladores
+        if (p.proto === 6) {
+            if (toGateway) return onTcp(client, p);
+            // The control handshake must reach a LAN Play host before its new
+            // guest is a member. Gameplay streams use their own socket ports.
+            ldnControl = p.body.length >= 20 &&
+                (p.body.readUInt16BE(0) === LDN_PORT || p.body.readUInt16BE(2) === LDN_PORT);
+        }
+        if (ldnControl) deliverIpv4(p.dst, pkt, client);
+        else rawGame(client, p.src, p.dst, P.IPV4, pkt);
     }
     function reassemble(client, p) {
         const key = `${client.id}-${p.src}-${p.dst}-${p.id}-${p.proto}`;
@@ -1085,11 +1127,11 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             // por su destino; si van a una consola (o a todos), se reensamblan para sacarlos por la sala.
             const dst = payload.readUInt32BE(4);
             const toConsole = !!consoleAt(dst);
+            const broadcast = dst === BCAST || dst === 0xffffffff;
             if (!upstream && !toConsole && dst !== gatewayIp) {
-                if (dst === BCAST) for (const c of clients.values()) { if (c !== client) sendTo(c, P.IPV4_FRAG, payload); }
-                else sendTo(byIp.get(dst), P.IPV4_FRAG, payload);
+                rawGame(client, src, dst, P.IPV4_FRAG, payload);
             }
-            if (toConsole || dst === BCAST) {
+            if (toConsole || broadcast) {
                 const whole = relayReassemble(client, payload, fragment);
                 const p = whole && parseIpv4(whole);
                 if (p && p.src === src && p.dst === dst && p.proto === 17 && !p.mf && !p.off &&
@@ -1120,7 +1162,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             perIp.set(address, 1);
             sock.bind(0, '0.0.0.0', () => { if (!closed) { try { sock.setRecvBufferSize(1024 * 1024); } catch {} keepalive(); log(`lan play upstream ${upstream.id} ready for probe`); } });
         }).catch(onFailure);
-    } else sock.bind(port, () => log(`lan play en UDP ${port}`));
+    } else sock.bind(port, bindAddress, () => log(`lan play en UDP ${port}`));
 
     // Reference fork retries CONNECT every 500 ms for ~3 s. Keep retries
     // bounded and tied to the same room epoch and member object.

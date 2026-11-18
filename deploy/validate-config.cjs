@@ -11,6 +11,8 @@ const { parseEndpoint } = require(fs.existsSync(path.join(__dirname, 'regional-d
 // accept documented tuning values, regional address and operations token here.
 const integerRanges = new Map([
     ['LANYWHERE_LANPLAY_PORT', [0, 65535]],
+    ['ROOMCIRCUIT_EDEN_PORT', [0, 65535]],
+    ['ROOMCIRCUIT_RYULDN_PORT', [0, 65535]],
     ['LANYWHERE_ENABLE_PUBLIC_UPSTREAM', [0, 1]],
     ['LANYWHERE_ENABLE_COMMUNITY_DIRECT', [0, 1]],
     ['LANYWHERE_ENABLE_LANPLAY_UPSTREAM', [0, 1]],
@@ -65,7 +67,7 @@ function validateConfig(source, { localAddresses = Object.values(os.networkInter
             const ids = value.split(',');
             if (!ids.length || ids.some(id => !allowed.has(id)) || new Set(ids).size !== ids.length)
                 throw new Error(`${prefix}: select unique, built-in LAN Play provider IDs`);
-        } else if (key === 'LANYWHERE_UDP_BIND_ADDRESS') {
+        } else if (['LANYWHERE_UDP_BIND_ADDRESS', 'LANYWHERE_LANPLAY_BIND_ADDRESS', 'ROOMCIRCUIT_EMULATOR_BIND'].includes(key)) {
             if (!net.isIPv4(value)) throw new Error(`${prefix}: ${key} must be a literal IPv4 address`);
             if (value !== '0.0.0.0' && !localAddresses.includes(value))
                 throw new Error(`${prefix}: ${key} must be assigned to a local interface (use the local address behind NAT)`);
@@ -77,6 +79,11 @@ function validateConfig(source, { localAddresses = Object.values(os.networkInter
     const total = Number(settings.get('LANYWHERE_MAX_CONNECTIONS') || 1024);
     const perIp = Number(settings.get('LANYWHERE_MAX_CONNECTIONS_PER_IP') || 12);
     if (perIp > total) throw new Error('The per-IP connection limit exceeds the total connection limit');
+    const eden = Number(settings.get('ROOMCIRCUIT_EDEN_PORT') || 0);
+    const lanplay = Number(settings.get('LANYWHERE_LANPLAY_PORT') || 0);
+    const ryuldn = Number(settings.get('ROOMCIRCUIT_RYULDN_PORT') || 0);
+    if (eden && [11460, lanplay].includes(eden)) throw new Error('The Eden UDP listener needs its own port');
+    if ([11460, 11461, 11462].includes(ryuldn)) throw new Error('The RyuLDN TCP listener needs its own port');
     if (Number(settings.get('LANYWHERE_ENABLE_COMMUNITY_DIRECT')) === 1 &&
         Number(settings.get('LANYWHERE_ENABLE_PUBLIC_UPSTREAM')) !== 1)
         throw new Error('Community direct requires LANYWHERE_ENABLE_PUBLIC_UPSTREAM=1');
@@ -85,7 +92,11 @@ function validateConfig(source, { localAddresses = Object.values(os.networkInter
 if (require.main === module) {
     try {
         const filename = process.argv[2] || '/etc/switch-online/relay.env';
-        validateConfig(fs.readFileSync(filename, 'utf8'));
+        const source = fs.readFileSync(filename, 'utf8');
+        validateConfig(source);
+        if (fs.existsSync(path.join(__dirname, 'server.js')) &&
+            Number(source.match(/^\s*ROOMCIRCUIT_EDEN_PORT=(\d+)\s*$/m)?.[1] || 0))
+            fs.accessSync(path.join(__dirname, 'eden', 'build', 'enet-host'), fs.constants.X_OK);
         console.log('Switch Online configuration valid');
     } catch (error) {
         console.error(`Switch Online configuration: ${error.message}`);
