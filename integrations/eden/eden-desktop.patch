@@ -1,0 +1,731 @@
+diff --git a/src/yuzu/CMakeLists.txt b/src/yuzu/CMakeLists.txt
+index 5b59327..81ee7c5 100644
+--- a/src/yuzu/CMakeLists.txt
++++ b/src/yuzu/CMakeLists.txt
+@@ -12,7 +12,7 @@ if (YUZU_USE_BUNDLED_QT AND LINUX)
+     set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/bin/lib/")
+ endif()
+ 
+-find_package(Qt6 REQUIRED COMPONENTS Widgets)
++find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
+ 
+ add_executable(yuzu
+     Info.plist
+@@ -184,6 +184,7 @@ add_executable(yuzu
+     multiplayer/client_room.h
+     multiplayer/client_room.cpp
+     multiplayer/client_room.ui
++    multiplayer/roomcircuit_dialog.cpp multiplayer/roomcircuit_dialog.h
+     multiplayer/direct_connect.cpp
+     multiplayer/direct_connect.h
+     multiplayer/direct_connect.ui
+@@ -419,7 +420,7 @@ endif()
+ 
+ target_link_libraries(yuzu PRIVATE hydro::carbon jacinth::jacinth)
+ target_link_libraries(yuzu PRIVATE common core input_common frontend_common network video_core qt_common)
+-target_link_libraries(yuzu PRIVATE Boost::headers Qt6::Widgets Qt6::Charts Qt6::Concurrent)
++target_link_libraries(yuzu PRIVATE Boost::headers Qt6::Widgets Qt6::Charts Qt6::Concurrent Qt6::Network)
+ target_link_libraries(yuzu PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
+ if (ENABLE_OPENGL)
+     target_link_libraries(yuzu PRIVATE glad)
+diff --git a/src/yuzu/main_window.cpp b/src/yuzu/main_window.cpp
+index 5493a90..8a660a7 100644
+--- a/src/yuzu/main_window.cpp
++++ b/src/yuzu/main_window.cpp
+@@ -68,6 +68,7 @@
+ #include "util/overlay_dialog.h"
+ #include "util/runtime_cheat_menu.h"
+ 
++#include "multiplayer/roomcircuit_dialog.h"
+ #include "multiplayer/state.h"
+ 
+ // Qt Stuff //
+@@ -7561,6 +7562,11 @@ void MainWindow::ConnectMenuEvents() {
+     connect(ui->action_Show_Game_Name, &QAction::triggered, this, &MainWindow::ToggleShowGameName);
+ 
+     // Multiplayer
++    ui->menu_Multiplayer->addAction(tr("RoomCircuit appointments"), this, [this] {
++        ShowRoomCircuit(this, [this](const QString& host, int port) {
++            multiplayer_state->OpenDirectConnectEndpoint(host, port);
++        });
++    });
+     connect(ui->action_View_Lobby, &QAction::triggered, multiplayer_state,
+             &MultiplayerState::OnViewLobby);
+     connect(ui->action_Start_Room, &QAction::triggered, multiplayer_state,
+diff --git a/src/yuzu/multiplayer/direct_connect.cpp b/src/yuzu/multiplayer/direct_connect.cpp
+index eea906f..5a51f6a 100644
+--- a/src/yuzu/multiplayer/direct_connect.cpp
++++ b/src/yuzu/multiplayer/direct_connect.cpp
+@@ -58,6 +58,14 @@ void DirectConnectWindow::RetranslateUi() {
+     ui->retranslateUi(this);
+ }
+ 
++void DirectConnectWindow::SetEndpoint(const QString& host, int port) {
++    if (!watcher->isRunning()) {
++        ui->ip->setText(host);
++        ui->port->setText(QString::number(port));
++        ui->password->clear();
++    }
++}
++
+ void DirectConnectWindow::Connect() {
+     if (!Network::GetSelectedNetworkInterface()) {
+         NetworkMessage::ErrorManager::ShowError(
+diff --git a/src/yuzu/multiplayer/direct_connect.h b/src/yuzu/multiplayer/direct_connect.h
+index f9acf26..14e6d55 100644
+--- a/src/yuzu/multiplayer/direct_connect.h
++++ b/src/yuzu/multiplayer/direct_connect.h
+@@ -26,6 +26,7 @@ public:
+     ~DirectConnectWindow();
+ 
+     void RetranslateUi();
++    void SetEndpoint(const QString& host, int port);
+ 
+ signals:
+     /**
+diff --git a/src/yuzu/multiplayer/roomcircuit_dialog.cpp b/src/yuzu/multiplayer/roomcircuit_dialog.cpp
+new file mode 100644
+index 0000000..315c6a7
+--- /dev/null
++++ b/src/yuzu/multiplayer/roomcircuit_dialog.cpp
+@@ -0,0 +1,596 @@
++// SPDX-FileCopyrightText: Copyright 2026 RoomCircuit contributors
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include "roomcircuit_dialog.h"
++
++#include <utility>
++#include <QComboBox>
++#include <QCryptographicHash>
++#include <QDateTime>
++#include <QDateTimeEdit>
++#include <QDialog>
++#include <QDialogButtonBox>
++#include <QFormLayout>
++#include <QHostAddress>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QLabel>
++#include <QLineEdit>
++#include <QListWidget>
++#include <QLocale>
++#include <QNetworkAccessManager>
++#include <QNetworkReply>
++#include <QPushButton>
++#include <QRandomGenerator>
++#include <QRegularExpression>
++#include <QSettings>
++#include <QSet>
++#include <QTimer>
++#include <QUrl>
++#include <QVBoxLayout>
++#include <QVariantMap>
++
++namespace {
++
++constexpr qint64 MaxResponseBytes = 64 * 1024;
++const QRegularExpression HexId(QStringLiteral("^[0-9A-Fa-f]{16}$"));
++
++bool IsLocalHost(const QString& host) {
++    if (host.compare(QStringLiteral("localhost"), Qt::CaseInsensitive) == 0) {
++        return true;
++    }
++    const QHostAddress address(host);
++    bool is_v4{};
++    const quint32 ip = address.toIPv4Address(&is_v4);
++    return address.isLoopback() ||
++           (is_v4 && ((ip >> 24) == 10 || (ip >> 20) == 0xac1 || (ip >> 16) == 0xc0a8));
++}
++
++QUrl ParseOrigin(const QString& text) {
++    QUrl url(text.trimmed(), QUrl::StrictMode);
++    const bool https = url.scheme() == QStringLiteral("https");
++    if (!url.isValid() || url.host().isEmpty() ||
++        (!https && (url.scheme() != QStringLiteral("http") || !IsLocalHost(url.host()))) ||
++        !url.userInfo().isEmpty() || url.authority().contains(QLatin1Char('@')) ||
++        url.hasQuery() || url.hasFragment() ||
++        (!url.path().isEmpty() && url.path() != QStringLiteral("/")) || url.port() == 0 ||
++        url.port() > 65535) {
++        return {};
++    }
++    url.setPath(QString{});
++    return url;
++}
++
++QString ErrorText(const QString& code) {
++    if (code == QStringLiteral("unavailable")) {
++        return QObject::tr("The relay is not ready.");
++    }
++    if (code == QStringLiteral("not_found")) {
++        return QObject::tr("The appointment is no longer available.");
++    }
++    if (code == QStringLiteral("invalid")) {
++        return QObject::tr("The relay rejected the selected time or game ID.");
++    }
++    if (code == QStringLiteral("limit")) {
++        return QObject::tr("Too many requests. Try again shortly.");
++    }
++    return QObject::tr("Unable to reach the RoomCircuit service.");
++}
++
++class AppointmentsDialog final : public QDialog {
++public:
++    AppointmentsDialog(QWidget* parent, std::function<void(const QString&, int)> open_direct_connect)
++        : QDialog(parent), direct_connect(std::move(open_direct_connect)),
++          settings(QSettings::IniFormat, QSettings::UserScope, QStringLiteral("Eden"),
++                   QStringLiteral("RoomCircuit")) {
++        setWindowTitle(tr("RoomCircuit appointments"));
++        resize(720, 550);
++        auto* layout = new QVBoxLayout(this);
++        auto* address_row = new QHBoxLayout;
++        server = new QLineEdit(settings.value(QStringLiteral("origin")).toString(), this);
++        server->setPlaceholderText(tr("https://roomcircuit.example"));
++        auto* address_label = new QLabel(tr("Service address"), this);
++        address_label->setBuddy(server);
++        refresh = new QPushButton(tr("Refresh"), this);
++        address_row->addWidget(address_label);
++        address_row->addWidget(server, 1);
++        address_row->addWidget(refresh);
++        layout->addLayout(address_row);
++
++        relay_address = new QLabel(this);
++        relay_address->setTextFormat(Qt::PlainText);
++        relay_address->setTextInteractionFlags(Qt::TextSelectableByMouse);
++        layout->addWidget(relay_address);
++        events = new QListWidget(this);
++        layout->addWidget(events, 2);
++
++        auto* buttons = new QHBoxLayout;
++        create = AddButton(buttons, tr("New appointment"));
++        ready = AddButton(buttons, tr("Mark ready"));
++        follow = AddButton(buttons, tr("Follow"));
++        room = AddButton(buttons, tr("Find rooms"));
++        connect = AddButton(buttons, tr("Direct connect…"));
++        layout->addLayout(buttons);
++
++        auto* pages = new QHBoxLayout;
++        previous = AddButton(pages, tr("Previous page"));
++        next = AddButton(pages, tr("Next page"));
++        pages->addStretch();
++        layout->addLayout(pages);
++
++        rooms = new QListWidget(this);
++        rooms->setAccessibleName(tr("Compatible public game rooms"));
++        layout->addWidget(rooms, 1);
++        status = new QLabel(tr("Enter the RoomCircuit service address."), this);
++        status->setWordWrap(true);
++        status->setTextFormat(Qt::PlainText);
++        layout->addWidget(status);
++
++        QObject::connect(refresh, &QPushButton::clicked, this, [this] { Refresh(); });
++        QObject::connect(server, &QLineEdit::returnPressed, this, [this] { Refresh(); });
++        QObject::connect(create, &QPushButton::clicked, this, [this] { Create(); });
++        QObject::connect(ready, &QPushButton::clicked, this, [this] { ToggleReady(); });
++        QObject::connect(room, &QPushButton::clicked, this, [this] {
++            FetchRooms(Selection().value(QStringLiteral("id")).toString(), true);
++        });
++        QObject::connect(follow, &QPushButton::clicked, this, [this] { ToggleFollow(); });
++        QObject::connect(previous, &QPushButton::clicked, this, [this] {
++            if (offsets.size() > 1) {
++                auto proposed = offsets;
++                proposed.removeLast();
++                LoadPage(std::move(proposed));
++            }
++        });
++        QObject::connect(next, &QPushButton::clicked, this, [this] {
++            if (next_offset >= 0) {
++                auto proposed = offsets;
++                proposed.append(next_offset);
++                LoadPage(std::move(proposed));
++            }
++        });
++        QObject::connect(connect, &QPushButton::clicked, this, [this] {
++            const auto launch = direct_connect;
++            const auto host = endpoint_host;
++            const int port = endpoint_port;
++            accept();
++            launch(host, port);
++        });
++        QObject::connect(events, &QListWidget::currentRowChanged, this, [this] {
++            rooms->clear();
++            UpdateButtons();
++        });
++        QObject::connect(server, &QLineEdit::textChanged, this, [this] { UpdateButtons(); });
++
++        monitor.setInterval(12000);
++        QObject::connect(&monitor, &QTimer::timeout, this, [this] { CheckFollowed(); });
++        monitor.start();
++        UpdateButtons();
++        if (!server->text().isEmpty()) {
++            Refresh();
++        }
++    }
++
++private:
++    QPushButton* AddButton(QHBoxLayout* layout, const QString& label) {
++        auto* button = new QPushButton(label, this);
++        layout->addWidget(button);
++        return button;
++    }
++
++    QString StoreKey(const QString& name) const {
++        const auto hash = QCryptographicHash::hash(origin.toString().toUtf8(), QCryptographicHash::Sha256);
++        return QString::fromLatin1(hash.toHex()) + QLatin1Char('/') + name;
++    }
++
++    void LoadIdentity() {
++        identity = settings.value(StoreKey(QStringLiteral("identity"))).toString();
++        static const QRegularExpression identity_pattern(QStringLiteral("^[a-f0-9]{32}$"));
++        if (!identity_pattern.match(identity).hasMatch() || identity == QString(32, QLatin1Char('0'))) {
++            QByteArray random;
++            do {
++                random.clear();
++                for (int i = 0; i < 4; ++i) {
++                    const quint32 word = QRandomGenerator::system()->generate();
++                    random.append(reinterpret_cast<const char*>(&word), sizeof(word));
++                }
++            } while (random == QByteArray(16, '\0'));
++            identity = QString::fromLatin1(random.toHex());
++            settings.setValue(StoreKey(QStringLiteral("identity")), identity);
++        }
++    }
++
++    static QString Timestamp(qint64 seconds) {
++        return QLocale().toString(QDateTime::fromSecsSinceEpoch(seconds).toLocalTime(), QLocale::ShortFormat);
++    }
++
++    QJsonObject Selection() const {
++        const auto row = events->currentRow();
++        return row >= 0 && row < rows.size() ? rows.at(row).toObject() : QJsonObject{};
++    }
++
++    QString GameName(const QJsonObject& event) const {
++        const auto game_id = event.value(QStringLiteral("game")).toString();
++        const auto application_id = event.value(QStringLiteral("app")).toString();
++        for (const auto& item : games) {
++            const auto game = item.toObject();
++            if (game.value(QStringLiteral("game")).toString().compare(game_id, Qt::CaseInsensitive) == 0 &&
++                game.value(QStringLiteral("app")).toString().compare(application_id, Qt::CaseInsensitive) == 0) {
++                return game.value(QStringLiteral("name")).toString();
++            }
++        }
++        return game_id.toUpper();
++    }
++
++    bool SameOrigin() const {
++        return !origin.isEmpty() && origin == ParseOrigin(server->text());
++    }
++
++    void UpdateButtons() {
++        const bool enabled = !busy && SameOrigin();
++        const auto selected = Selection();
++        const bool is_ready = selected.value(QStringLiteral("ready")).toBool();
++        const auto starts = selected.value(QStringLiteral("starts")).toInteger();
++        const auto now = QDateTime::currentSecsSinceEpoch() + clock_difference;
++        ready->setText(is_ready ? tr("Cancel ready") : tr("Mark ready"));
++        const bool active = starts > 0 && now >= starts - ready_before && now < starts + 7200;
++        ready->setEnabled(enabled && (active || is_ready));
++        room->setEnabled(enabled && active);
++        const auto id = selected.value(QStringLiteral("id")).toString();
++        follow->setText(followed.contains(id) ? tr("Stop following") : tr("Follow"));
++        follow->setEnabled(enabled && !id.isEmpty());
++        previous->setEnabled(enabled && offsets.size() > 1);
++        next->setEnabled(enabled && next_offset >= 0);
++        connect->setEnabled(enabled && endpoint_port != 0);
++        create->setEnabled(enabled && options_ready);
++        refresh->setEnabled(!busy);
++        server->setEnabled(!busy);
++        events->setEnabled(enabled);
++    }
++
++    using Completion = std::function<void(const QJsonObject&)>;
++
++    void Request(const QString& path, const QJsonObject& payload, Completion complete) {
++        auto url = origin;
++        url.setPath(path);
++        QNetworkRequest request(url);
++        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
++                             QNetworkRequest::ManualRedirectPolicy);
++        request.setTransferTimeout(8000);
++        QNetworkReply* reply;
++        if (payload.isEmpty()) {
++            reply = network.get(request);
++        } else {
++            request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
++            request.setRawHeader(QByteArrayLiteral("X-RoomCircuit-Client"), QByteArrayLiteral("native-v1"));
++            auto body = payload;
++            body.insert(QStringLiteral("identity"), identity);
++            reply = network.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
++        }
++        busy = true;
++        UpdateButtons();
++        reply->setReadBufferSize(MaxResponseBytes + 1);
++        QObject::connect(reply, &QIODevice::readyRead, reply, [reply] {
++            if (reply->bytesAvailable() > MaxResponseBytes) {
++                reply->abort();
++            }
++        });
++        QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, complete = std::move(complete)] {
++            const auto code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
++            const auto bytes = reply->read(MaxResponseBytes + 1);
++            const auto result = QJsonDocument::fromJson(bytes).object();
++            reply->deleteLater();
++            busy = false;
++            if (bytes.size() > MaxResponseBytes || code != 200 || result.isEmpty() ||
++                result.contains(QStringLiteral("error"))) {
++                status->setText(ErrorText(result.value(QStringLiteral("error")).toString()));
++            } else {
++                const auto server_now = result.value(QStringLiteral("now")).toInteger();
++                if (server_now > 0) {
++                    clock_difference = server_now - QDateTime::currentSecsSinceEpoch();
++                }
++                complete(result);
++            }
++            UpdateButtons();
++        });
++    }
++
++    void Post(QJsonObject payload, Completion complete) {
++        if (!busy && SameOrigin()) {
++            Request(QStringLiteral("/api/appointments/native"), payload, std::move(complete));
++        }
++    }
++
++    void Refresh() {
++        if (busy) {
++            return;
++        }
++        const auto candidate = ParseOrigin(server->text());
++        if (candidate.isEmpty()) {
++            status->setText(tr("Use an HTTPS address, or HTTP on a local network."));
++            return;
++        }
++        if (candidate != origin) {
++            origin = candidate;
++            LoadIdentity();
++            followed = settings.value(StoreKey(QStringLiteral("followed"))).toMap();
++            alerted.clear();
++            follow_index = 0;
++            rows = {};
++            events->clear();
++            offsets = {0};
++            next_offset = -1;
++            games = {};
++        }
++        options_ready = false;
++        endpoint_host.clear();
++        endpoint_port = 0;
++        relay_address->clear();
++        rooms->clear();
++        settings.setValue(QStringLiteral("origin"), origin.toString());
++        status->setText(tr("Connecting…"));
++        Request(QStringLiteral("/api/appointments/options"), {}, [this](const QJsonObject& data) {
++            if (data.value(QStringLiteral("nativeApi")).toInt() != 1) {
++                status->setText(tr("Update the RoomCircuit relay to use native appointments."));
++                return;
++            }
++            games = data.value(QStringLiteral("games")).toArray();
++            ready_before = qBound(0, data.value(QStringLiteral("readyBefore")).toInt(1800), 86400);
++            for (const auto& item : data.value(QStringLiteral("endpoints")).toArray()) {
++                const auto endpoint = item.toObject();
++                if (endpoint.value(QStringLiteral("id")).toString() != QStringLiteral("eden")) {
++                    continue;
++                }
++                const auto host = endpoint.value(QStringLiteral("host")).toString();
++                const int port = endpoint.value(QStringLiteral("port")).toInt();
++                static const QRegularExpression hostname(QStringLiteral("^[A-Za-z0-9.-]{1,253}$"));
++                if (port > 0 && port <= 65535 && hostname.match(host).hasMatch()) {
++                    endpoint_host = host;
++                    endpoint_port = port;
++                    relay_address->setText(tr("Game relay: %1:%2").arg(host).arg(port));
++                    break;
++                }
++            }
++            if (!endpoint_port) {
++                relay_address->setText(tr("This relay has no Eden game listener."));
++            }
++            options_ready = true;
++            LoadPage({0});
++        });
++    }
++
++    void LoadPage(QList<int> pages) {
++        const auto selected = Selection().value(QStringLiteral("id")).toString();
++        Post({{QStringLiteral("action"), QStringLiteral("list")}, {QStringLiteral("offset"), pages.back()}},
++             [this, pages, selected](const QJsonObject& reply) {
++                 if (pages.size() > 1 && reply.value(QStringLiteral("rows")).toArray().isEmpty()) {
++                     LoadPage({0});
++                     return;
++                 }
++                 offsets = pages;
++                 ShowRows(reply, selected);
++             });
++    }
++
++    void ShowRows(const QJsonObject& reply, const QString& selected) {
++        rows = reply.value(QStringLiteral("rows")).toArray();
++        next_offset = reply.value(QStringLiteral("next")).toInt(-1);
++        events->clear();
++        int index = -1;
++        for (const auto& item : rows) {
++            const auto row = item.toObject();
++            events->addItem(tr("%1 — %2 — %3 ready%4")
++                                .arg(GameName(row), Timestamp(row.value(QStringLiteral("starts")).toInteger()))
++                                .arg(row.value(QStringLiteral("interested")).toInt())
++                                .arg(row.value(QStringLiteral("ready")).toBool() ? tr(" (you are ready)") : QString{}));
++            if (!selected.isEmpty() && row.value(QStringLiteral("id")).toString() == selected) {
++                index = events->count() - 1;
++            }
++        }
++        events->setCurrentRow(index < 0 ? 0 : index);
++        status->setText(rows.isEmpty() ? tr("No upcoming appointments.") : tr("Times are shown in your local time."));
++    }
++
++    void Create() {
++        QDialog form(this);
++        form.setWindowTitle(tr("New RoomCircuit appointment"));
++        QFormLayout layout(&form);
++        QComboBox title(&form);
++        for (const auto& item : games) {
++            const auto row = item.toObject();
++            title.addItem(row.value(QStringLiteral("name")).toString(), row.toVariantMap());
++        }
++        title.addItem(tr("Enter IDs manually"));
++        QLineEdit game(&form), app(&form);
++        auto start = QDateTimeEdit(QDateTime::currentDateTime().addSecs(1800), &form);
++        start.setCalendarPopup(true);
++        start.setMinimumDateTime(QDateTime::currentDateTime());
++        start.setMaximumDateTime(QDateTime::currentDateTime().addDays(7));
++        layout.addRow(tr("Game"), &title);
++        layout.addRow(tr("Local communication ID"), &game);
++        layout.addRow(tr("Application ID (optional)"), &app);
++        layout.addRow(tr("Start time"), &start);
++        QLabel error(&form);
++        error.setWordWrap(true);
++        layout.addRow(&error);
++        QDialogButtonBox actions(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &form);
++        layout.addRow(&actions);
++        const auto fill = [&] {
++            const auto data = title.currentData().toMap();
++            const bool manual = data.isEmpty();
++            game.setText(data.value(QStringLiteral("game")).toString());
++            app.setText(data.value(QStringLiteral("app")).toString());
++            game.setReadOnly(!manual);
++            app.setReadOnly(!manual);
++        };
++        QObject::connect(&title, &QComboBox::currentIndexChanged, &form, fill);
++        QObject::connect(&actions, &QDialogButtonBox::rejected, &form, &QDialog::reject);
++        QObject::connect(&actions, &QDialogButtonBox::accepted, &form, [&] {
++            if (!HexId.match(game.text().trimmed()).hasMatch() ||
++                (!app.text().trimmed().isEmpty() && !HexId.match(app.text().trimmed()).hasMatch())) {
++                error.setText(tr("Use a 16-digit hexadecimal game ID."));
++                return;
++            }
++            form.accept();
++        });
++        fill();
++        if (form.exec() != QDialog::Accepted) {
++            return;
++        }
++        auto body = QJsonObject{{QStringLiteral("action"), QStringLiteral("create")},
++                                {QStringLiteral("game"), game.text().trimmed().toUpper()},
++                                {QStringLiteral("starts"), start.dateTime().toSecsSinceEpoch()}};
++        if (!app.text().trimmed().isEmpty()) {
++            body.insert(QStringLiteral("app"), app.text().trimmed().toUpper());
++        }
++        Post(body, [this](const QJsonObject& reply) {
++            offsets = {0};
++            ShowRows(reply, reply.value(QStringLiteral("created")).toObject().value(QStringLiteral("id")).toString());
++            status->setText(tr("Appointment saved."));
++        });
++    }
++
++    void ToggleReady() {
++        const auto selection = Selection();
++        const auto id = selection.value(QStringLiteral("id")).toString();
++        if (id.isEmpty()) {
++            return;
++        }
++        const auto action = selection.value(QStringLiteral("ready")).toBool() ? QStringLiteral("leave")
++                                                                                : QStringLiteral("ready");
++        Post({{QStringLiteral("action"), action}, {QStringLiteral("id"), id}},
++             [this, id](const QJsonObject& reply) {
++                 offsets = {0};
++                 ShowRows(reply, id);
++             });
++    }
++
++    void ToggleFollow() {
++        const auto row = Selection();
++        const auto id = row.value(QStringLiteral("id")).toString();
++        if (id.isEmpty()) {
++            return;
++        }
++        if (followed.contains(id)) {
++            followed.remove(id);
++            alerted.remove(id);
++        } else {
++            const auto now = QDateTime::currentSecsSinceEpoch() + clock_difference;
++            for (auto it = followed.begin(); it != followed.end();) {
++                if (it.value().toLongLong() + 7200 <= now) {
++                    alerted.remove(it.key());
++                    it = followed.erase(it);
++                } else {
++                    ++it;
++                }
++            }
++            if (followed.size() >= 24) {
++                status->setText(tr("You can follow at most 24 appointments."));
++                return;
++            }
++            followed.insert(id, row.value(QStringLiteral("starts")).toInteger());
++        }
++        settings.setValue(StoreKey(QStringLiteral("followed")), followed);
++        UpdateButtons();
++    }
++
++    void CheckFollowed() {
++        UpdateButtons();
++        if (busy || !SameOrigin() || !options_ready) {
++            return;
++        }
++        const auto now = QDateTime::currentSecsSinceEpoch() + clock_difference;
++        QList<QString> active;
++        for (auto item = followed.cbegin(); item != followed.cend(); ++item) {
++            const auto starts = item.value().toLongLong();
++            if (starts > 0 && now >= starts - ready_before && now < starts + 7200) {
++                active.append(item.key());
++            }
++        }
++        if (!active.isEmpty()) {
++            FetchRooms(active.at(follow_index % active.size()), false);
++            follow_index = (follow_index + 1) % active.size();
++        }
++    }
++
++    void FetchRooms(const QString& id, bool explicit_refresh) {
++        if (id.isEmpty()) {
++            return;
++        }
++        Post({{QStringLiteral("action"), QStringLiteral("rooms")}, {QStringLiteral("id"), id}},
++             [this, id, explicit_refresh](const QJsonObject& reply) {
++                 const bool selected = Selection().value(QStringLiteral("id")).toString() == id;
++                 if (selected) {
++                     rooms->clear();
++                 }
++                 bool found = false;
++                 for (const auto& item : reply.value(QStringLiteral("rooms")).toArray()) {
++                     const auto match = item.toObject();
++                     if (!match.value(QStringLiteral("crossplay")).toBool()) {
++                         continue;
++                     }
++                     found = true;
++                     if (selected) {
++                         rooms->addItem(tr("%1 — %2/%3 — %4")
++                                            .arg(match.value(QStringLiteral("host")).toString())
++                                            .arg(match.value(QStringLiteral("players")).toInt())
++                                            .arg(match.value(QStringLiteral("max")).toInt())
++                                            .arg(match.value(QStringLiteral("appointmentBound")).toBool()
++                                                     ? tr("Appointment")
++                                                     : match.value(QStringLiteral("titleConfirmed")).toBool()
++                                                           ? tr("Same game")
++                                                           : tr("LCID match")));
++                     }
++                 }
++                 if (!found) {
++                     alerted.remove(id);
++                 }
++                 if (found && followed.contains(id) && !alerted.contains(id)) {
++                     alerted.insert(id);
++                     status->setText(tr("A followed appointment has an open room."));
++                 } else if (explicit_refresh) {
++                     status->setText(found ? tr("Connect to the relay, then join in the game's Local Wireless menu.")
++                                          : tr("No compatible open rooms for this appointment."));
++                 }
++             });
++    }
++
++    std::function<void(const QString&, int)> direct_connect;
++    QSettings settings;
++    QNetworkAccessManager network;
++    QTimer monitor;
++    QVariantMap followed;
++    QSet<QString> alerted;
++    qsizetype follow_index = 0;
++    QUrl origin;
++    QString identity;
++    QString endpoint_host;
++    int endpoint_port = 0;
++    QJsonArray rows;
++    QJsonArray games;
++    QList<int> offsets{0};
++    int next_offset = -1;
++    qint64 clock_difference = 0;
++    int ready_before = 1800;
++    bool busy = false;
++    bool options_ready = false;
++    QLineEdit* server;
++    QLabel* relay_address;
++    QLabel* status;
++    QListWidget* events;
++    QListWidget* rooms;
++    QPushButton* refresh;
++    QPushButton* create;
++    QPushButton* ready;
++    QPushButton* room;
++    QPushButton* follow;
++    QPushButton* connect;
++    QPushButton* previous;
++    QPushButton* next;
++};
++
++} // namespace
++
++void ShowRoomCircuit(QWidget* parent, std::function<void(const QString&, int)> open_direct_connect) {
++    AppointmentsDialog dialog(parent, std::move(open_direct_connect));
++    dialog.exec();
++}
+diff --git a/src/yuzu/multiplayer/roomcircuit_dialog.h b/src/yuzu/multiplayer/roomcircuit_dialog.h
+new file mode 100644
+index 0000000..a029fdf
+--- /dev/null
++++ b/src/yuzu/multiplayer/roomcircuit_dialog.h
+@@ -0,0 +1,10 @@
++// SPDX-FileCopyrightText: Copyright 2026 RoomCircuit contributors
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++#include <functional>
++#include <QString>
++
++class QWidget;
++
++void ShowRoomCircuit(QWidget* parent, std::function<void(const QString&, int)> open_direct_connect);
+diff --git a/src/yuzu/multiplayer/state.cpp b/src/yuzu/multiplayer/state.cpp
+index f682c29..6b6e643 100644
+--- a/src/yuzu/multiplayer/state.cpp
++++ b/src/yuzu/multiplayer/state.cpp
+@@ -319,6 +319,11 @@ void MultiplayerState::OnDirectConnectToRoom() {
+     BringWidgetToFront(direct_connect);
+ }
+ 
++void MultiplayerState::OpenDirectConnectEndpoint(const QString& host, int port) {
++    OnDirectConnectToRoom();
++    direct_connect->SetEndpoint(host, port);
++}
++
+ bool MultiplayerState::IsHostingPublicRoom() const {
+     return announce_multiplayer_session->IsRunning();
+ }
+diff --git a/src/yuzu/multiplayer/state.h b/src/yuzu/multiplayer/state.h
+index a0cf8f7..40b7729 100644
+--- a/src/yuzu/multiplayer/state.h
++++ b/src/yuzu/multiplayer/state.h
+@@ -76,6 +76,7 @@ public slots:
+     bool OnCloseRoom();
+     void OnOpenNetworkRoom();
+     void OnDirectConnectToRoom();
++    void OpenDirectConnectEndpoint(const QString& host, int port);
+     void OnAnnounceFailed(const WebService::WebResult&);
+     void OnSaveConfig();
+     void UpdateThemedIcons();

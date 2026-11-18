@@ -1,0 +1,2 @@
+# A unified diff stores upstream whitespace and blank context lines verbatim.
+*.patch -whitespace

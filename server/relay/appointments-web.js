@@ -61,14 +61,17 @@ function create({ port, bind, origin, relayHost, relayPorts, store, available, r
         }
     }
 
-    const handle = api.create({ store, available, rooms, rateAllowed, origin: expectOrigin, sourceAddress(req) {
+    function sourceAddress(req) {
         const ip = req.socket.remoteAddress?.replace(/^::ffff:/, '');
         const forwarded = req.headers['x-real-ip'];
         // Only the configured same-machine HTTPS proxy may supply a client address.
         if (origin?.startsWith('https:') && ip === '127.0.0.1' && typeof forwarded === 'string' && net.isIP(forwarded))
             return forwarded.replace(/^::ffff:/, '');
         return ip;
-    } });
+    }
+    const apiOptions = { store, available, rooms, rateAllowed, origin: expectOrigin, sourceAddress };
+    const handle = api.create(apiOptions);
+    const handleNative = api.create({ ...apiOptions, native: true });
 
     const server = http.createServer({ maxHeaderSize: 8192, headersTimeout: 5000,
         requestTimeout: 10000, keepAliveTimeout: 5000 }, (req, res) => {
@@ -82,6 +85,7 @@ function create({ port, bind, origin, relayHost, relayPorts, store, available, r
         try { uri = new URL(req.url, trusted); }
         catch { res.writeHead(400); return res.end(); }
         if (uri.origin !== trusted) { res.writeHead(400); return res.end(); }
+        if (uri.pathname === '/api/appointments/native') return void handleNative(req, res);
         if (uri.pathname === '/api/appointments') return void handle(req, res);
         if (req.method !== 'GET' && req.method !== 'HEAD') {
             res.writeHead(405, { Allow: 'GET, HEAD', Connection: 'close' });
@@ -94,7 +98,7 @@ function create({ port, bind, origin, relayHost, relayPorts, store, available, r
         if (uri.pathname === OPTIONS_PATH) {
             const host = relayHost || new URL(trusted).hostname;
             const options = {
-                games, readyBefore: 1800, readyLease: 300,
+                nativeApi: 1, games, readyBefore: 1800, readyLease: 300,
                 endpoints: relayPorts().filter(item => item.port).map(item => ({ ...item, host })),
             };
             const body = Buffer.from(JSON.stringify(options));

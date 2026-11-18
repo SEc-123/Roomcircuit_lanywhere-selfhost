@@ -41,9 +41,9 @@ location /api/appointments {
 
 Keep the game's configured TCP/UDP ports reachable separately from HTTPS. The web service gives the browser the enabled connection options. The player still uses the emulator's own Local Wireless feature to join.
 
-## Integrating an emulator menu
+## Native emulator clients
 
-Link its RoomCircuit entry to the operator's `https://rooms.example.net/appointments/`. A shared appointment link uses `/appointments/?event=<id>`. Consider an optional server preset that follows the relevant wire profile in [Crossplay](CROSSPLAY.md). The web panel can ship and serve all clients independently of emulator release schedules.
+Emulator menus can use a [native RoomCircuit screen](NATIVE-INTEGRATIONS.md) and the same relay. A browser appointment may still be shared with `/appointments/?event=<id>`.
 
 ## Verification
 

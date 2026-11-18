@@ -1,0 +1,774 @@
+diff --git a/src/android/app/src/main/java/org/yuzu/yuzu_emu/dialogs/RoomCircuitDialog.java b/src/android/app/src/main/java/org/yuzu/yuzu_emu/dialogs/RoomCircuitDialog.java
+new file mode 100644
+index 0000000..5fbbfe4
+--- /dev/null
++++ b/src/android/app/src/main/java/org/yuzu/yuzu_emu/dialogs/RoomCircuitDialog.java
+@@ -0,0 +1,603 @@
++// SPDX-FileCopyrightText: Copyright 2026 RoomCircuit contributors
++// SPDX-License-Identifier: GPL-3.0-or-later
++package org.yuzu.yuzu_emu.dialogs;
++
++import android.app.Activity;
++import android.app.AlertDialog;
++import android.content.SharedPreferences;
++import android.os.Handler;
++import android.os.Looper;
++import android.text.InputType;
++import android.view.View;
++import android.widget.ArrayAdapter;
++import android.widget.Button;
++import android.widget.EditText;
++import android.widget.LinearLayout;
++import android.widget.RadioButton;
++import android.widget.RadioGroup;
++import android.widget.ScrollView;
++import android.widget.Spinner;
++import android.widget.TextView;
++import org.yuzu.yuzu_emu.R;
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import java.io.ByteArrayOutputStream;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.net.HttpURLConnection;
++import java.net.URI;
++import java.nio.charset.StandardCharsets;
++import java.security.SecureRandom;
++import java.text.DateFormat;
++import java.text.ParsePosition;
++import java.text.SimpleDateFormat;
++import java.util.ArrayList;
++import java.util.Date;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.Locale;
++import java.util.Set;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++public final class RoomCircuitDialog {
++    private static final int MAX_RESPONSE = 65536;
++    private static final String HEX_ID = "[0-9a-fA-F]{16}";
++
++    @FunctionalInterface
++    public interface DirectConnect {
++        void open(String host, int port);
++    }
++
++    public static void show(Activity activity, DirectConnect directConnect) {
++        new RoomCircuitDialog(activity, directConnect).open();
++    }
++
++    private final Activity activity;
++    private final DirectConnect directConnect;
++    private final SharedPreferences preferences;
++    private final ExecutorService io = Executors.newSingleThreadExecutor();
++    private final Handler handler = new Handler(Looper.getMainLooper());
++    private final ArrayList<Integer> offsets = new ArrayList<>();
++    private final Set<String> alerted = new HashSet<>();
++    private AlertDialog dialog;
++    private EditText address;
++    private TextView endpointLabel, status, roomRows;
++    private RadioGroup events;
++    private Button refresh, create, ready, follow, findRooms, connect, prev, next;
++    private JSONArray rows = new JSONArray(), games = new JSONArray();
++    private JSONObject follows = new JSONObject();
++    private String origin = "", identity = "", endpointHost = "";
++    private int endpointPort, nextOffset = -1, currentRow = -1, followIndex;
++    private int readyBefore = 1800;
++    private long clockDifference;
++    private boolean busy, closed, optionsReady;
++
++    private RoomCircuitDialog(Activity activity, DirectConnect directConnect) {
++        this.activity = activity;
++        this.directConnect = directConnect;
++        preferences = activity.getSharedPreferences("roomcircuit_appointments", Activity.MODE_PRIVATE);
++        offsets.add(0);
++    }
++
++    private void open() {
++        LinearLayout layout = column();
++        layout.setPadding(dp(20), dp(6), dp(20), dp(6));
++        ScrollView scroll = new ScrollView(activity);
++        scroll.addView(layout);
++        address = input(layout, t(R.string.roomcircuit_service), InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
++        address.setText(preferences.getString("origin", ""));
++        refresh = button(layout, t(R.string.roomcircuit_refresh), this::refresh);
++        endpointLabel = label(layout, "");
++        connect = button(layout, t(R.string.roomcircuit_direct_connect), () -> {
++            final String host = endpointHost;
++            final int port = endpointPort;
++            dialog.dismiss();
++            directConnect.open(host, port);
++        });
++        label(layout, t(R.string.roomcircuit_appointments_title));
++        events = new RadioGroup(activity);
++        layout.addView(events);
++        events.setOnCheckedChangeListener((group, id) -> {
++            final View selected = group.findViewById(id);
++            currentRow = selected != null && selected.getTag() instanceof Integer ? (Integer) selected.getTag() : -1;
++            roomRows.setText("");
++            updateControls();
++        });
++        LinearLayout pageButtons = new LinearLayout(activity);
++        layout.addView(pageButtons);
++        prev = button(pageButtons, t(R.string.roomcircuit_previous), () -> {
++            if (offsets.size() > 1) {
++                ArrayList<Integer> pages = new ArrayList<>(offsets);
++                pages.remove(pages.size() - 1);
++                loadPage(pages);
++            }
++        });
++        next = button(pageButtons, t(R.string.roomcircuit_next), () -> {
++            if (nextOffset >= 0) {
++                ArrayList<Integer> pages = new ArrayList<>(offsets);
++                pages.add(nextOffset);
++                loadPage(pages);
++            }
++        });
++        create = button(layout, t(R.string.roomcircuit_new_appointment), this::createForm);
++        ready = button(layout, t(R.string.roomcircuit_mark_ready), this::toggleReady);
++        follow = button(layout, t(R.string.roomcircuit_follow), this::toggleFollow);
++        findRooms = button(layout, t(R.string.roomcircuit_find_rooms), () -> loadRooms(selection().optString("id"), true));
++        roomRows = label(layout, "");
++        status = label(layout, t(R.string.roomcircuit_enter_service));
++        dialog = new AlertDialog.Builder(activity).setTitle(t(R.string.roomcircuit_appointments)).setView(scroll)
++                .setPositiveButton(t(R.string.roomcircuit_close), null).create();
++        dialog.setOnDismissListener(unused -> {
++            closed = true;
++            handler.removeCallbacksAndMessages(null);
++            io.shutdownNow();
++        });
++        updateControls();
++        dialog.show();
++        handler.postDelayed(poll, 12000);
++        if (!address.getText().toString().isEmpty()) {
++            refresh();
++        }
++    }
++
++    private final Runnable poll = new Runnable() {
++        @Override
++        public void run() {
++            if (closed) return;
++            updateControls();
++            if (!busy && sameOrigin() && optionsReady && follows.length() > 0) {
++                ArrayList<String> active = new ArrayList<>();
++                final Iterator<String> keys = follows.keys();
++                while (keys.hasNext()) {
++                    final String id = keys.next();
++                    final long starts = follows.optLong(id);
++                    if (starts > 0 && now() >= starts - readyBefore && now() < starts + 7200) active.add(id);
++                }
++                if (!active.isEmpty()) {
++                    loadRooms(active.get(followIndex % active.size()), false);
++                    followIndex = (followIndex + 1) % active.size();
++                }
++            }
++            handler.postDelayed(this, 12000);
++        }
++    };
++
++    private LinearLayout column() {
++        LinearLayout layout = new LinearLayout(activity);
++        layout.setOrientation(LinearLayout.VERTICAL);
++        return layout;
++    }
++
++    private String t(int string, Object... values) {
++        return activity.getString(string, values);
++    }
++
++    private int dp(int pixels) {
++        return (int) (pixels * activity.getResources().getDisplayMetrics().density + 0.5f);
++    }
++
++    private TextView label(LinearLayout parent, String text) {
++        TextView view = new TextView(activity);
++        view.setText(text);
++        view.setPadding(0, dp(5), 0, dp(5));
++        parent.addView(view);
++        return view;
++    }
++
++    private EditText input(LinearLayout parent, String hint, int type) {
++        EditText view = new EditText(activity);
++        view.setInputType(type);
++        view.setSingleLine(true);
++        view.setHint(hint);
++        parent.addView(view);
++        return view;
++    }
++
++    private Button button(LinearLayout parent, String title, Runnable onClick) {
++        Button button = new Button(activity);
++        button.setText(title);
++        button.setOnClickListener(unused -> onClick.run());
++        parent.addView(button);
++        return button;
++    }
++
++    private static String parseOrigin(String input) {
++        try {
++            final URI uri = new URI(input.trim());
++            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null ||
++                    uri.getPort() == 0 || uri.getPort() > 65535 || uri.getUserInfo() != null ||
++                    uri.getQuery() != null || uri.getFragment() != null ||
++                    (uri.getPath() != null && !uri.getPath().isEmpty() && !"/".equals(uri.getPath()))) {
++                return "";
++            }
++            return new URI("https", null, uri.getHost().toLowerCase(Locale.ROOT), uri.getPort(), null, null, null).toASCIIString();
++        } catch (Exception ignored) {
++            return "";
++        }
++    }
++
++    private long now() {
++        return System.currentTimeMillis() / 1000 + clockDifference;
++    }
++
++    private boolean sameOrigin() {
++        return !origin.isEmpty() && origin.equals(parseOrigin(address.getText().toString()));
++    }
++
++    private JSONObject selection() {
++        JSONObject row = rows.optJSONObject(currentRow);
++        return row == null ? new JSONObject() : row;
++    }
++
++    private void updateControls() {
++        final JSONObject selected = selection();
++        final String id = selected.optString("id");
++        final long start = selected.optLong("starts");
++        final boolean active = start > 0 && now() >= start - readyBefore && now() < start + 7200;
++        final boolean alreadyReady = selected.optBoolean("ready");
++        final boolean current = !busy && sameOrigin();
++        refresh.setEnabled(!busy);
++        address.setEnabled(!busy);
++        create.setEnabled(current && optionsReady);
++        connect.setEnabled(current && endpointPort != 0);
++        findRooms.setEnabled(current && active);
++        ready.setText(alreadyReady ? t(R.string.roomcircuit_cancel_ready) : t(R.string.roomcircuit_mark_ready));
++        ready.setEnabled(current && (active || alreadyReady));
++        follow.setText(follows.has(id) ? t(R.string.roomcircuit_unfollow) : t(R.string.roomcircuit_follow));
++        follow.setEnabled(current && !id.isEmpty());
++        prev.setEnabled(current && offsets.size() > 1);
++        next.setEnabled(current && nextOffset >= 0);
++        for (int i = 0; i < events.getChildCount(); i++) events.getChildAt(i).setEnabled(current);
++    }
++
++    @FunctionalInterface
++    private interface Completion {
++        void accept(JSONObject response) throws JSONException;
++    }
++
++    private static JSONObject data(Object... fields) {
++        final JSONObject json = new JSONObject();
++        try {
++            for (int i = 0; i < fields.length; i += 2) json.put((String) fields[i], fields[i + 1]);
++        } catch (JSONException error) {
++            throw new IllegalArgumentException(error);
++        }
++        return json;
++    }
++
++    private void request(String path, JSONObject payload, Completion completion) {
++        final String target = origin + path;
++        final byte[] body = payload == null ? null : payload.toString().getBytes(StandardCharsets.UTF_8);
++        busy = true;
++        updateControls();
++        io.execute(() -> {
++            JSONObject response = null;
++            String error = t(R.string.roomcircuit_network_error);
++            HttpURLConnection connection = null;
++            try {
++                connection = (HttpURLConnection) new URI(target).toURL().openConnection();
++                connection.setConnectTimeout(8000);
++                connection.setReadTimeout(8000);
++                connection.setInstanceFollowRedirects(false);
++                connection.setUseCaches(false);
++                if (body != null) {
++                    connection.setRequestMethod("POST");
++                    connection.setDoOutput(true);
++                    connection.setRequestProperty("Content-Type", "application/json");
++                    connection.setRequestProperty("X-RoomCircuit-Client", "native-v1");
++                    connection.setFixedLengthStreamingMode(body.length);
++                    try (OutputStream out = connection.getOutputStream()) {
++                        out.write(body);
++                    }
++                }
++                final int code = connection.getResponseCode();
++                if (code == 200 || code >= 400) {
++                    try (InputStream in = code == 200 ? connection.getInputStream() : connection.getErrorStream()) {
++                        if (in != null) {
++                            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
++                            final byte[] buffer = new byte[4096];
++                            for (int n; (n = in.read(buffer)) != -1;) {
++                                if (bytes.size() + n > MAX_RESPONSE) throw new IllegalStateException("Response limit");
++                                bytes.write(buffer, 0, n);
++                            }
++                            final JSONObject json = new JSONObject(new String(bytes.toByteArray(), StandardCharsets.UTF_8));
++                            if (code == 200 && !json.has("error")) {
++                                response = json;
++                            } else {
++                                switch (json.optString("error")) {
++                                    case "not_found": error = t(R.string.roomcircuit_appointment_expired); break;
++                                    case "invalid": error = t(R.string.roomcircuit_invalid_request); break;
++                                    case "limit": error = t(R.string.roomcircuit_rate_limited); break;
++                                    case "unavailable": error = t(R.string.roomcircuit_relay_not_ready); break;
++                                }
++                            }
++                        }
++                    }
++                }
++            } catch (Exception ignored) {
++                // Display the concise network error and allow a retry.
++            } finally {
++                if (connection != null) connection.disconnect();
++            }
++            final JSONObject result = response;
++            final String statusMessage = error;
++            handler.post(() -> {
++                if (closed) return;
++                busy = false;
++                if (result == null) {
++                    status.setText(statusMessage);
++                } else {
++                    final long serverNow = result.optLong("now");
++                    if (serverNow > 0) clockDifference = serverNow - System.currentTimeMillis() / 1000;
++                    try {
++                        completion.accept(result);
++                    } catch (JSONException failure) {
++                        status.setText(t(R.string.roomcircuit_invalid_response));
++                    }
++                }
++                updateControls();
++            });
++        });
++    }
++
++    private void post(JSONObject payload, Completion completion) {
++        if (closed || busy || !sameOrigin()) return;
++        try {
++            payload.put("identity", identity);
++        } catch (JSONException error) {
++            throw new IllegalStateException(error);
++        }
++        request("/api/appointments/native", payload, completion);
++    }
++
++    private void refresh() {
++        if (busy) return;
++        final String candidate = parseOrigin(address.getText().toString());
++        if (candidate.isEmpty()) {
++            status.setText(t(R.string.roomcircuit_https_required));
++            return;
++        }
++        if (!candidate.equals(origin)) {
++            origin = candidate;
++            identity = preferences.getString("identity:" + origin, "");
++            if (!identity.matches("[a-f0-9]{32}") || identity.matches("0+")) {
++                byte[] bytes = new byte[16];
++                new SecureRandom().nextBytes(bytes);
++                StringBuilder output = new StringBuilder();
++                for (byte b : bytes) output.append(String.format(Locale.ROOT, "%02x", b & 0xff));
++                identity = output.toString();
++                preferences.edit().putString("identity:" + origin, identity).apply();
++            }
++            try {
++                follows = new JSONObject(preferences.getString("follows:" + origin, "{}"));
++            } catch (JSONException ignored) {
++                follows = new JSONObject();
++            }
++            alerted.clear();
++            rows = new JSONArray();
++            events.removeAllViews();
++            currentRow = -1;
++            nextOffset = -1;
++        }
++        optionsReady = false;
++        endpointHost = "";
++        endpointPort = 0;
++        endpointLabel.setText("");
++        preferences.edit().putString("origin", origin).apply();
++        status.setText(t(R.string.roomcircuit_connecting));
++        request("/api/appointments/options", null, result -> {
++            if (result.optInt("nativeApi") != 1) {
++                status.setText(t(R.string.roomcircuit_update_relay));
++                return;
++            }
++            games = result.getJSONArray("games");
++            readyBefore = Math.max(0, Math.min(result.optInt("readyBefore", 1800), 86400));
++            final JSONArray endpoints = result.getJSONArray("endpoints");
++            for (int i = 0; i < endpoints.length(); i++) {
++                final JSONObject endpoint = endpoints.getJSONObject(i);
++                final String host = endpoint.optString("host");
++                final int port = endpoint.optInt("port");
++                if ("eden".equals(endpoint.optString("id")) && host.matches("[A-Za-z0-9.-]{1,253}") &&
++                        port > 0 && port <= 65535) {
++                    endpointHost = host;
++                    endpointPort = port;
++                    break;
++                }
++            }
++            endpointLabel.setText(endpointPort == 0 ? t(R.string.roomcircuit_no_eden_listener)
++                    : t(R.string.roomcircuit_game_relay, endpointHost, endpointPort));
++            optionsReady = true;
++            loadFirstPage();
++        });
++    }
++
++    private void loadFirstPage() {
++        ArrayList<Integer> first = new ArrayList<>();
++        first.add(0);
++        loadPage(first);
++    }
++
++    private void loadPage(ArrayList<Integer> pages) {
++        final String selected = selection().optString("id");
++        post(data("action", "list", "offset", pages.get(pages.size() - 1)), response -> {
++            if (pages.size() > 1 && response.getJSONArray("rows").length() == 0) {
++                loadFirstPage();
++                return;
++            }
++            offsets.clear();
++            offsets.addAll(pages);
++            renderRows(response, selected);
++        });
++    }
++
++    private String gameName(JSONObject entry) {
++        final String game = entry.optString("game");
++        final String app = entry.optString("app");
++        for (int i = 0; i < games.length(); i++) {
++            final JSONObject option = games.optJSONObject(i);
++            if (option != null && game.equalsIgnoreCase(option.optString("game")) &&
++                    app.equalsIgnoreCase(option.optString("app"))) {
++                return Locale.getDefault().getLanguage().equals("zh") && !option.optString("zh").isEmpty()
++                        ? option.optString("zh") : option.optString("name");
++            }
++        }
++        return game.toUpperCase(Locale.ROOT);
++    }
++
++    private void renderRows(JSONObject response, String selected) throws JSONException {
++        rows = response.getJSONArray("rows");
++        nextOffset = response.optInt("next", -1);
++        events.removeAllViews();
++        currentRow = -1;
++        RadioButton select = null;
++        final DateFormat calendar = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT);
++        for (int i = 0; i < rows.length(); i++) {
++            final JSONObject row = rows.getJSONObject(i);
++            RadioButton item = new RadioButton(activity);
++            item.setId(View.generateViewId());
++            item.setTag(i);
++            item.setText(t(R.string.roomcircuit_event_row, gameName(row),
++                    calendar.format(new Date(1000 * row.getLong("starts"))), row.getInt("interested")) +
++                    (row.optBoolean("ready") ? " (" + t(R.string.roomcircuit_own_ready) + ")" : ""));
++            events.addView(item);
++            if (select == null || selected.equals(row.optString("id"))) select = item;
++        }
++        if (select != null) events.check(select.getId());
++        status.setText(rows.length() == 0 ? t(R.string.roomcircuit_no_appointments) : t(R.string.roomcircuit_local_time));
++        updateControls();
++    }
++
++    private void createForm() {
++        final LinearLayout fields = column();
++        fields.setPadding(dp(20), 0, dp(20), 0);
++        final Spinner titles = new Spinner(activity);
++        final ArrayList<String> choices = new ArrayList<>();
++        for (int i = 0; i < games.length(); i++) choices.add(gameName(games.optJSONObject(i)));
++        choices.add(t(R.string.roomcircuit_manual_ids));
++        titles.setAdapter(new ArrayAdapter<>(activity, android.R.layout.simple_spinner_dropdown_item, choices));
++        fields.addView(titles);
++        final EditText game = input(fields, t(R.string.roomcircuit_game_lcid), InputType.TYPE_CLASS_TEXT);
++        final EditText app = input(fields, t(R.string.roomcircuit_application_id), InputType.TYPE_CLASS_TEXT);
++        final EditText start = input(fields, t(R.string.roomcircuit_start_time), InputType.TYPE_CLASS_DATETIME);
++        final TextView error = label(fields, "");
++        final SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
++        format.setLenient(false);
++        start.setText(format.format(new Date(1000 * (now() + 1800))));
++        titles.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
++            @Override
++            public void onItemSelected(android.widget.AdapterView<?> a, View v, int index, long id) {
++                final JSONObject entry = games.optJSONObject(index);
++                game.setText(entry == null ? "" : entry.optString("game"));
++                app.setText(entry == null ? "" : entry.optString("app"));
++                game.setEnabled(entry == null);
++                app.setEnabled(entry == null);
++            }
++
++            @Override
++            public void onNothingSelected(android.widget.AdapterView<?> a) {}
++        });
++        final AlertDialog editor = new AlertDialog.Builder(activity).setTitle(t(R.string.roomcircuit_create_title))
++                .setView(fields).setPositiveButton(t(R.string.roomcircuit_save), null).setNegativeButton(t(R.string.roomcircuit_cancel), null).create();
++        editor.show();
++        editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(unused -> {
++            final String gameId = game.getText().toString().trim().toUpperCase(Locale.ROOT);
++            final String appId = app.getText().toString().trim().toUpperCase(Locale.ROOT);
++            final String when = start.getText().toString().trim();
++            final ParsePosition position = new ParsePosition(0);
++            final Date date = format.parse(when, position);
++            if (!gameId.matches(HEX_ID) || (!appId.isEmpty() && !appId.matches(HEX_ID))) {
++                error.setText(t(R.string.roomcircuit_invalid_game_id));
++                return;
++            }
++            if (date == null || position.getIndex() != when.length() || date.getTime() / 1000 < now() ||
++                    date.getTime() / 1000 > now() + 7L * 86400) {
++                error.setText(t(R.string.roomcircuit_invalid_start));
++                return;
++            }
++            editor.dismiss();
++            final JSONObject fieldsJson = data("action", "create", "game", gameId, "starts", date.getTime() / 1000);
++            if (!appId.isEmpty()) {
++                try {
++                    fieldsJson.put("app", appId);
++                } catch (JSONException exception) {
++                    throw new IllegalStateException(exception);
++                }
++            }
++            post(fieldsJson, reply -> {
++                offsets.clear();
++                offsets.add(0);
++                final JSONObject created = reply.optJSONObject("created");
++                renderRows(reply, created == null ? "" : created.optString("id"));
++                status.setText(t(R.string.roomcircuit_saved));
++            });
++        });
++    }
++
++    private void toggleReady() {
++        final JSONObject row = selection();
++        final String id = row.optString("id");
++        if (id.isEmpty()) return;
++        post(data("action", row.optBoolean("ready") ? "leave" : "ready", "id", id), reply -> {
++            offsets.clear();
++            offsets.add(0);
++            renderRows(reply, id);
++        });
++    }
++
++    private void toggleFollow() {
++        final JSONObject row = selection();
++        final String id = row.optString("id");
++        if (id.isEmpty()) return;
++        if (follows.has(id)) {
++            follows.remove(id);
++            alerted.remove(id);
++        } else {
++            Iterator<String> followedIds = follows.keys();
++            while (followedIds.hasNext()) {
++                final String old = followedIds.next();
++                if (follows.optLong(old) + 7200 <= now()) {
++                    followedIds.remove();
++                    alerted.remove(old);
++                }
++            }
++            if (follows.length() >= 24) {
++                status.setText(t(R.string.roomcircuit_follow_limit));
++                return;
++            }
++            try {
++                follows.put(id, row.optLong("starts"));
++            } catch (JSONException exception) {
++                throw new IllegalStateException(exception);
++            }
++        }
++        preferences.edit().putString("follows:" + origin, follows.toString()).apply();
++        updateControls();
++    }
++
++    private void loadRooms(String id, boolean explicit) {
++        if (id.isEmpty()) return;
++        post(data("action", "rooms", "id", id), reply -> {
++            final JSONArray active = reply.getJSONArray("rooms");
++            final StringBuilder text = new StringBuilder();
++            for (int i = 0; i < active.length(); i++) {
++                final JSONObject room = active.getJSONObject(i);
++                if (!room.optBoolean("crossplay")) continue;
++                text.append(room.optString("host")).append(" — ")
++                        .append(room.optInt("players")).append('/').append(room.optInt("max")).append(" — ")
++                        .append(room.optBoolean("appointmentBound") ? t(R.string.roomcircuit_bound_room) :
++                                room.optBoolean("titleConfirmed") ? t(R.string.roomcircuit_same_game) : t(R.string.roomcircuit_lcid_match))
++                        .append('\n');
++            }
++            final boolean hasRoom = text.length() > 0;
++            if (id.equals(selection().optString("id"))) {
++                roomRows.setText(hasRoom ? text.toString().trim() : t(R.string.roomcircuit_no_rooms));
++            }
++            if (!hasRoom) alerted.remove(id);
++            if (hasRoom && follows.has(id) && alerted.add(id)) status.setText(t(R.string.roomcircuit_follow_alert));
++            else if (explicit && hasRoom) status.setText(t(R.string.roomcircuit_join_in_game));
++        });
++    }
++}
+diff --git a/src/android/app/src/main/java/org/yuzu/yuzu_emu/fragments/HomeSettingsFragment.kt b/src/android/app/src/main/java/org/yuzu/yuzu_emu/fragments/HomeSettingsFragment.kt
+index 2b4cfc5..b89eff3 100644
+--- a/src/android/app/src/main/java/org/yuzu/yuzu_emu/fragments/HomeSettingsFragment.kt
++++ b/src/android/app/src/main/java/org/yuzu/yuzu_emu/fragments/HomeSettingsFragment.kt
+@@ -213,6 +213,16 @@ class HomeSettingsFragment : Fragment() {
+                     }
+                 )
+             )
++            add(
++                HomeSetting(
++                    R.string.roomcircuit_appointments,
++                    R.string.roomcircuit_appointments_description,
++                    R.drawable.ic_two_users,
++                    {
++                        mainActivity.displayRoomCircuitDialog()
++                    }
++                )
++            )
+             add(
+                 HomeSetting(
+                     R.string.applets,
+diff --git a/src/android/app/src/main/java/org/yuzu/yuzu_emu/ui/main/MainActivity.kt b/src/android/app/src/main/java/org/yuzu/yuzu_emu/ui/main/MainActivity.kt
+index a6f5df8..7a26e7e 100644
+--- a/src/android/app/src/main/java/org/yuzu/yuzu_emu/ui/main/MainActivity.kt
++++ b/src/android/app/src/main/java/org/yuzu/yuzu_emu/ui/main/MainActivity.kt
+@@ -30,6 +30,8 @@ import org.yuzu.yuzu_emu.NativeLibrary
+ import org.yuzu.yuzu_emu.R
+ import org.yuzu.yuzu_emu.databinding.ActivityMainBinding
+ import org.yuzu.yuzu_emu.dialogs.NetPlayDialog
++import org.yuzu.yuzu_emu.dialogs.RoomCircuitDialog
++import org.yuzu.yuzu_emu.network.NetPlayManager
+ import org.yuzu.yuzu_emu.features.settings.model.Settings
+ import org.yuzu.yuzu_emu.fragments.AddGameFolderDialogFragment
+ import org.yuzu.yuzu_emu.fragments.MessageDialogFragment
+@@ -299,6 +301,16 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
+         dialog.show()
+     }
+ 
++    fun displayRoomCircuitDialog() {
++        RoomCircuitDialog.show(this) { host, port ->
++            if (!NetPlayManager.netPlayIsJoined()) {
++                NetPlayManager.setRoomAddress(this, host)
++                NetPlayManager.setRoomPort(this, port.toString())
++            }
++            displayMultiplayerDialog()
++        }
++    }
++
+     private fun checkKeys() {
+         if (!NativeLibrary.areKeysPresent()) {
+             MessageDialogFragment.newInstance(
+diff --git a/src/android/app/src/main/res/values-zh-rCN/roomcircuit_strings.xml b/src/android/app/src/main/res/values-zh-rCN/roomcircuit_strings.xml
+new file mode 100644
+index 0000000..616e63c
+--- /dev/null
++++ b/src/android/app/src/main/res/values-zh-rCN/roomcircuit_strings.xml
+@@ -0,0 +1,51 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="roomcircuit_service">RoomCircuit HTTPS 地址</string>
++    <string name="roomcircuit_refresh">刷新</string>
++    <string name="roomcircuit_direct_connect">打开直接连接</string>
++    <string name="roomcircuit_appointments_title">约战列表</string>
++    <string name="roomcircuit_previous">上一页</string>
++    <string name="roomcircuit_next">下一页</string>
++    <string name="roomcircuit_new_appointment">发起约战</string>
++    <string name="roomcircuit_mark_ready">准备就绪</string>
++    <string name="roomcircuit_follow">关注</string>
++    <string name="roomcircuit_find_rooms">找房</string>
++    <string name="roomcircuit_enter_service">请输入 RoomCircuit 服务地址。</string>
++    <string name="roomcircuit_appointments">RoomCircuit</string>
++    <string name="roomcircuit_close">关闭</string>
++    <string name="roomcircuit_cancel_ready">取消准备</string>
++    <string name="roomcircuit_unfollow">取消关注</string>
++    <string name="roomcircuit_network_error">无法连接 RoomCircuit 服务。</string>
++    <string name="roomcircuit_appointment_expired">约战已失效。</string>
++    <string name="roomcircuit_invalid_request">中继拒绝了所选时间或游戏 ID。</string>
++    <string name="roomcircuit_rate_limited">请求过多。请稍后重试。</string>
++    <string name="roomcircuit_relay_not_ready">中继尚未就绪。</string>
++    <string name="roomcircuit_invalid_response">RoomCircuit 服务返回了无效数据。</string>
++    <string name="roomcircuit_https_required">请输入不带路径或登录信息的 HTTPS 服务地址。</string>
++    <string name="roomcircuit_connecting">正在连接…</string>
++    <string name="roomcircuit_no_eden_listener">该中继未开启 Eden 联机端口。</string>
++    <string name="roomcircuit_no_appointments">暂无约战。</string>
++    <string name="roomcircuit_local_time">以设备所在时区显示。</string>
++    <string name="roomcircuit_manual_ids">手动输入 ID</string>
++    <string name="roomcircuit_game_lcid">游戏联机 ID（LCID）</string>
++    <string name="roomcircuit_application_id">应用 ID（可选）</string>
++    <string name="roomcircuit_start_time">本地时间：年-月-日 时:分</string>
++    <string name="roomcircuit_create_title">发起 RoomCircuit 约战</string>
++    <string name="roomcircuit_save">保存</string>
++    <string name="roomcircuit_cancel">取消</string>
++    <string name="roomcircuit_invalid_game_id">请输入 16 位十六进制游戏 ID。</string>
++    <string name="roomcircuit_invalid_start">请输入未来七天内的本地开始时间。</string>
++    <string name="roomcircuit_saved">已保存约战。</string>
++    <string name="roomcircuit_follow_limit">最多关注 24 个约战。</string>
++    <string name="roomcircuit_bound_room">约战房间</string>
++    <string name="roomcircuit_same_game">相同游戏</string>
++    <string name="roomcircuit_lcid_match">按联机 ID 匹配</string>
++    <string name="roomcircuit_no_rooms">该约战暂无可加入房间。</string>
++    <string name="roomcircuit_follow_alert">你关注的约战已开房。</string>
++    <string name="roomcircuit_join_in_game">请连接中继，然后在游戏的本地通信菜单里加入。</string>
++    <string name="roomcircuit_appointments_description">约战、就绪及寻找本地通信房间</string>
++    <string name="roomcircuit_update_relay">请更新 RoomCircuit 中继，以使用原生约战。</string>
++    <string name="roomcircuit_game_relay">游戏中继：%1$s:%2$d</string>
++    <string name="roomcircuit_event_row">%1$s · %2$s · %3$d 人就绪</string>
++    <string name="roomcircuit_own_ready">你已就绪</string>
++</resources>
+diff --git a/src/android/app/src/main/res/values/roomcircuit_strings.xml b/src/android/app/src/main/res/values/roomcircuit_strings.xml
+new file mode 100644
+index 0000000..dbc33da
+--- /dev/null
++++ b/src/android/app/src/main/res/values/roomcircuit_strings.xml
+@@ -0,0 +1,51 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="roomcircuit_service">HTTPS RoomCircuit service</string>
++    <string name="roomcircuit_refresh">Refresh</string>
++    <string name="roomcircuit_direct_connect">Open Direct Connect</string>
++    <string name="roomcircuit_appointments_title">Appointments</string>
++    <string name="roomcircuit_previous">Previous</string>
++    <string name="roomcircuit_next">Next</string>
++    <string name="roomcircuit_new_appointment">New appointment</string>
++    <string name="roomcircuit_mark_ready">Mark ready</string>
++    <string name="roomcircuit_follow">Follow</string>
++    <string name="roomcircuit_find_rooms">Find rooms</string>
++    <string name="roomcircuit_enter_service">Enter the RoomCircuit service address.</string>
++    <string name="roomcircuit_appointments">RoomCircuit</string>
++    <string name="roomcircuit_close">Close</string>
++    <string name="roomcircuit_cancel_ready">Cancel ready</string>
++    <string name="roomcircuit_unfollow">Stop following</string>
++    <string name="roomcircuit_network_error">Unable to reach the RoomCircuit service.</string>
++    <string name="roomcircuit_appointment_expired">The appointment is no longer available.</string>
++    <string name="roomcircuit_invalid_request">The relay rejected the selected time or game ID.</string>
++    <string name="roomcircuit_rate_limited">Too many requests. Try again shortly.</string>
++    <string name="roomcircuit_relay_not_ready">The relay is not ready.</string>
++    <string name="roomcircuit_invalid_response">The RoomCircuit service returned invalid data.</string>
++    <string name="roomcircuit_https_required">Use an HTTPS service origin with no path or credentials.</string>
++    <string name="roomcircuit_connecting">Connecting…</string>
++    <string name="roomcircuit_no_eden_listener">This relay has no Eden game listener.</string>
++    <string name="roomcircuit_no_appointments">No upcoming appointments.</string>
++    <string name="roomcircuit_local_time">Times are shown in your local time.</string>
++    <string name="roomcircuit_manual_ids">Enter IDs manually</string>
++    <string name="roomcircuit_game_lcid">Game LCID</string>
++    <string name="roomcircuit_application_id">Application ID (optional)</string>
++    <string name="roomcircuit_start_time">Local time: YYYY-MM-DD HH:MM</string>
++    <string name="roomcircuit_create_title">New RoomCircuit appointment</string>
++    <string name="roomcircuit_save">Save</string>
++    <string name="roomcircuit_cancel">Cancel</string>
++    <string name="roomcircuit_invalid_game_id">Use a 16-digit hexadecimal game ID.</string>
++    <string name="roomcircuit_invalid_start">Enter a local start time in the next seven days.</string>
++    <string name="roomcircuit_saved">Appointment saved.</string>
++    <string name="roomcircuit_follow_limit">You can follow at most 24 appointments.</string>
++    <string name="roomcircuit_bound_room">Appointment</string>
++    <string name="roomcircuit_same_game">Same game</string>
++    <string name="roomcircuit_lcid_match">LCID match</string>
++    <string name="roomcircuit_no_rooms">No compatible open rooms for this appointment.</string>
++    <string name="roomcircuit_follow_alert">A followed appointment has an open room.</string>
++    <string name="roomcircuit_join_in_game">Connect to the relay, then join in the game\'s Local Wireless menu.</string>
++    <string name="roomcircuit_appointments_description">Schedule a session and find local wireless rooms</string>
++    <string name="roomcircuit_update_relay">Update the RoomCircuit relay to use native appointments.</string>
++    <string name="roomcircuit_game_relay">Game relay: %1$s:%2$d</string>
++    <string name="roomcircuit_event_row">%1$s — %2$s — %3$d ready</string>
++    <string name="roomcircuit_own_ready">You are ready</string>
++</resources>

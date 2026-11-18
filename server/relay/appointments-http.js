@@ -157,14 +157,18 @@ function matchesOrigin(req, trustedOrigin) {
 }
 
 function create({ store, available, rooms, rateAllowed, sourceAddress = req => req.socket.remoteAddress,
-                  origin = requestOrigin }) {
+                  origin = requestOrigin, native = false }) {
     return async function handle(req, res) {
         const error = (status, code, close = false) => write(res, status, { now: clock(), error: code }, close);
         if (req.method !== 'POST') {
             res.setHeader('Allow', 'POST');
             return error(405, 'invalid', true);
         }
-        if (!matchesOrigin(req, typeof origin === 'function' ? origin(req) : origin)) return error(403, 'forbidden', true);
+        const accepted = native
+            ? req.headers['x-roomcircuit-client'] === 'native-v1' && req.headers.origin === undefined &&
+                !Object.keys(req.headers).some(header => header.startsWith('sec-fetch-'))
+            : matchesOrigin(req, typeof origin === 'function' ? origin(req) : origin);
+        if (!accepted) return error(403, 'forbidden', true);
         if (!/^application\/json(?:\s*;\s*charset\s*=\s*utf-8)?$/i.test(req.headers['content-type'] || ''))
             return error(415, 'invalid', true);
         const length = req.headers['content-length'];

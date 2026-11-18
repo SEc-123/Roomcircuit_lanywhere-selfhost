@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { request } = require('node:http');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const fs = require('node:fs/promises');
@@ -41,7 +42,7 @@ async function appointment(peer, op, fields = {}) {
     });
 }
 
-test('browser and Switch share events, readiness, exact room lookup and emulator room alerts', { timeout: 15000 }, async t => {
+test('browser, emulator UI and Switch share events, readiness, room lookup and alerts', { timeout: 15000 }, async t => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), 'rc-appointment-web-'));
     const web = await freePort();
     let ryu = await freePort();
@@ -78,24 +79,48 @@ test('browser and Switch share events, readiness, exact room lookup and emulator
         assert.equal(reply.status, 200, JSON.stringify(body));
         return body;
     }
+    async function native(action, fields = {}, headerOverrides = {}, expected = 200) {
+        const body = Buffer.from(JSON.stringify({ action, identity: WEB_ID, ...fields }));
+        return new Promise((resolve, reject) => {
+            const req = request(http + '/api/appointments/native', { method: 'POST', headers: {
+                'Content-Type': 'application/json', 'Content-Length': body.length,
+                'X-RoomCircuit-Client': 'native-v1', ...headerOverrides,
+            } }, async res => {
+                try {
+                    const chunks = [];
+                    for await (const bytes of res) chunks.push(bytes);
+                    const value = JSON.parse(Buffer.concat(chunks));
+                    assert.equal(res.statusCode, expected, JSON.stringify(value));
+                    resolve(value);
+                } catch (error) { reject(error); }
+            });
+            req.once('error', reject);
+            req.end(body);
+        });
+    }
     const page = await fetch(http + '/appointments/');
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-security-policy'), /script-src 'self'/);
     assert.match(await page.text(), /RoomCircuit/);
     for (const name of ['styles.css', 'app.js']) assert.equal((await fetch(http + '/appointments/' + name)).status, 200);
     const options = await (await fetch(http + '/api/appointments/options')).json();
+    assert.equal(options.nativeApi, 1);
     assert.deepEqual(options.endpoints.map(({ id, port }) => [id, port]), [['switch', nativePort], ['ryuldn', ryu]]);
+    await native('list', {}, { 'X-RoomCircuit-Client': 'unknown' }, 403);
+    await native('list', {}, { Origin: http }, 403);
+    await native('list', {}, { 'Sec-Fetch-Mode': 'cors' }, 403);
 
     const consolePeer = new ConsolePeer('SwitchReader', nativePort);
     peers.push(consolePeer);
     await consolePeer.open({ udp: false });
     const starts = Math.floor(Date.now() / 1000) + 360;
-    const { created } = await post('create', { starts, game: GAME.toString(16).padStart(16, '0') });
+    const { created } = await native('create', { starts, game: GAME.toString(16).padStart(16, '0') });
     assert.equal((await appointment(consolePeer, 1))[0].id, created.id);
+    assert.equal((await post('event', { id: created.id })).rows[0].starts, starts);
     const nativeEvent = (await appointment(consolePeer, 2, { starts: BigInt(starts + 60), game: GAME + 1n }))
         .find(row => row.game === GAME + 1n);
-    assert.equal((await post('event', { id: nativeEvent.id })).rows[0].starts, starts + 60);
-    await post('ready', { id: created.id });
+    assert.equal((await native('event', { id: nativeEvent.id })).rows[0].starts, starts + 60);
+    await native('ready', { id: created.id });
     const nativeReady = (await appointment(consolePeer, 3, { id: BigInt(created.id) }))[0];
     assert.equal(nativeReady.interested, 2);
     assert.equal((await post('event', { id: created.id })).rows[0].interested, 2);
@@ -121,6 +146,7 @@ test('browser and Switch share events, readiness, exact room lookup and emulator
     const emulatorRoomPush = await watcher.frame(0xa9);
     assert.equal(emulatorRoomPush.readBigUInt64LE(8), BigInt(created.id));
     assert.equal((await post('rooms', { id: created.id })).rooms[1]?.host, 'EmulatorHost');
-    const stopped = await post('leave', { id: created.id });
+    assert.equal((await native('rooms', { id: created.id })).rooms[1]?.host, 'EmulatorHost');
+    const stopped = await native('leave', { id: created.id });
     assert.equal(stopped.rows.find(row => row.id === created.id).interested, 1);
 });

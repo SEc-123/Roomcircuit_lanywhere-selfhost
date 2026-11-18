@@ -62,6 +62,8 @@ Open **Appointments** with **−** from the lobby. Press **L** to create a sessi
 
 On a phone or computer, open the relay’s [shared appointments panel](docs/WEB-APPOINTMENTS.md) to schedule, share, get ready and find open rooms with Switch players.
 
+Supported emulator development builds can open the same appointments inside the app. See [native emulator integrations](docs/NATIVE-INTEGRATIONS.md).
+
 Press **→** from the room list to open the in-app guide. See [node routing and game compatibility](docs/REGIONS.md) for details.
 
 ## Update

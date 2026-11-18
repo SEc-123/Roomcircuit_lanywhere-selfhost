@@ -1,0 +1,390 @@
+// SPDX-License-Identifier: MIT
+package org.kenjinx.android.views
+
+import android.app.Activity
+import android.app.AlertDialog
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.security.NetworkSecurityPolicy
+import android.text.InputFilter
+import android.util.AtomicFile
+import android.view.View
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.Spinner
+import android.widget.TextView
+import org.json.JSONObject
+import java.io.File
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
+import java.util.concurrent.Executors
+
+internal class RoomCircuitDialog private constructor(private val activity: Activity, private val appDirectory: File) {
+    companion object {
+        fun show(activity: Activity, appDirectory: File) = RoomCircuitDialog(activity, appDirectory).open()
+    }
+
+    private val prefs = activity.getSharedPreferences("roomcircuit-appointments", Activity.MODE_PRIVATE)
+    private val followed = prefs.getStringSet("followed", emptySet()).orEmpty().take(12).toMutableSet()
+    private val openRooms = mutableSetOf<String>()
+    private val identity = prefs.getString("participant", null)?.takeIf {
+        RoomCircuitApi.participant.matches(it) && it.any { c -> c != '0' }
+    } ?: RoomCircuitApi.newIdentity().also { prefs.edit().putString("participant", it).apply() }
+
+    private val chinese = activity.resources.configuration.locales[0]?.language == "zh"
+    private val handler = Handler(Looper.getMainLooper())
+    private val executor = Executors.newFixedThreadPool(2)
+    private var api: RoomCircuitApi? = null
+    private var catalog = emptyList<JSONObject>()
+    private var rows = emptyList<JSONObject>()
+    private var next: Long? = null
+    private val offsets = mutableListOf(0L)
+    private var relayHost: String? = null
+    private var readyBefore = 1800L
+    private var serverTime = 0L
+    private var serverAt = 0L
+    private var starts = LocalDateTime.now().plusMinutes(30).withSecond(0).withNano(0)
+    private var busy = false
+    private var closed = false
+    private var checkingFollows = false
+
+    private val origin = input("https://rooms.example.net", 512)
+    private val game = Spinner(activity)
+    private val lcid = input(t("Local communication ID", "本地联机 ID"), 16)
+    private val appId = input(t("Application ID (optional)", "应用 ID（可选）"), 16)
+    private val events = Spinner(activity)
+    private val message = TextView(activity).also { it.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+    private val results = TextView(activity)
+    private val relay = TextView(activity)
+    private val connect = button(t("Connect", "连接")) { connect() }
+    private val refresh = button(t("Refresh", "刷新")) { list(offsets.last()) }
+    private val time = button("") { chooseTime() }
+    private val create = button(t("Create", "创建")) { create() }
+    private val previous = button(t("Previous", "上一页")) { page(false) }
+    private val more = button(t("Next", "下一页")) { page(true) }
+    private val ready = button("") { ready() }
+    private val follow = button("") { follow() }
+    private val rooms = button(t("Find rooms", "找房")) { find() }
+    private val share = button(t("Copy link", "复制链接")) { share() }
+    private val configure = button(t("Use this relay", "使用此中继")) { configure() }
+    private val poll = object : Runnable {
+        override fun run() {
+            if (closed) return
+            val connection = api
+            val ids = followed.toList()
+            if (!busy && !checkingFollows && ids.isNotEmpty() && connection != null) {
+                checkingFollows = true
+                executor.execute {
+                    val states = runCatching {
+                        ids.associateWith { id -> roomRows(connection.request("rooms", "id" to id)).isNotEmpty() }
+                    }.getOrNull()
+                    handler.post {
+                        checkingFollows = false
+                        if (closed || api !== connection || states == null) return@post
+                        for ((id, value) in states) {
+                            if (id !in followed) continue
+                            if (value && openRooms.add(id)) message.text = t("A followed appointment has an open room.", "关注的约战有房间开放。")
+                            if (!value) openRooms.remove(id)
+                        }
+                    }
+                }
+            }
+            handler.postDelayed(this, 30000)
+        }
+    }
+
+    private fun t(en: String, zh: String) = if (chinese) zh else en
+    private fun input(hintText: String, limit: Int) = EditText(activity).apply {
+        hint = hintText
+        isSingleLine = true
+        filters = arrayOf(InputFilter.LengthFilter(limit))
+    }
+    private fun button(label: String, action: () -> Unit) = Button(activity).apply {
+        text = label
+        isAllCaps = false
+        setOnClickListener { action() }
+    }
+    private fun label(text: String) = TextView(activity).apply { this.text = text; textSize = 16f }
+
+    fun open() {
+        origin.setText(prefs.getString("origin", ""))
+        val column = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            val padding = (20 * resources.displayMetrics.density).toInt()
+            setPadding(padding, 0, padding, padding)
+        }
+        listOf(label(t("Service address", "约战服务地址")), origin, connect, refresh, relay, configure,
+            label(t("New appointment", "新建约战")), game, lcid, appId, time, create,
+            label(t("Appointments", "约战列表")), events, previous, more, ready, follow, rooms, share, results, message)
+            .forEach { column.addView(it) }
+        events.onItemSelectedListener = selection { results.text = ""; updateActions() }
+        game.onItemSelectedListener = selection { updateActions() }
+        val dialog = AlertDialog.Builder(activity).setTitle("RoomCircuit")
+            .setView(ScrollView(activity).also { it.addView(column) })
+            .setPositiveButton(t("Close", "关闭"), null).create()
+        dialog.setOnDismissListener {
+            closed = true
+            handler.removeCallbacks(poll)
+            executor.shutdownNow()
+        }
+        dialog.show()
+        updateActions()
+        handler.postDelayed(poll, 30000)
+        if (origin.text.isNotBlank()) connect()
+    }
+
+    private fun selection(change: () -> Unit) = object : android.widget.AdapterView.OnItemSelectedListener {
+        override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) = change()
+        override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = change()
+    }
+    private fun bind(spinner: Spinner, names: List<String>) {
+        spinner.adapter = ArrayAdapter(activity, android.R.layout.simple_spinner_dropdown_item, names)
+    }
+    private fun selected() = rows.getOrNull(events.selectedItemPosition)
+    private fun now() = serverTime + (SystemClock.elapsedRealtime() - serverAt) / 1000
+
+    private fun updateActions() {
+        val event = selected()
+        val connected = api != null && !busy
+        connect.isEnabled = !busy
+        origin.isEnabled = !busy
+        for (control in listOf(refresh, game, create, time, events, lcid, appId)) control.isEnabled = connected
+        configure.isEnabled = connected && relayHost != null
+        relay.text = relayHost?.let { "RyuLDN · $it:30456" }.orEmpty()
+        lcid.visibility = if (game.selectedItemPosition <= 0) View.VISIBLE else View.GONE
+        appId.visibility = lcid.visibility
+        previous.isEnabled = connected && offsets.size > 1
+        more.isEnabled = connected && next != null
+        ready.isEnabled = connected && event != null && (event.optBoolean("ready") || event.getLong("starts") - now() <= readyBefore)
+        ready.text = if (event?.optBoolean("ready") == true) t("Cancel ready", "取消就绪") else t("I'm ready", "我已就绪")
+        follow.text = if (event?.optString("id") in followed) t("Unfollow", "取消关注") else t("Follow", "关注")
+        for (control in listOf(follow, rooms, share)) control.isEnabled = connected && event != null
+        time.text = t("Local start time", "本地开始时间") + " · " +
+            starts.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT))
+    }
+
+    private fun chooseTime() {
+        DatePickerDialog(activity, { _, year, month, day ->
+            TimePickerDialog(activity, { _, hour, minute ->
+                starts = LocalDateTime.of(year, month + 1, day, hour, minute)
+                updateActions()
+            }, starts.hour, starts.minute, android.text.format.DateFormat.is24HourFormat(activity)).show()
+        }, starts.year, starts.monthValue - 1, starts.dayOfMonth).show()
+    }
+
+    private fun showError(error: Throwable) {
+        message.text = when (error.message) {
+            "native_upgrade" -> t("This relay needs the RoomCircuit native appointments update.", "请升级中继以支持 RoomCircuit 原生约战。")
+            "limit" -> t("Too many requests. Try again shortly.", "请求过多，请稍后重试。")
+            "invalid" -> t("Check the appointment or its ready time.", "请检查约战信息或就绪时间。")
+            "not_found" -> t("This appointment is no longer available.", "该约战已失效。")
+            else -> t("Could not complete the request. Check the address.", "操作未完成，请检查服务地址。")
+        }
+    }
+
+    private fun <T> runTask(task: () -> T, after: (T) -> Unit) {
+        if (busy || closed) return
+        busy = true
+        updateActions()
+        executor.execute {
+            val result = runCatching(task)
+            handler.post {
+                if (closed) return@post
+                busy = false
+                result.onSuccess { value -> runCatching { after(value) }.onFailure(::showError) }.onFailure(::showError)
+                updateActions()
+            }
+        }
+    }
+
+    private fun entries(json: JSONObject, key: String): List<JSONObject> {
+        val list = json.optJSONArray(key) ?: return emptyList()
+        return List(list.length()) { list.getJSONObject(it) }
+    }
+
+    private fun connect() {
+        val uri = RoomCircuitApi.parseOrigin(origin.text.toString())
+        if (uri == null) {
+            message.text = t("Enter an HTTPS service address or a private LAN HTTP address.", "输入 HTTPS 服务地址或局域网 HTTP 地址。")
+            return
+        }
+        if (uri.scheme.equals("http", true) && !NetworkSecurityPolicy.getInstance().isCleartextTrafficPermitted(uri.host)) {
+            message.text = t("This Android build requires an HTTPS service address.", "此安卓版本要求使用 HTTPS 服务地址。")
+            return
+        }
+        val trial = RoomCircuitApi(uri, identity)
+        runTask({
+            val options = trial.options()
+            if (options.optInt("nativeApi") != 1) throw IllegalStateException("native_upgrade")
+            options to trial.request("list")
+        }) { (options, first) ->
+            val address = uri.toString().removeSuffix("/")
+            if (prefs.getString("origin", "") != address) followed.clear()
+            prefs.edit().putString("origin", address).putStringSet("followed", followed.toSet()).apply()
+            openRooms.clear()
+            api = trial
+            readyBefore = options.optLong("readyBefore", 1800)
+            catalog = entries(options, "games")
+            relayHost = entries(options, "endpoints").firstOrNull {
+                it.optString("id") == "ryuldn" && it.optInt("port") == 30456 &&
+                    it.optString("transport").equals("tcp", true) && RoomCircuitApi.validHost(it.optString("host"))
+            }?.getString("host")
+            origin.setText(address)
+            bind(game, listOf(t("Enter game IDs", "输入游戏 ID")) + catalog.map(::gameName))
+            game.setSelection(if (catalog.isEmpty()) 0 else 1)
+            resetPage()
+            renderPage(first, null)
+            message.text = ""
+        }
+    }
+
+    private fun gameName(item: JSONObject) =
+        if (chinese) item.optString("zh").ifBlank { item.getString("name") } else item.getString("name")
+
+    private fun display(event: JSONObject): String {
+        val title = catalog.firstOrNull { entry ->
+            entry.getString("game").equals(event.getString("game"), true) &&
+                entry.getString("app").equals(event.getString("app"), true)
+        }?.let(::gameName) ?: event.getString("game").uppercase(Locale.ROOT)
+        val localStart = Instant.ofEpochSecond(event.getLong("starts")).atZone(ZoneId.systemDefault())
+            .format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.SHORT))
+        val star = if (event.getString("id") in followed) "★ " else ""
+        val count = event.getInt("interested")
+        return t("$star$title · $localStart · $count ready", "$star$title · $localStart · $count 人就绪")
+    }
+
+    private fun renderPage(page: JSONObject, selectedId: String?) {
+        serverTime = page.getLong("now")
+        serverAt = SystemClock.elapsedRealtime()
+        next = if (page.isNull("next")) null else page.getLong("next")
+        rows = entries(page, "rows")
+        val created = page.optJSONObject("created")
+        if (created != null && rows.none { it.getString("id") == created.getString("id") }) rows = listOf(created) + rows
+        renderRows(selectedId)
+    }
+
+    private fun renderRows(id: String?) {
+        bind(events, if (rows.isEmpty()) listOf(t("No appointments", "暂无约战")) else rows.map(::display))
+        events.setSelection(rows.indexOfFirst { it.getString("id") == id }.coerceAtLeast(0))
+        results.text = ""
+    }
+
+    private fun resetPage() { offsets.clear(); offsets.add(0L) }
+    private fun list(offset: Long) {
+        val client = api ?: return
+        val id = selected()?.getString("id")
+        runTask({ client.request("list", "offset" to offset) }) { renderPage(it, id) }
+    }
+
+    private fun page(forward: Boolean) {
+        val client = api ?: return
+        val offset = (if (forward) next else offsets.getOrNull(offsets.size - 2)) ?: return
+        runTask({ client.request("list", "offset" to offset) }) {
+            if (forward) offsets.add(offset) else offsets.removeAt(offsets.lastIndex)
+            renderPage(it, null)
+        }
+    }
+
+    private fun create() {
+        val client = api ?: return
+        val known = catalog.getOrNull(game.selectedItemPosition - 1)
+        val gameId = known?.getString("game") ?: lcid.text.toString().trim()
+        val app = known?.getString("app") ?: appId.text.toString().trim()
+        if (!RoomCircuitApi.hexId.matches(gameId) || gameId.all { it == '0' } || gameId.equals("ffffffffffffffff", true) ||
+            app.isNotEmpty() && !RoomCircuitApi.hexId.matches(app)) {
+            message.text = t("Check the game IDs.", "请检查游戏 ID。")
+            return
+        }
+        val offset = ZoneId.systemDefault().rules.getValidOffsets(starts).singleOrNull()
+        val timestamp = offset?.let { starts.toEpochSecond(it) }
+        if (timestamp == null || timestamp < now() || timestamp > now() + 7 * 86400) {
+            message.text = t("Choose a start time within the next seven days.", "请选择未来七天内的有效时间。")
+            return
+        }
+        val fields = mutableListOf<Pair<String, Any>>("game" to gameId, "starts" to timestamp)
+        if (app.isNotEmpty()) fields.add("app" to app)
+        runTask({ client.request("create", *fields.toTypedArray()) }) {
+            resetPage()
+            renderPage(it, it.optJSONObject("created")?.getString("id"))
+            message.text = t("Appointment created.", "约战已创建。")
+        }
+    }
+
+    private fun ready() {
+        val client = api ?: return
+        val item = selected() ?: return
+        val id = item.getString("id")
+        val action = if (item.getBoolean("ready")) "leave" else "ready"
+        runTask({ client.request(action, "id" to id) }) {
+            resetPage()
+            renderPage(it, id)
+            message.text = if (action == "leave") t("Ready cleared.", "已取消就绪。") else t("Ready for five minutes.", "就绪有效期五分钟。")
+        }
+    }
+
+    private fun follow() {
+        val id = selected()?.getString("id") ?: return
+        if (!followed.remove(id)) {
+            if (followed.size >= 12) {
+                message.text = t("You can follow up to 12 appointments.", "最多关注 12 个约战。")
+                return
+            }
+            followed.add(id)
+        } else openRooms.remove(id)
+        prefs.edit().putStringSet("followed", followed.toSet()).apply()
+        renderRows(id)
+        updateActions()
+    }
+
+    private fun roomRows(json: JSONObject) = entries(json, "rooms").filter { it.optBoolean("crossplay") }
+
+    private fun find() {
+        val client = api ?: return
+        val id = selected()?.getString("id") ?: return
+        runTask({ roomRows(client.request("rooms", "id" to id)) }) { open ->
+            results.text = if (open.isEmpty()) t("No compatible rooms are open.", "暂无可加入的跨端房间。") else
+                open.joinToString("\n") {
+                    val match = if (it.optBoolean("appointmentBound")) t("Appointment host", "约战房主")
+                    else if (it.optBoolean("titleConfirmed")) t("Same game", "同游戏") else t("LCID match", "按联机 ID 匹配")
+                    "${it.optString("host")} · ${it.optInt("players")}/${it.optInt("max")} · $match"
+                } + "\n" + t("Join from the game's Local Wireless menu.", "从游戏的本地通信菜单加入。")
+        }
+    }
+
+    private fun share() {
+        val id = selected()?.getString("id") ?: return
+        val uri = RoomCircuitApi.parseOrigin(prefs.getString("origin", "").orEmpty()) ?: return
+        val clipboard = activity.getSystemService(ClipboardManager::class.java) ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText("RoomCircuit", uri.resolve("/appointments/?event=$id").toString()))
+        message.text = t("Link copied.", "链接已复制。")
+    }
+
+    private fun configure() {
+        val host = relayHost ?: return
+        runTask({
+            val file = AtomicFile(File(appDirectory, "local-wireless-server.txt"))
+            val output = file.startWrite()
+            try {
+                output.write(host.toByteArray(Charsets.UTF_8))
+                file.finishWrite(output)
+            } catch (error: Exception) {
+                file.failWrite(output)
+                throw error
+            }
+        }) {
+            message.text = t("Relay saved. Start the game and open Local Wireless.", "已保存中继。启动游戏后打开本地通信。")
+        }
+    }
+}

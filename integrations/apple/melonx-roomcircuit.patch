@@ -1,0 +1,710 @@
+diff --git a/src/MeloNX/MeloNX/Info.plist b/src/MeloNX/MeloNX/Info.plist
+index 5272ad6..10428cf 100644
+--- a/src/MeloNX/MeloNX/Info.plist
++++ b/src/MeloNX/MeloNX/Info.plist
+@@ -2,6 +2,13 @@
+ <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+ <plist version="1.0">
+ <dict>
++	<key>NSLocalNetworkUsageDescription</key>
++	<string>MeloNX connects to your RoomCircuit appointment server and local wireless devices.</string>
++	<key>NSAppTransportSecurity</key>
++	<dict>
++		<key>NSAllowsLocalNetworking</key>
++		<true/>
++	</dict>
+ 	<key>CFBundleDocumentTypes</key>
+ 	<array>
+ 		<dict/>
+diff --git a/src/MeloNX/MeloNX/UI/Main/Settings/RoomCircuitPanel.swift b/src/MeloNX/MeloNX/UI/Main/Settings/RoomCircuitPanel.swift
+new file mode 100644
+index 0000000..e2a9888
+--- /dev/null
++++ b/src/MeloNX/MeloNX/UI/Main/Settings/RoomCircuitPanel.swift
+@@ -0,0 +1,453 @@
++// SPDX-License-Identifier: MIT
++import SwiftUI
++
++enum RoomCircuitAppleHost {
++    case meloNX
++    case nxPocket
++}
++
++@MainActor
++private final class RoomCircuitAppointments: ObservableObject {
++    @Published var address = UserDefaults.standard.string(forKey: "roomcircuit.server") ?? ""
++    @Published private(set) var service: RoomCircuitService?
++    @Published private(set) var options: RoomCircuitOptions?
++    @Published private(set) var rows: [RoomCircuitAppointment] = []
++    @Published private(set) var next: Int?
++    @Published private(set) var selected: RoomCircuitAppointment?
++    @Published private(set) var rooms: [RoomCircuitRoom] = []
++    @Published private(set) var follows: [String] = []
++    @Published private(set) var notice: String?
++    @Published private(set) var busy = false
++    @Published var failure: Error?
++    private var nextFollow = 0
++    private var previousRooms: [String: Set<String>] = [:]
++    private var clockOffset = 0
++
++    var now: Date { Date().addingTimeInterval(TimeInterval(clockOffset)) }
++
++    func connect() async {
++        await perform {
++            let origin = try RoomCircuitService.parseOrigin(address)
++            let client = RoomCircuitService(origin: origin, identity: RoomCircuitService.savedIdentity(for: origin))
++            // Publish the new server only after it has successfully served appointments.
++            let newOptions = try await client.options()
++            let reply = try await client.get("list")
++            service = client
++            address = origin.absoluteString
++            UserDefaults.standard.set(address, forKey: "roomcircuit.server")
++            options = newOptions
++            updateClock(reply)
++            rows = reply.rows ?? []
++            next = reply.next
++            selected = nil
++            rooms = []
++            notice = nil
++            previousRooms = [:]
++            follows = Array((UserDefaults.standard.stringArray(forKey: RoomCircuitService.key(origin, "follows")) ?? []).prefix(12))
++            nextFollow = 0
++        }
++    }
++
++    func refresh() async {
++        guard let service else { return }
++        await perform { try await loadFirst(service) }
++    }
++
++    func loadMore() async {
++        guard let service, let next else { return }
++        await perform {
++            let reply = try await service.get("list", offset: next)
++            updateClock(reply)
++            let known = Set(rows.map(\.id))
++            rows.append(contentsOf: (reply.rows ?? []).filter { !known.contains($0.id) })
++            self.next = reply.next
++        }
++    }
++
++    func open(_ id: String) async {
++        guard let service else { return }
++        await perform { try await show(id, service: service) }
++    }
++
++    func closeDetail() {
++        selected = nil
++        rooms = []
++    }
++
++    func create(start: Date, game: String, app: String?) async -> Bool {
++        guard let service else { return false }
++        return await perform {
++            let reply = try await service.create(start: start, game: game, app: app)
++            updateClock(reply)
++            rows = reply.rows ?? []
++            next = reply.next
++            if let row = reply.created {
++                selected = row
++                rooms = []
++            }
++        }
++    }
++
++    func changeReady(_ event: RoomCircuitAppointment) async {
++        guard let service else { return }
++        await perform {
++            let reply = try await service.get(event.ready ? "leave" : "ready", id: event.id)
++            rows = reply.rows ?? []
++            next = reply.next
++            updateClock(reply)
++            try await show(event.id, service: service)
++        }
++    }
++
++    func canReady(_ event: RoomCircuitAppointment) -> Bool {
++        let opens = event.starts - (options?.readyBefore ?? 1800)
++        return now.timeIntervalSince1970 >= TimeInterval(opens)
++    }
++
++    func toggleFollow(_ id: String) {
++        guard let service else { return }
++        if let i = follows.firstIndex(of: id) {
++            follows.remove(at: i)
++            previousRooms[id] = nil
++        } else if follows.count < 12 {
++            follows.append(id)
++        }
++        UserDefaults.standard.set(follows, forKey: RoomCircuitService.key(service.origin, "follows"))
++    }
++
++    func updateVisiblePanel() async {
++        guard let service, !busy else { return }
++        let origin = service.origin
++        do {
++            if let id = selected?.id {
++                let reply = try await service.get("event", id: id)
++                guard self.service?.origin == origin, selected?.id == id, !busy else { return }
++                updateClock(reply)
++                selected = reply.rows?.first
++                let snapshot = try await service.get("rooms", id: id)
++                guard self.service?.origin == origin, selected?.id == id, !busy else { return }
++                rooms = snapshot.rooms ?? []
++            } else {
++                let page = try await service.get("list")
++                guard self.service?.origin == origin, selected == nil, !busy else { return }
++                updateClock(page)
++                // Do not replace rows the user explicitly paged in.
++                if rows.count <= 6 {
++                    rows = page.rows ?? []
++                    next = page.next
++                }
++            }
++
++            let ids = follows
++            guard !ids.isEmpty else { return }
++            let count = min(ids.count, 3)
++            let batch = (0..<count).map { ids[(nextFollow + $0) % ids.count] }
++            nextFollow = (nextFollow + count) % ids.count
++            for id in batch {
++                let reply = try await service.get("rooms", id: id)
++                guard self.service?.origin == origin, !busy else { return }
++                if !follows.contains(id) { continue }
++                let current = Set((reply.rooms ?? []).filter(\.crossplay).map(\.host))
++                if !current.subtracting(previousRooms[id] ?? []).isEmpty {
++                    notice = id
++                }
++                previousRooms[id] = current
++            }
++        } catch {
++            // Polling is best-effort. Manual operations show exact errors and keep their last result.
++        }
++    }
++
++    func clearNotice() { notice = nil }
++
++    private func show(_ id: String, service: RoomCircuitService) async throws {
++        let reply = try await service.get("event", id: id)
++        updateClock(reply)
++        guard let event = reply.rows?.first else { throw RoomCircuitFailure.response(404, "not_found") }
++        selected = event
++        rooms = []
++        let snapshot = try await service.get("rooms", id: id)
++        rooms = snapshot.rooms ?? []
++        if notice == id { notice = nil }
++    }
++
++    private func loadFirst(_ service: RoomCircuitService) async throws {
++        let reply = try await service.get("list")
++        updateClock(reply)
++        rows = reply.rows ?? []
++        next = reply.next
++    }
++
++    private func updateClock(_ reply: RoomCircuitReply) {
++        if let stamp = reply.now, (0...4_102_444_800).contains(stamp) {
++            clockOffset = stamp - Int(Date().timeIntervalSince1970)
++        }
++    }
++
++    @discardableResult
++    private func perform(_ work: () async throws -> Void) async -> Bool {
++        guard !busy else { return false }
++        busy = true
++        failure = nil
++        defer { busy = false }
++        do {
++            try await work()
++            return true
++        } catch is CancellationError {
++            return false
++        } catch {
++            failure = error
++            return false
++        }
++    }
++}
++
++struct RoomCircuitPanel: View {
++    let host: RoomCircuitAppleHost
++    let chinese: Bool
++    var showsClose = true
++    @Environment(\.dismiss) private var dismiss
++    @Environment(\.scenePhase) private var scenePhase
++    @StateObject private var model = RoomCircuitAppointments()
++    @State private var showCreate = false
++    @State private var date = Date()
++    @State private var game = ""
++    @State private var manualLCID = ""
++    @State private var manualApp = ""
++
++    private func word(_ english: String, _ simplified: String) -> String { chinese ? simplified : english }
++
++    var body: some View {
++        NavigationStack {
++            Form {
++                Section(word("Server", "服务器")) {
++                    TextField("https://rooms.example.net", text: $model.address)
++                        .autocorrectionDisabled()
++                        #if os(iOS)
++                        .textInputAutocapitalization(.never)
++                        .keyboardType(.URL)
++                        #endif
++                    Button(model.service == nil ? word("Connect", "连接") : word("Apply server", "应用服务器")) {
++                        Task { await model.connect() }
++                    }
++                    if let origin = model.service?.origin {
++                        Text(origin.absoluteString).font(.footnote).foregroundStyle(.secondary)
++                    }
++                }
++
++                if model.service != nil {
++                    if let notice = model.notice {
++                        Section(word("Room open", "房间已开放")) {
++                            Button(word("View followed appointment", "查看关注的约战")) {
++                                Task { await model.open(notice) }
++                            }
++                            Button(word("Dismiss notice", "关闭提醒")) { model.clearNotice() }
++                        }
++                    }
++
++                    if let event = model.selected {
++                        detail(event)
++                    } else {
++                        schedule
++                    }
++                    connectionInfo
++                }
++                if model.busy { ProgressView().frame(maxWidth: .infinity) }
++                if let error = model.failure, !showCreate {
++                    Text(message(error)).foregroundStyle(.red).accessibilityAddTraits(.updatesFrequently)
++                }
++            }
++            .disabled(model.busy)
++            .navigationTitle(word("RoomCircuit", "RoomCircuit"))
++            .toolbar {
++                if showsClose {
++                    ToolbarItem(placement: .cancellationAction) { Button(word("Close", "关闭")) { dismiss() } }
++                }
++            }
++            .sheet(isPresented: $showCreate) { createForm }
++        }
++        .frame(minWidth: minimumWidth, minHeight: minimumHeight)
++        .task {
++            if !model.address.isEmpty { await model.connect() }
++            while !Task.isCancelled {
++                do { try await Task.sleep(for: .seconds(20)) }
++                catch { return }
++                if scenePhase == .active { await model.updateVisiblePanel() }
++            }
++        }
++    }
++
++    private var minimumWidth: CGFloat? {
++        #if os(macOS)
++        480
++        #else
++        nil
++        #endif
++    }
++
++    private var minimumHeight: CGFloat? {
++        #if os(macOS)
++        460
++        #else
++        nil
++        #endif
++    }
++
++    private var schedule: some View {
++        Section(word("Appointments", "约战")) {
++            Button(word("New appointment", "发起约战"), systemImage: "plus") {
++                date = model.now.addingTimeInterval(15 * 60)
++                game = model.options?.games.first?.id ?? ""
++                manualLCID = ""
++                manualApp = ""
++                model.failure = nil
++                showCreate = true
++            }
++            Button(word("Refresh", "刷新"), systemImage: "arrow.clockwise") { Task { await model.refresh() } }
++            if model.rows.isEmpty { Text(word("No appointments yet.", "暂无约战。")).foregroundStyle(.secondary) }
++            ForEach(model.rows) { row in
++                Button {
++                    Task { await model.open(row.id) }
++                } label: {
++                    VStack(alignment: .leading, spacing: 3) {
++                        Text(title(row))
++                        Text(dateLabel(row) + " · " + countLabel(row)).font(.caption).foregroundStyle(.secondary)
++                    }
++                }
++            }
++            if model.next != nil {
++                Button(word("Show more", "加载更多")) { Task { await model.loadMore() } }
++            }
++        }
++    }
++
++    private func detail(_ event: RoomCircuitAppointment) -> some View {
++        Group {
++            Section(title(event)) {
++                Text(dateLabel(event) + " · " + countLabel(event))
++                Button(event.ready ? word("Cancel ready", "取消就绪") : word("Ready", "标记就绪")) {
++                    Task { await model.changeReady(event) }
++                }
++                .disabled(!event.ready && !model.canReady(event))
++                if !event.ready && !model.canReady(event) {
++                    let minutes = (model.options?.readyBefore ?? 1800) / 60
++                    Text(word("Ready opens \(minutes) minutes before the appointment.", "约战前 \(minutes) 分钟可标记就绪。"))
++                        .font(.footnote).foregroundStyle(.secondary)
++                }
++                Button(model.follows.contains(event.id) ? word("Unfollow", "取消关注") : word("Follow", "关注")) {
++                    model.toggleFollow(event.id)
++                }
++                .disabled(!model.follows.contains(event.id) && model.follows.count >= 12)
++                Button(word("Back to appointments", "返回约战列表")) { model.closeDetail() }
++            }
++
++            Section(word("Compatible open rooms", "可加入的跨端房间")) {
++                let compatible = model.rooms.filter(\.crossplay)
++                if compatible.isEmpty {
++                    Text(word("No compatible room is open.", "暂无可加入的跨端房间。")).foregroundStyle(.secondary)
++                }
++                ForEach(Array(compatible.enumerated()), id: \.offset) { _, room in
++                    VStack(alignment: .leading, spacing: 3) {
++                        Text(room.host)
++                        let match = room.appointmentBound ? word("This appointment", "本次约战") :
++                            room.titleConfirmed ? word("Matching game", "同一游戏") : word("Matching LCID", "联机 ID 匹配")
++                        Text("\(room.players)/\(room.max) · \(match)").font(.caption).foregroundStyle(.secondary)
++                    }
++                }
++                Button(word("Refresh rooms", "刷新房间")) { Task { await model.open(event.id) } }
++            }
++        }
++    }
++
++    private var connectionInfo: some View {
++        Section(word("Play together", "联机设置")) {
++            if let route = model.options?.endpoints.first(where: { $0.id == "lanplay" }) {
++                LabeledContent(word("LAN Play relay", "LAN Play 中继")) {
++                    Text(route.address).textSelection(.enabled)
++                }
++                let instructions = switch host {
++                case .meloNX:
++                    word("Use a compatible Wi-Fi gateway and a MeloNX build with LAN Play routing. Join from the game’s Local Wireless menu.",
++                         "使用兼容的 Wi-Fi 网关和支持 LAN Play 路由的 MeloNX 构建，再从游戏的本地通信菜单加入。")
++                case .nxPocket:
++                    word("Set up the Wi-Fi gateway and join from a supported game’s Local Wireless menu.",
++                         "先设置 Wi-Fi 网关，再从支持的游戏的本地通信菜单加入。")
++                }
++                Text(instructions).font(.footnote).foregroundStyle(.secondary)
++            } else {
++                Text(word("LAN Play is not enabled on this relay.", "此中继尚未开启 LAN Play。")).foregroundStyle(.secondary)
++            }
++        }
++    }
++
++    private var createForm: some View {
++        NavigationStack {
++            Form {
++                Picker(word("Game", "游戏"), selection: $game) {
++                    ForEach(model.options?.games ?? []) { option in
++                        Text(chinese ? option.zh ?? option.name : option.name).tag(option.id)
++                    }
++                    Text(word("Enter local communication ID", "手动填写联机 ID")).tag("")
++                }
++                if game.isEmpty {
++                    TextField(word("16-digit LCID", "16 位联机 ID"), text: $manualLCID).autocorrectionDisabled()
++                    TextField(word("App ID (optional)", "应用 ID（选填）"), text: $manualApp).autocorrectionDisabled()
++                }
++                DatePicker(word("Starts", "开始时间"), selection: $date)
++                if model.busy { ProgressView() }
++                if let error = model.failure { Text(message(error)).foregroundStyle(.red) }
++            }
++            .disabled(model.busy)
++            .navigationTitle(word("New appointment", "发起约战"))
++            .toolbar {
++                ToolbarItem(placement: .cancellationAction) { Button(word("Cancel", "取消")) { showCreate = false } }
++                ToolbarItem(placement: .confirmationAction) {
++                    Button(word("Create", "发布")) {
++                        let selected = model.options?.games.first { $0.id == game }
++                        let app = manualApp.trimmingCharacters(in: .whitespacesAndNewlines)
++                        Task {
++                            if await model.create(start: date, game: selected?.game ?? manualLCID,
++                                                  app: selected?.app ?? (selected == nil && !app.isEmpty ? app : nil)) {
++                                showCreate = false
++                            }
++                        }
++                    }
++                    .disabled(model.busy)
++                }
++            }
++            .interactiveDismissDisabled(model.busy)
++        }
++        .frame(minWidth: minimumWidth, minHeight: minimumHeight)
++    }
++
++    private func title(_ event: RoomCircuitAppointment) -> String {
++        let game = model.options?.games.first {
++            $0.game.caseInsensitiveCompare(event.game) == .orderedSame &&
++            $0.app?.caseInsensitiveCompare(event.app) == .orderedSame
++        }
++        return (chinese ? game?.zh ?? game?.name : game?.name) ?? event.game.uppercased()
++    }
++
++    private func dateLabel(_ event: RoomCircuitAppointment) -> String {
++        Date(timeIntervalSince1970: TimeInterval(event.starts)).formatted(date: .abbreviated, time: .shortened)
++    }
++
++    private func countLabel(_ event: RoomCircuitAppointment) -> String {
++        chinese ? "\(event.interested) 人就绪" : "\(event.interested) ready"
++    }
++
++    private func message(_ error: Error) -> String {
++        switch error as? RoomCircuitFailure {
++        case .origin: word("Enter an HTTPS server address, or an HTTP address on your local network.",
++                           "请输入 HTTPS 服务器地址，或本地网络的 HTTP 地址。")
++        case .capability: word("Update the relay to a version that supports native appointments.",
++                               "请将中继升级到支持原生约战的版本。")
++        case .input: word("Enter a valid 16-digit hexadecimal local communication ID.",
++                          "请输入有效的 16 位十六进制联机 ID。")
++        case .response(_, "limit"): word("Too many requests. Wait and try again.", "请求过多，请稍后再试。")
++        case .response(_, "invalid"): word("Check the start time or readiness window.", "请检查开始时间或就绪时间。")
++        case .response(_, "not_found"): word("That appointment is no longer available.", "该约战已不可用。")
++        default: word("Could not load RoomCircuit. Check the server and try again.", "无法读取 RoomCircuit，请检查服务器后重试。")
++        }
++    }
++}
+diff --git a/src/MeloNX/MeloNX/UI/Main/Settings/RoomCircuitService.swift b/src/MeloNX/MeloNX/UI/Main/Settings/RoomCircuitService.swift
+new file mode 100644
+index 0000000..2014033
+--- /dev/null
++++ b/src/MeloNX/MeloNX/UI/Main/Settings/RoomCircuitService.swift
+@@ -0,0 +1,195 @@
++// SPDX-License-Identifier: MIT
++import CryptoKit
++import Foundation
++
++struct RoomCircuitAppointment: Decodable, Identifiable, Equatable, Sendable {
++    let id: String
++    let starts: Int
++    let game: String
++    let app: String
++    let interested: Int
++    let ready: Bool
++}
++
++struct RoomCircuitGame: Decodable, Identifiable, Sendable {
++    let game: String
++    let app: String?
++    let name: String
++    let zh: String?
++    var id: String { game + (app ?? "") }
++}
++
++struct RoomCircuitEndpoint: Decodable, Identifiable, Sendable {
++    let id: String
++    let host: String
++    let port: Int
++    let transport: String
++
++    var address: String { host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)" }
++}
++
++struct RoomCircuitOptions: Decodable, Sendable {
++    let nativeApi: Int?
++    let games: [RoomCircuitGame]
++    let endpoints: [RoomCircuitEndpoint]
++    let readyBefore: Int
++    let readyLease: Int
++}
++
++struct RoomCircuitRoom: Decodable, Sendable {
++    let host: String
++    let players: Int
++    let max: Int
++    let appointmentBound: Bool
++    let crossplay: Bool
++    let titleConfirmed: Bool
++}
++
++struct RoomCircuitReply: Decodable, Sendable {
++    let now: Int?
++    let rows: [RoomCircuitAppointment]?
++    let rooms: [RoomCircuitRoom]?
++    let next: Int?
++    let created: RoomCircuitAppointment?
++    let error: String?
++}
++
++enum RoomCircuitFailure: Error, Equatable {
++    case origin
++    case input
++    case capability
++    case response(Int, String?)
++}
++
++struct RoomCircuitRequest: Encodable {
++    let action: String
++    let identity: String
++    var offset: Int? = nil
++    var id: String? = nil
++    var starts: Int? = nil
++    var game: String? = nil
++    var app: String? = nil
++}
++
++final class RoomCircuitNoRedirects: NSObject, URLSessionTaskDelegate {
++    func urlSession(_ session: URLSession, task: URLSessionTask,
++                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
++                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
++        completionHandler(nil)
++    }
++}
++
++struct RoomCircuitService: Sendable {
++    let origin: URL
++    let identity: String
++    private static let session: URLSession = {
++        let config = URLSessionConfiguration.ephemeral
++        config.httpShouldSetCookies = false
++        config.urlCache = nil
++        config.timeoutIntervalForRequest = 8
++        config.timeoutIntervalForResource = 12
++        return URLSession(configuration: config, delegate: RoomCircuitNoRedirects(), delegateQueue: nil)
++    }()
++
++    static func parseOrigin(_ input: String) throws -> URL {
++        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard var parts = URLComponents(string: value),
++              let hostname = parts.host?.lowercased(), !hostname.isEmpty,
++              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
++              ["", "/"].contains(parts.percentEncodedPath),
++              parts.port.map({ (1...65_535).contains($0) }) ?? true
++        else { throw RoomCircuitFailure.origin }
++
++        let scheme = parts.scheme?.lowercased()
++        guard scheme == "https" || (scheme == "http" && localHTTPHost(hostname))
++        else { throw RoomCircuitFailure.origin }
++        parts.scheme = scheme
++        parts.host = hostname
++        parts.path = ""
++        if (scheme == "https" && parts.port == 443) || (scheme == "http" && parts.port == 80) {
++            parts.port = nil
++        }
++        guard let url = parts.url else { throw RoomCircuitFailure.origin }
++        return url
++    }
++
++    private static func localHTTPHost(_ host: String) -> Bool {
++        if ["localhost", "[::1]", "::1"].contains(host) { return true }
++        let ipv4 = host.split(separator: ".", omittingEmptySubsequences: false)
++        if ipv4.count == 4 {
++            let octets = ipv4.compactMap { UInt8($0) }
++            if octets.count == 4 && zip(octets, ipv4).allSatisfy({ String($0) == $1 }) {
++                let a = octets[0], b = octets[1]
++                return a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && (16...31).contains(b))
++            }
++        }
++        return host.hasSuffix(".local") && host.utf8.allSatisfy { char in
++            (48...57).contains(char) || (97...122).contains(char) || char == 46 || char == 45
++        }
++    }
++
++    static func key(_ origin: URL, _ suffix: String) -> String {
++        let hash = SHA256.hash(data: Data(origin.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
++        return "roomcircuit.\(hash).\(suffix)"
++    }
++
++    static func savedIdentity(for origin: URL, defaults: UserDefaults = .standard) -> String {
++        let key = key(origin, "device")
++        if let value = defaults.string(forKey: key), hex(value, count: 32),
++           value.utf8.contains(where: { $0 != 48 }) { return value }
++        let value = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
++        defaults.set(value, forKey: key)
++        return value
++    }
++
++    static func hex(_ value: String, count: Int = 16) -> Bool {
++        value.utf8.count == count && value.utf8.allSatisfy {
++            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
++        }
++    }
++
++    private func fetch(_ request: URLRequest) async throws -> Data {
++        try Task.checkCancellation()
++        let (data, response) = try await Self.session.data(for: request)
++        try Task.checkCancellation()
++        guard let http = response as? HTTPURLResponse, data.count <= 128_000 else {
++            throw RoomCircuitFailure.response(0, nil)
++        }
++        guard (200..<300).contains(http.statusCode) else {
++            throw RoomCircuitFailure.response(http.statusCode, try? JSONDecoder().decode(RoomCircuitReply.self, from: data).error)
++        }
++        return data
++    }
++
++    func options() async throws -> RoomCircuitOptions {
++        let request = URLRequest(url: origin.appending(path: "/api/appointments/options"))
++        let options = try JSONDecoder().decode(RoomCircuitOptions.self, from: await fetch(request))
++        guard options.nativeApi == 1 else { throw RoomCircuitFailure.capability }
++        return options
++    }
++
++    func get(_ action: String, id: String? = nil, offset: Int? = nil) async throws -> RoomCircuitReply {
++        try await send(.init(action: action, identity: identity, offset: offset, id: id))
++    }
++
++    func create(start: Date, game: String, app: String?) async throws -> RoomCircuitReply {
++        let lcid = game.trimmingCharacters(in: .whitespacesAndNewlines)
++        let appID = app?.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard Self.hex(lcid), lcid != "0000000000000000", lcid.lowercased() != "ffffffffffffffff",
++              appID.map({ Self.hex($0) }) ?? true
++        else { throw RoomCircuitFailure.input }
++        return try await send(.init(action: "create", identity: identity, starts: Int(start.timeIntervalSince1970),
++                                    game: lcid, app: appID))
++    }
++
++    private func send(_ command: RoomCircuitRequest) async throws -> RoomCircuitReply {
++        var request = URLRequest(url: origin.appending(path: "/api/appointments/native"))
++        request.httpMethod = "POST"
++        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
++        request.setValue("native-v1", forHTTPHeaderField: "X-RoomCircuit-Client")
++        request.httpBody = try JSONEncoder().encode(command)
++        let reply = try JSONDecoder().decode(RoomCircuitReply.self, from: await fetch(request))
++        if let error = reply.error { throw RoomCircuitFailure.response(200, error) }
++        return reply
++    }
++}
+diff --git a/src/MeloNX/MeloNX/UI/Main/Settings/SettingsView.swift b/src/MeloNX/MeloNX/UI/Main/Settings/SettingsView.swift
+index 48371fb..66a690c 100644
+--- a/src/MeloNX/MeloNX/UI/Main/Settings/SettingsView.swift
++++ b/src/MeloNX/MeloNX/UI/Main/Settings/SettingsView.swift
+@@ -33,6 +33,7 @@ struct SettingsView: View {
+     @State private var showingMemoryLimit = false
+     @State private var showingThemePicker = false
+     @State private var showingKeyboardConfig = false
++    @State private var showingRoomCircuit = false
+     @FocusState private var isArgumentsKeyboardVisible: Bool
+     
+     
+@@ -178,6 +179,9 @@ struct SettingsView: View {
+                 iPadSettings
+             }
+         }
++        .sheet(isPresented: $showingRoomCircuit) {
++            RoomCircuitPanel(host: .meloNX, chinese: Locale.preferredLanguages.first?.hasPrefix("zh") == true)
++        }
+         .onAppear { resolveConfiguredNetworkInterface() }
+         .onDisappear { ryujinxController.saveConfig() }
+     }
+@@ -960,6 +964,9 @@ struct SettingsView: View {
+             
+             // Network
+             Section {
++                Button { showingRoomCircuit = true } label: {
++                    Label("RoomCircuit", systemImage: "calendar")
++                }
+                 Picker("Network Interface", selection: selectedNetworkInterfaceId) {
+                     ForEach(networkInterfaces, id: \.self) { interface in
+                         Text(interface.displayName).tag(interface.name)

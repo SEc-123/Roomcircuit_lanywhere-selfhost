@@ -1,0 +1,826 @@
+diff --git a/dm/ios/Sources/LauncherHome.swift b/dm/ios/Sources/LauncherHome.swift
+index 428bfef..fbfef03 100644
+--- a/dm/ios/Sources/LauncherHome.swift
++++ b/dm/ios/Sources/LauncherHome.swift
+@@ -32,6 +32,7 @@ struct LauncherHome: View {
+     @ObservedObject var library: GameLibrary
+     let play: () -> Void
+     var close: (() -> Void)? = nil   // NX Pocket: close the game paused under the home screen
++    var roomCircuit: (() -> Void)? = nil
+     var m: LauncherModel { library.model }   // the selected game's settings
+     @State private var fold = FoldState()
+     @State private var page: LauncherPage?
+@@ -142,7 +143,7 @@ struct LauncherHome: View {
+             }
+         case .localPlay:
+             SettingsPage(title: tr("Local play"), size: size, safe: safe, portrait: portrait, back: back, side: { PageBadge(symbol: "person.2", title: tr("Local play"), note: tr("Runs the game's local wireless mode with devices on the same Wi-Fi network.")) }) {
+-                SettingsList(m: m, sections: m.sections.filter { $0 == "Local play" }, note: localPlayOn == nil ? tr("This game does not support local play.") : "")
++                SettingsList(m: m, sections: m.sections.filter { $0 == "Local play" }, note: localPlayOn == nil ? tr("This game does not support local play.") : "", roomCircuit: roomCircuit)
+             }
+         case .controls:
+             SettingsPage(title: tr("Button layout"), size: size, safe: safe, portrait: portrait, back: back, side: { PageBadge(symbol: "gamecontroller", title: tr("Button layout"), note: tr("To move, resize or hide touch controls, start the game and tap Edit to the right of +. In games started from NX Pocket, Home to the left of − pauses the game and returns here.")) }) {
+@@ -150,7 +151,7 @@ struct LauncherHome: View {
+             }
+         case .settings:
+             SettingsPage(title: tr("Settings"), size: size, safe: safe, portrait: portrait, back: back, side: { PageBadge(symbol: "gearshape", title: tr("Settings"), note: tr("Per-game options are in Game settings.")) }) {
+-                SettingsList(m: m, sections: [], note: "", app: true, certificate: PocketCertificate.importP12 == nil ? nil : { library.reload() }, about: library.canImport)
++                SettingsList(m: m, sections: [], note: "", app: true, certificate: PocketCertificate.importP12 == nil ? nil : { library.reload() }, about: library.canImport, roomCircuit: roomCircuit)
+             }
+         }
+     }
+@@ -617,11 +618,12 @@ struct SettingsList: View {
+     var linked = false                // used in place: removing forgets the link, the pack stays
+     var certificate: (() -> Void)? = nil   // NX Pocket's Settings: its developer certificate (called after a change: the packs' checks change with it)
+     var about = false                       // NX Pocket's Settings: About NX Pocket, last
++    var roomCircuit: (() -> Void)? = nil
+ 
+     var body: some View {
+         VStack(alignment: .leading, spacing: 10) {
+             if !note.isEmpty { Text(note).font(.system(size: 13)).foregroundStyle(Palette.soft) }
+-            if !sections.isEmpty || app || remove != nil {
++            if !sections.isEmpty || app || remove != nil || roomCircuit != nil {
+                 List {
+                     ForEach(sections, id: \.self) { section in
+                         let rows = m.rows(in: section)
+@@ -651,6 +653,12 @@ struct SettingsList: View {
+                             Text(tr(linked ? "Removes the link only; the pack stays in its location. Saves and settings are kept." : "Deletes the copy stored in NX Pocket. Saves and settings are kept."))
+                         }
+                     }
++                    if let roomCircuit {
++                        Section {
++                            Button(action: roomCircuit) { Label("RoomCircuit", systemImage: "calendar") }
++                                .listRowBackground(Palette.panel)
++                        }
++                    }
+                     if let certificate { CertificateSection(changed: certificate) }
+                     if about { LanguageSection().listRowBackground(Palette.panel) }
+                     if app {
+diff --git a/dm/ios/pocket/PocketApp.swift b/dm/ios/pocket/PocketApp.swift
+index 6a7463d..c182cb3 100644
+--- a/dm/ios/pocket/PocketApp.swift
++++ b/dm/ios/pocket/PocketApp.swift
+@@ -32,7 +32,7 @@ final class PocketSceneDelegate: UIResponder, UIWindowSceneDelegate {
+         PackSigner.adoptDroppedCertificate()
+         library.reload()
+         let w = UIWindow(windowScene: ws)
+-        w.rootViewController = LauncherHost(rootView: LauncherHome(library: library, play: { [weak self] in self?.play() }, close: { [weak self] in self?.confirmClose(next: nil) }))
++        w.rootViewController = LauncherHost(rootView: PocketRoomCircuitHome(library: library, play: { [weak self] in self?.play() }, close: { [weak self] in self?.confirmClose(next: nil) }))
+         w.makeKeyAndVisible()
+         window = w
+         if ProcessInfo.processInfo.environment["DM_POCKET_SYSLOG"] == "1" { SysLogMirror.start() }
+@@ -295,3 +295,19 @@ enum SysLogMirror {
+     }
+ }
+ 
++
++// Pass the optional action into the shared launcher. The standalone game
++// targets can keep using LauncherHome without compiling RoomCircuit.
++private struct PocketRoomCircuitHome: View {
++    @ObservedObject var library: GameLibrary
++    let play: () -> Void
++    let close: () -> Void
++    @State private var showRoomCircuit = false
++
++    var body: some View {
++        LauncherHome(library: library, play: play, close: close, roomCircuit: { showRoomCircuit = true })
++            .sheet(isPresented: $showRoomCircuit) {
++                RoomCircuitPanel(host: .nxPocket, chinese: launcherChinese)
++            }
++    }
++}
+diff --git a/dm/ios/pocket/RoomCircuitPanel.swift b/dm/ios/pocket/RoomCircuitPanel.swift
+new file mode 100644
+index 0000000..e2a9888
+--- /dev/null
++++ b/dm/ios/pocket/RoomCircuitPanel.swift
+@@ -0,0 +1,453 @@
++// SPDX-License-Identifier: MIT
++import SwiftUI
++
++enum RoomCircuitAppleHost {
++    case meloNX
++    case nxPocket
++}
++
++@MainActor
++private final class RoomCircuitAppointments: ObservableObject {
++    @Published var address = UserDefaults.standard.string(forKey: "roomcircuit.server") ?? ""
++    @Published private(set) var service: RoomCircuitService?
++    @Published private(set) var options: RoomCircuitOptions?
++    @Published private(set) var rows: [RoomCircuitAppointment] = []
++    @Published private(set) var next: Int?
++    @Published private(set) var selected: RoomCircuitAppointment?
++    @Published private(set) var rooms: [RoomCircuitRoom] = []
++    @Published private(set) var follows: [String] = []
++    @Published private(set) var notice: String?
++    @Published private(set) var busy = false
++    @Published var failure: Error?
++    private var nextFollow = 0
++    private var previousRooms: [String: Set<String>] = [:]
++    private var clockOffset = 0
++
++    var now: Date { Date().addingTimeInterval(TimeInterval(clockOffset)) }
++
++    func connect() async {
++        await perform {
++            let origin = try RoomCircuitService.parseOrigin(address)
++            let client = RoomCircuitService(origin: origin, identity: RoomCircuitService.savedIdentity(for: origin))
++            // Publish the new server only after it has successfully served appointments.
++            let newOptions = try await client.options()
++            let reply = try await client.get("list")
++            service = client
++            address = origin.absoluteString
++            UserDefaults.standard.set(address, forKey: "roomcircuit.server")
++            options = newOptions
++            updateClock(reply)
++            rows = reply.rows ?? []
++            next = reply.next
++            selected = nil
++            rooms = []
++            notice = nil
++            previousRooms = [:]
++            follows = Array((UserDefaults.standard.stringArray(forKey: RoomCircuitService.key(origin, "follows")) ?? []).prefix(12))
++            nextFollow = 0
++        }
++    }
++
++    func refresh() async {
++        guard let service else { return }
++        await perform { try await loadFirst(service) }
++    }
++
++    func loadMore() async {
++        guard let service, let next else { return }
++        await perform {
++            let reply = try await service.get("list", offset: next)
++            updateClock(reply)
++            let known = Set(rows.map(\.id))
++            rows.append(contentsOf: (reply.rows ?? []).filter { !known.contains($0.id) })
++            self.next = reply.next
++        }
++    }
++
++    func open(_ id: String) async {
++        guard let service else { return }
++        await perform { try await show(id, service: service) }
++    }
++
++    func closeDetail() {
++        selected = nil
++        rooms = []
++    }
++
++    func create(start: Date, game: String, app: String?) async -> Bool {
++        guard let service else { return false }
++        return await perform {
++            let reply = try await service.create(start: start, game: game, app: app)
++            updateClock(reply)
++            rows = reply.rows ?? []
++            next = reply.next
++            if let row = reply.created {
++                selected = row
++                rooms = []
++            }
++        }
++    }
++
++    func changeReady(_ event: RoomCircuitAppointment) async {
++        guard let service else { return }
++        await perform {
++            let reply = try await service.get(event.ready ? "leave" : "ready", id: event.id)
++            rows = reply.rows ?? []
++            next = reply.next
++            updateClock(reply)
++            try await show(event.id, service: service)
++        }
++    }
++
++    func canReady(_ event: RoomCircuitAppointment) -> Bool {
++        let opens = event.starts - (options?.readyBefore ?? 1800)
++        return now.timeIntervalSince1970 >= TimeInterval(opens)
++    }
++
++    func toggleFollow(_ id: String) {
++        guard let service else { return }
++        if let i = follows.firstIndex(of: id) {
++            follows.remove(at: i)
++            previousRooms[id] = nil
++        } else if follows.count < 12 {
++            follows.append(id)
++        }
++        UserDefaults.standard.set(follows, forKey: RoomCircuitService.key(service.origin, "follows"))
++    }
++
++    func updateVisiblePanel() async {
++        guard let service, !busy else { return }
++        let origin = service.origin
++        do {
++            if let id = selected?.id {
++                let reply = try await service.get("event", id: id)
++                guard self.service?.origin == origin, selected?.id == id, !busy else { return }
++                updateClock(reply)
++                selected = reply.rows?.first
++                let snapshot = try await service.get("rooms", id: id)
++                guard self.service?.origin == origin, selected?.id == id, !busy else { return }
++                rooms = snapshot.rooms ?? []
++            } else {
++                let page = try await service.get("list")
++                guard self.service?.origin == origin, selected == nil, !busy else { return }
++                updateClock(page)
++                // Do not replace rows the user explicitly paged in.
++                if rows.count <= 6 {
++                    rows = page.rows ?? []
++                    next = page.next
++                }
++            }
++
++            let ids = follows
++            guard !ids.isEmpty else { return }
++            let count = min(ids.count, 3)
++            let batch = (0..<count).map { ids[(nextFollow + $0) % ids.count] }
++            nextFollow = (nextFollow + count) % ids.count
++            for id in batch {
++                let reply = try await service.get("rooms", id: id)
++                guard self.service?.origin == origin, !busy else { return }
++                if !follows.contains(id) { continue }
++                let current = Set((reply.rooms ?? []).filter(\.crossplay).map(\.host))
++                if !current.subtracting(previousRooms[id] ?? []).isEmpty {
++                    notice = id
++                }
++                previousRooms[id] = current
++            }
++        } catch {
++            // Polling is best-effort. Manual operations show exact errors and keep their last result.
++        }
++    }
++
++    func clearNotice() { notice = nil }
++
++    private func show(_ id: String, service: RoomCircuitService) async throws {
++        let reply = try await service.get("event", id: id)
++        updateClock(reply)
++        guard let event = reply.rows?.first else { throw RoomCircuitFailure.response(404, "not_found") }
++        selected = event
++        rooms = []
++        let snapshot = try await service.get("rooms", id: id)
++        rooms = snapshot.rooms ?? []
++        if notice == id { notice = nil }
++    }
++
++    private func loadFirst(_ service: RoomCircuitService) async throws {
++        let reply = try await service.get("list")
++        updateClock(reply)
++        rows = reply.rows ?? []
++        next = reply.next
++    }
++
++    private func updateClock(_ reply: RoomCircuitReply) {
++        if let stamp = reply.now, (0...4_102_444_800).contains(stamp) {
++            clockOffset = stamp - Int(Date().timeIntervalSince1970)
++        }
++    }
++
++    @discardableResult
++    private func perform(_ work: () async throws -> Void) async -> Bool {
++        guard !busy else { return false }
++        busy = true
++        failure = nil
++        defer { busy = false }
++        do {
++            try await work()
++            return true
++        } catch is CancellationError {
++            return false
++        } catch {
++            failure = error
++            return false
++        }
++    }
++}
++
++struct RoomCircuitPanel: View {
++    let host: RoomCircuitAppleHost
++    let chinese: Bool
++    var showsClose = true
++    @Environment(\.dismiss) private var dismiss
++    @Environment(\.scenePhase) private var scenePhase
++    @StateObject private var model = RoomCircuitAppointments()
++    @State private var showCreate = false
++    @State private var date = Date()
++    @State private var game = ""
++    @State private var manualLCID = ""
++    @State private var manualApp = ""
++
++    private func word(_ english: String, _ simplified: String) -> String { chinese ? simplified : english }
++
++    var body: some View {
++        NavigationStack {
++            Form {
++                Section(word("Server", "服务器")) {
++                    TextField("https://rooms.example.net", text: $model.address)
++                        .autocorrectionDisabled()
++                        #if os(iOS)
++                        .textInputAutocapitalization(.never)
++                        .keyboardType(.URL)
++                        #endif
++                    Button(model.service == nil ? word("Connect", "连接") : word("Apply server", "应用服务器")) {
++                        Task { await model.connect() }
++                    }
++                    if let origin = model.service?.origin {
++                        Text(origin.absoluteString).font(.footnote).foregroundStyle(.secondary)
++                    }
++                }
++
++                if model.service != nil {
++                    if let notice = model.notice {
++                        Section(word("Room open", "房间已开放")) {
++                            Button(word("View followed appointment", "查看关注的约战")) {
++                                Task { await model.open(notice) }
++                            }
++                            Button(word("Dismiss notice", "关闭提醒")) { model.clearNotice() }
++                        }
++                    }
++
++                    if let event = model.selected {
++                        detail(event)
++                    } else {
++                        schedule
++                    }
++                    connectionInfo
++                }
++                if model.busy { ProgressView().frame(maxWidth: .infinity) }
++                if let error = model.failure, !showCreate {
++                    Text(message(error)).foregroundStyle(.red).accessibilityAddTraits(.updatesFrequently)
++                }
++            }
++            .disabled(model.busy)
++            .navigationTitle(word("RoomCircuit", "RoomCircuit"))
++            .toolbar {
++                if showsClose {
++                    ToolbarItem(placement: .cancellationAction) { Button(word("Close", "关闭")) { dismiss() } }
++                }
++            }
++            .sheet(isPresented: $showCreate) { createForm }
++        }
++        .frame(minWidth: minimumWidth, minHeight: minimumHeight)
++        .task {
++            if !model.address.isEmpty { await model.connect() }
++            while !Task.isCancelled {
++                do { try await Task.sleep(for: .seconds(20)) }
++                catch { return }
++                if scenePhase == .active { await model.updateVisiblePanel() }
++            }
++        }
++    }
++
++    private var minimumWidth: CGFloat? {
++        #if os(macOS)
++        480
++        #else
++        nil
++        #endif
++    }
++
++    private var minimumHeight: CGFloat? {
++        #if os(macOS)
++        460
++        #else
++        nil
++        #endif
++    }
++
++    private var schedule: some View {
++        Section(word("Appointments", "约战")) {
++            Button(word("New appointment", "发起约战"), systemImage: "plus") {
++                date = model.now.addingTimeInterval(15 * 60)
++                game = model.options?.games.first?.id ?? ""
++                manualLCID = ""
++                manualApp = ""
++                model.failure = nil
++                showCreate = true
++            }
++            Button(word("Refresh", "刷新"), systemImage: "arrow.clockwise") { Task { await model.refresh() } }
++            if model.rows.isEmpty { Text(word("No appointments yet.", "暂无约战。")).foregroundStyle(.secondary) }
++            ForEach(model.rows) { row in
++                Button {
++                    Task { await model.open(row.id) }
++                } label: {
++                    VStack(alignment: .leading, spacing: 3) {
++                        Text(title(row))
++                        Text(dateLabel(row) + " · " + countLabel(row)).font(.caption).foregroundStyle(.secondary)
++                    }
++                }
++            }
++            if model.next != nil {
++                Button(word("Show more", "加载更多")) { Task { await model.loadMore() } }
++            }
++        }
++    }
++
++    private func detail(_ event: RoomCircuitAppointment) -> some View {
++        Group {
++            Section(title(event)) {
++                Text(dateLabel(event) + " · " + countLabel(event))
++                Button(event.ready ? word("Cancel ready", "取消就绪") : word("Ready", "标记就绪")) {
++                    Task { await model.changeReady(event) }
++                }
++                .disabled(!event.ready && !model.canReady(event))
++                if !event.ready && !model.canReady(event) {
++                    let minutes = (model.options?.readyBefore ?? 1800) / 60
++                    Text(word("Ready opens \(minutes) minutes before the appointment.", "约战前 \(minutes) 分钟可标记就绪。"))
++                        .font(.footnote).foregroundStyle(.secondary)
++                }
++                Button(model.follows.contains(event.id) ? word("Unfollow", "取消关注") : word("Follow", "关注")) {
++                    model.toggleFollow(event.id)
++                }
++                .disabled(!model.follows.contains(event.id) && model.follows.count >= 12)
++                Button(word("Back to appointments", "返回约战列表")) { model.closeDetail() }
++            }
++
++            Section(word("Compatible open rooms", "可加入的跨端房间")) {
++                let compatible = model.rooms.filter(\.crossplay)
++                if compatible.isEmpty {
++                    Text(word("No compatible room is open.", "暂无可加入的跨端房间。")).foregroundStyle(.secondary)
++                }
++                ForEach(Array(compatible.enumerated()), id: \.offset) { _, room in
++                    VStack(alignment: .leading, spacing: 3) {
++                        Text(room.host)
++                        let match = room.appointmentBound ? word("This appointment", "本次约战") :
++                            room.titleConfirmed ? word("Matching game", "同一游戏") : word("Matching LCID", "联机 ID 匹配")
++                        Text("\(room.players)/\(room.max) · \(match)").font(.caption).foregroundStyle(.secondary)
++                    }
++                }
++                Button(word("Refresh rooms", "刷新房间")) { Task { await model.open(event.id) } }
++            }
++        }
++    }
++
++    private var connectionInfo: some View {
++        Section(word("Play together", "联机设置")) {
++            if let route = model.options?.endpoints.first(where: { $0.id == "lanplay" }) {
++                LabeledContent(word("LAN Play relay", "LAN Play 中继")) {
++                    Text(route.address).textSelection(.enabled)
++                }
++                let instructions = switch host {
++                case .meloNX:
++                    word("Use a compatible Wi-Fi gateway and a MeloNX build with LAN Play routing. Join from the game’s Local Wireless menu.",
++                         "使用兼容的 Wi-Fi 网关和支持 LAN Play 路由的 MeloNX 构建，再从游戏的本地通信菜单加入。")
++                case .nxPocket:
++                    word("Set up the Wi-Fi gateway and join from a supported game’s Local Wireless menu.",
++                         "先设置 Wi-Fi 网关，再从支持的游戏的本地通信菜单加入。")
++                }
++                Text(instructions).font(.footnote).foregroundStyle(.secondary)
++            } else {
++                Text(word("LAN Play is not enabled on this relay.", "此中继尚未开启 LAN Play。")).foregroundStyle(.secondary)
++            }
++        }
++    }
++
++    private var createForm: some View {
++        NavigationStack {
++            Form {
++                Picker(word("Game", "游戏"), selection: $game) {
++                    ForEach(model.options?.games ?? []) { option in
++                        Text(chinese ? option.zh ?? option.name : option.name).tag(option.id)
++                    }
++                    Text(word("Enter local communication ID", "手动填写联机 ID")).tag("")
++                }
++                if game.isEmpty {
++                    TextField(word("16-digit LCID", "16 位联机 ID"), text: $manualLCID).autocorrectionDisabled()
++                    TextField(word("App ID (optional)", "应用 ID（选填）"), text: $manualApp).autocorrectionDisabled()
++                }
++                DatePicker(word("Starts", "开始时间"), selection: $date)
++                if model.busy { ProgressView() }
++                if let error = model.failure { Text(message(error)).foregroundStyle(.red) }
++            }
++            .disabled(model.busy)
++            .navigationTitle(word("New appointment", "发起约战"))
++            .toolbar {
++                ToolbarItem(placement: .cancellationAction) { Button(word("Cancel", "取消")) { showCreate = false } }
++                ToolbarItem(placement: .confirmationAction) {
++                    Button(word("Create", "发布")) {
++                        let selected = model.options?.games.first { $0.id == game }
++                        let app = manualApp.trimmingCharacters(in: .whitespacesAndNewlines)
++                        Task {
++                            if await model.create(start: date, game: selected?.game ?? manualLCID,
++                                                  app: selected?.app ?? (selected == nil && !app.isEmpty ? app : nil)) {
++                                showCreate = false
++                            }
++                        }
++                    }
++                    .disabled(model.busy)
++                }
++            }
++            .interactiveDismissDisabled(model.busy)
++        }
++        .frame(minWidth: minimumWidth, minHeight: minimumHeight)
++    }
++
++    private func title(_ event: RoomCircuitAppointment) -> String {
++        let game = model.options?.games.first {
++            $0.game.caseInsensitiveCompare(event.game) == .orderedSame &&
++            $0.app?.caseInsensitiveCompare(event.app) == .orderedSame
++        }
++        return (chinese ? game?.zh ?? game?.name : game?.name) ?? event.game.uppercased()
++    }
++
++    private func dateLabel(_ event: RoomCircuitAppointment) -> String {
++        Date(timeIntervalSince1970: TimeInterval(event.starts)).formatted(date: .abbreviated, time: .shortened)
++    }
++
++    private func countLabel(_ event: RoomCircuitAppointment) -> String {
++        chinese ? "\(event.interested) 人就绪" : "\(event.interested) ready"
++    }
++
++    private func message(_ error: Error) -> String {
++        switch error as? RoomCircuitFailure {
++        case .origin: word("Enter an HTTPS server address, or an HTTP address on your local network.",
++                           "请输入 HTTPS 服务器地址，或本地网络的 HTTP 地址。")
++        case .capability: word("Update the relay to a version that supports native appointments.",
++                               "请将中继升级到支持原生约战的版本。")
++        case .input: word("Enter a valid 16-digit hexadecimal local communication ID.",
++                          "请输入有效的 16 位十六进制联机 ID。")
++        case .response(_, "limit"): word("Too many requests. Wait and try again.", "请求过多，请稍后再试。")
++        case .response(_, "invalid"): word("Check the start time or readiness window.", "请检查开始时间或就绪时间。")
++        case .response(_, "not_found"): word("That appointment is no longer available.", "该约战已不可用。")
++        default: word("Could not load RoomCircuit. Check the server and try again.", "无法读取 RoomCircuit，请检查服务器后重试。")
++        }
++    }
++}
+diff --git a/dm/ios/pocket/RoomCircuitService.swift b/dm/ios/pocket/RoomCircuitService.swift
+new file mode 100644
+index 0000000..2014033
+--- /dev/null
++++ b/dm/ios/pocket/RoomCircuitService.swift
+@@ -0,0 +1,195 @@
++// SPDX-License-Identifier: MIT
++import CryptoKit
++import Foundation
++
++struct RoomCircuitAppointment: Decodable, Identifiable, Equatable, Sendable {
++    let id: String
++    let starts: Int
++    let game: String
++    let app: String
++    let interested: Int
++    let ready: Bool
++}
++
++struct RoomCircuitGame: Decodable, Identifiable, Sendable {
++    let game: String
++    let app: String?
++    let name: String
++    let zh: String?
++    var id: String { game + (app ?? "") }
++}
++
++struct RoomCircuitEndpoint: Decodable, Identifiable, Sendable {
++    let id: String
++    let host: String
++    let port: Int
++    let transport: String
++
++    var address: String { host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)" }
++}
++
++struct RoomCircuitOptions: Decodable, Sendable {
++    let nativeApi: Int?
++    let games: [RoomCircuitGame]
++    let endpoints: [RoomCircuitEndpoint]
++    let readyBefore: Int
++    let readyLease: Int
++}
++
++struct RoomCircuitRoom: Decodable, Sendable {
++    let host: String
++    let players: Int
++    let max: Int
++    let appointmentBound: Bool
++    let crossplay: Bool
++    let titleConfirmed: Bool
++}
++
++struct RoomCircuitReply: Decodable, Sendable {
++    let now: Int?
++    let rows: [RoomCircuitAppointment]?
++    let rooms: [RoomCircuitRoom]?
++    let next: Int?
++    let created: RoomCircuitAppointment?
++    let error: String?
++}
++
++enum RoomCircuitFailure: Error, Equatable {
++    case origin
++    case input
++    case capability
++    case response(Int, String?)
++}
++
++struct RoomCircuitRequest: Encodable {
++    let action: String
++    let identity: String
++    var offset: Int? = nil
++    var id: String? = nil
++    var starts: Int? = nil
++    var game: String? = nil
++    var app: String? = nil
++}
++
++final class RoomCircuitNoRedirects: NSObject, URLSessionTaskDelegate {
++    func urlSession(_ session: URLSession, task: URLSessionTask,
++                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
++                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
++        completionHandler(nil)
++    }
++}
++
++struct RoomCircuitService: Sendable {
++    let origin: URL
++    let identity: String
++    private static let session: URLSession = {
++        let config = URLSessionConfiguration.ephemeral
++        config.httpShouldSetCookies = false
++        config.urlCache = nil
++        config.timeoutIntervalForRequest = 8
++        config.timeoutIntervalForResource = 12
++        return URLSession(configuration: config, delegate: RoomCircuitNoRedirects(), delegateQueue: nil)
++    }()
++
++    static func parseOrigin(_ input: String) throws -> URL {
++        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard var parts = URLComponents(string: value),
++              let hostname = parts.host?.lowercased(), !hostname.isEmpty,
++              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
++              ["", "/"].contains(parts.percentEncodedPath),
++              parts.port.map({ (1...65_535).contains($0) }) ?? true
++        else { throw RoomCircuitFailure.origin }
++
++        let scheme = parts.scheme?.lowercased()
++        guard scheme == "https" || (scheme == "http" && localHTTPHost(hostname))
++        else { throw RoomCircuitFailure.origin }
++        parts.scheme = scheme
++        parts.host = hostname
++        parts.path = ""
++        if (scheme == "https" && parts.port == 443) || (scheme == "http" && parts.port == 80) {
++            parts.port = nil
++        }
++        guard let url = parts.url else { throw RoomCircuitFailure.origin }
++        return url
++    }
++
++    private static func localHTTPHost(_ host: String) -> Bool {
++        if ["localhost", "[::1]", "::1"].contains(host) { return true }
++        let ipv4 = host.split(separator: ".", omittingEmptySubsequences: false)
++        if ipv4.count == 4 {
++            let octets = ipv4.compactMap { UInt8($0) }
++            if octets.count == 4 && zip(octets, ipv4).allSatisfy({ String($0) == $1 }) {
++                let a = octets[0], b = octets[1]
++                return a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && (16...31).contains(b))
++            }
++        }
++        return host.hasSuffix(".local") && host.utf8.allSatisfy { char in
++            (48...57).contains(char) || (97...122).contains(char) || char == 46 || char == 45
++        }
++    }
++
++    static func key(_ origin: URL, _ suffix: String) -> String {
++        let hash = SHA256.hash(data: Data(origin.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
++        return "roomcircuit.\(hash).\(suffix)"
++    }
++
++    static func savedIdentity(for origin: URL, defaults: UserDefaults = .standard) -> String {
++        let key = key(origin, "device")
++        if let value = defaults.string(forKey: key), hex(value, count: 32),
++           value.utf8.contains(where: { $0 != 48 }) { return value }
++        let value = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
++        defaults.set(value, forKey: key)
++        return value
++    }
++
++    static func hex(_ value: String, count: Int = 16) -> Bool {
++        value.utf8.count == count && value.utf8.allSatisfy {
++            (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
++        }
++    }
++
++    private func fetch(_ request: URLRequest) async throws -> Data {
++        try Task.checkCancellation()
++        let (data, response) = try await Self.session.data(for: request)
++        try Task.checkCancellation()
++        guard let http = response as? HTTPURLResponse, data.count <= 128_000 else {
++            throw RoomCircuitFailure.response(0, nil)
++        }
++        guard (200..<300).contains(http.statusCode) else {
++            throw RoomCircuitFailure.response(http.statusCode, try? JSONDecoder().decode(RoomCircuitReply.self, from: data).error)
++        }
++        return data
++    }
++
++    func options() async throws -> RoomCircuitOptions {
++        let request = URLRequest(url: origin.appending(path: "/api/appointments/options"))
++        let options = try JSONDecoder().decode(RoomCircuitOptions.self, from: await fetch(request))
++        guard options.nativeApi == 1 else { throw RoomCircuitFailure.capability }
++        return options
++    }
++
++    func get(_ action: String, id: String? = nil, offset: Int? = nil) async throws -> RoomCircuitReply {
++        try await send(.init(action: action, identity: identity, offset: offset, id: id))
++    }
++
++    func create(start: Date, game: String, app: String?) async throws -> RoomCircuitReply {
++        let lcid = game.trimmingCharacters(in: .whitespacesAndNewlines)
++        let appID = app?.trimmingCharacters(in: .whitespacesAndNewlines)
++        guard Self.hex(lcid), lcid != "0000000000000000", lcid.lowercased() != "ffffffffffffffff",
++              appID.map({ Self.hex($0) }) ?? true
++        else { throw RoomCircuitFailure.input }
++        return try await send(.init(action: "create", identity: identity, starts: Int(start.timeIntervalSince1970),
++                                    game: lcid, app: appID))
++    }
++
++    private func send(_ command: RoomCircuitRequest) async throws -> RoomCircuitReply {
++        var request = URLRequest(url: origin.appending(path: "/api/appointments/native"))
++        request.httpMethod = "POST"
++        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
++        request.setValue("native-v1", forHTTPHeaderField: "X-RoomCircuit-Client")
++        request.httpBody = try JSONEncoder().encode(command)
++        let reply = try JSONDecoder().decode(RoomCircuitReply.self, from: await fetch(request))
++        if let error = reply.error { throw RoomCircuitFailure.response(200, error) }
++        return reply
++    }
++}
+diff --git a/dm/ios/pocket/project.yml b/dm/ios/pocket/project.yml
+index e941129..77c7308 100644
+--- a/dm/ios/pocket/project.yml
++++ b/dm/ios/pocket/project.yml
+@@ -12,6 +12,8 @@ targets:
+     platform: iOS
+     sources:
+       - path: PocketApp.swift
++      - path: RoomCircuitService.swift
++      - path: RoomCircuitPanel.swift
+       - path: PackSigner.swift
+       - path: ../Sources/PackSign.c
+       - path: AppIcon.icon          # NX Pocket's icon (Icon Composer layers: background, upper screen, lower screen; a dark background for the dark appearance)
+@@ -61,6 +63,8 @@ targets:
+         UIViewControllerBasedStatusBarAppearance: false
+         LSApplicationCategoryType: public.app-category.games
+         LSSupportsGameMode: true
++        NSAppTransportSecurity:
++          NSAllowsLocalNetworking: true
+         NSLocalNetworkUsageDescription: "Local play: find and join other devices on the same Wi-Fi."   # in Chinese: Localized/zh-Hans.lproj/InfoPlist.strings
+         CFBundleDevelopmentRegion: en
+         CFBundleLocalizations: [en, zh-Hans]  # the system's own words (permission prompts) in the language chosen (AppleLanguages, LauncherRow.swift AppLanguage)
+diff --git a/dm/mac/pocket/App.swift b/dm/mac/pocket/App.swift
+index 2dee83b..cbf1c05 100644
+--- a/dm/mac/pocket/App.swift
++++ b/dm/mac/pocket/App.swift
+@@ -5,6 +5,7 @@ import SwiftUI
+ @main
+ struct NXPocketMacApp: App {
+     @StateObject private var model = AppModel()
++    @Environment(\.openWindow) private var openWindow
+     @AppStorage(AppLanguage.key) private var language = ""   // the menus' own items (Add Game, Check for Updates…) in it
+ 
+     var body: some Scene {
+@@ -23,6 +24,7 @@ struct NXPocketMacApp: App {
+                 Button(tr("Add Game…")) { model.addWithPanel() }.keyboardShortcut("o")
+             }
+             CommandGroup(after: .toolbar) {
++                Button("RoomCircuit…") { openWindow(id: "roomcircuit") }
+                 Button(model.showLog ? tr("Hide Log") : tr("Show Log")) { model.showLog.toggle() }.keyboardShortcut("y", modifiers: [.command, .shift])
+             }
+         }
+@@ -32,6 +34,10 @@ struct NXPocketMacApp: App {
+             .defaultSize(width: 720, height: 560)
+         Window(tr("Storage"), id: "storage") { StorageView().environmentObject(model).frame(minWidth: 640, minHeight: 360) }
+             .defaultSize(width: 760, height: 460)
++        Window("RoomCircuit", id: "roomcircuit") {
++            RoomCircuitPanel(host: .nxPocket, chinese: launcherChinese, showsClose: false)
++        }
++        .defaultSize(width: 620, height: 640)
+         Settings { SettingsView().environmentObject(model) }
+     }
+ }
+diff --git a/dm/mac/pocket/project.yml b/dm/mac/pocket/project.yml
+index 7dfb78f..e9e38a2 100644
+--- a/dm/mac/pocket/project.yml
++++ b/dm/mac/pocket/project.yml
+@@ -12,6 +12,8 @@ targets:
+     platform: macOS
+     sources:
+       - path: App.swift
++      - path: ../../ios/pocket/RoomCircuitService.swift
++      - path: ../../ios/pocket/RoomCircuitPanel.swift
+       - path: Model
+       - path: Views
+       - path: ../../ios/Sources/PocketStyle.swift
+@@ -41,6 +43,9 @@ targets:
+         LSApplicationCategoryType: public.app-category.games
+         CFBundleLocalizations: [en, zh-Hans]   # the system's menus (File, Edit, Window) in Chinese too; the app's own words come from tr()
+         LSMinimumSystemVersion: "26.0"
++        NSLocalNetworkUsageDescription: "NX Pocket connects to your RoomCircuit appointment server."
++        NSAppTransportSecurity:
++          NSAllowsLocalNetworking: true
+         NSHumanReadableCopyright: "NX Pocket contributors · based on nxnative"
+     settings:
+       PRODUCT_BUNDLE_IDENTIFIER: ${DM_MAC_BUNDLE_ID}
