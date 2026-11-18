@@ -17,7 +17,11 @@ jobs:
         run: |
           git rev-parse HEAD > evidence/build-commit.txt
           bash scripts/build-container.sh --embedded
-          python3 scripts/toolchain/verify_switch_build.py . --app-title RoomCircuit --overlay-title RoomCircuit --app-version 0.9.2 --ipc-abi 5 --require-capabilities --report evidence/switch-build.json --build-command 'bash scripts/build-container.sh --embedded'
+          image=$(python3 -c 'import json; print(json.load(open("scripts/toolchain/container-profile.json"))["image"])')
+          docker run --rm --platform linux/amd64 --entrypoint python3 -e DEVKITPRO=/opt/devkitpro \
+            -v "$PWD:/src" -w /src "$image" scripts/toolchain/verify_switch_build.py . \
+            --app-title RoomCircuit --overlay-title RoomCircuit --app-version 0.9.2 --ipc-abi 5 \
+            --require-capabilities --report evidence/switch-build.json --build-command 'bash scripts/build-container.sh --embedded'
       - uses: actions/upload-artifact@v4
         with:
           name: switch-maintenance-candidate
