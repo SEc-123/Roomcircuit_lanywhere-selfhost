@@ -395,16 +395,19 @@ static void testFrameworkLanguage() {
     // An Ultrahand Chinese setting must not override RoomCircuit's English default.
     ult::BACK = "返回"; ult::OK = "确定"; g_chinese = true;
     Overlay overlay; overlay.initServices();
+    assert(tsl::hlp::sdCardMounted);
     assert(!g_chinese && ult::BACK == "Back" && ult::OK == "OK" && ult::ON == "On");
     { std::ofstream file(locale); file << "language=zh\n"; }
     // An English Ultrahand setting must not override RoomCircuit Chinese.
     ult::BACK = "Back"; ult::OK = "OK";
     const unsigned swaps = tsl::swapCalls;
     overlay.onShow();
+    assert(tsl::hlp::sdCardMounted);
     assert(g_chinese && ult::BACK == "返回" && ult::OK == "确定" && ult::ON == "开启");
     assert(tsl::swapCalls == swaps + 1 && tsl::nextGui);
     { std::ofstream file(locale); file << "language=en\n"; }
     overlay.onHide(); overlay.onShow();
+    assert(tsl::hlp::sdCardMounted);
     assert(!g_chinese && ult::BACK == "Back" && ult::OK == "OK" && ult::ON == "On");
     assert(tsl::swapCalls == swaps + 2);
     overlay.exitServices(); tsl::nextGui.reset();

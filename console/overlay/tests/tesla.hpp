@@ -62,7 +62,12 @@ template<class G, class... Args> std::unique_ptr<Gui> &swapTo(SwapDepth, Args&&.
 class Overlay {public:virtual ~Overlay()=default;virtual void initServices(){}virtual void exitServices(){}virtual void onShow(){}virtual void onHide(){}virtual std::unique_ptr<Gui>loadInitialGui()=0;template<class G>std::unique_ptr<Gui>initially(){return std::make_unique<G>();}};
 namespace hlp {
 template<class F>void doWithSmSession(F f) { f(); }
-template<class F>void doWithSDCardHandle(F f) { f(); }
+inline bool sdCardMounted = true;
+template<class F>void doWithSDCardHandle(F f) {
+    sdCardMounted = true;
+    f();
+    sdCardMounted = false;
+}
 }
 template<class O>int loop(int,char**){return 0;}
 }
