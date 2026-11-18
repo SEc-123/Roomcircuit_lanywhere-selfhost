@@ -71,15 +71,17 @@ namespace {
 
     void refreshLanguagePreference() {
         bool chinese = false;
-        tsl::hlp::doWithSDCardHandle([&] {
+        u32 selection = 2;
+        // libultrahand owns the sdmc: mount until __appExit. The renderer and
+        // sound worker also read it after overlay services have initialized.
+        if (serviceIsActive(&g_relay) &&
+            R_SUCCEEDED(lanywhereOverlayGetStorageSelection(&g_relay, &selection))) {
             bool found = false;
-            u32 selection = 2;
-            if (!serviceIsActive(&g_relay) || R_FAILED(lanywhereOverlayGetStorageSelection(&g_relay, &selection))) return;
             chinese = chinesePreference(rc_storage_path_gen(selection, RC_LEGACY_PATH("language.ini"),
                 RC_V1_PATH("language.ini"), RC_CURRENT_PATH("language.ini")), &found);
             if (!found) chinese = chinesePreference(rc_storage_path_gen(selection, RC_LEGACY_PATH("language.ini.previous"),
                 RC_V1_PATH("language.ini.previous"), RC_CURRENT_PATH("language.ini.previous")), &found);
-        });
+        }
         g_chinese = chinese;
         // Ultrahand's framework labels follow RoomCircuit's own preference.
         ult::BACK = tr("Back", "返回"); ult::OK = tr("OK", "确定");

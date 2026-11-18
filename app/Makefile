@@ -41,7 +41,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 TARGET		:=	lanywhere
 APP_TITLE	:=	RoomCircuit
 APP_AUTHOR	:=	augustocco
-APP_VERSION	?=	0.9.1
+APP_VERSION	?=	0.9.2
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
