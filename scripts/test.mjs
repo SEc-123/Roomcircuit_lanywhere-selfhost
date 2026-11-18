@@ -166,7 +166,8 @@ try {
     await suite('Upstream provider and token isolation', process.execPath, ['--test', 'server/relay/test-upstream-gateway.js']);
     await suite('Relay inbound control deadline', process.execPath, ['--test', 'server/relay/test-inbound-deadline.js']);
     await suite('Durable appointments and self-network isolation', process.execPath, ['--test',
-        'server/relay/test-appointments.js', 'server/relay/test-appointments-e2e.js']);
+        'server/relay/test-appointments.js', 'server/relay/test-appointments-e2e.js',
+        'server/relay/test-appointments-http.js', 'server/relay/test-appointments-web.js']);
     await suite('Realm query-cache recycling and protected leases', process.execPath, ['--test', 'server/relay/test-realm-policy.js']);
     await suite('Host game identity metadata', process.execPath, ['--test', 'server/relay/test-room-metadata.js']);
     await suite('LAN Play upstream realms', process.execPath, ['--test', 'server/relay/test-lanplay-upstream.js']);

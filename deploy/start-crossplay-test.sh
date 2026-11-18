@@ -22,5 +22,6 @@ export LANYWHERE_ENABLE_PUBLIC_UPSTREAM=0 LANYWHERE_ENABLE_LANPLAY_UPSTREAM=0 LA
 export LANYWHERE_UDP_BIND_ADDRESS="$test_bind" LANYWHERE_CONTROL_BIND_ADDRESS="$test_bind"
 export ROOMCIRCUIT_EMULATOR_BIND="$test_bind" LANYWHERE_LANPLAY_BIND_ADDRESS="$test_bind" LANYWHERE_LANPLAY_PORT=11451
 export ROOMCIRCUIT_EDEN_PORT=24872 ROOMCIRCUIT_YUZU_PORT=24873 ROOMCIRCUIT_RYULDN_PORT=30456
-printf '%s\n' "Switch $test_bind:11470 (TCP+UDP)" "LAN Play $test_bind:11451 (UDP)" "Eden $test_bind:24872 (UDP)" "Yuzu $test_bind:24873 (UDP)" "RyuLDN $test_bind:30456 (TCP)" "Test state $state"
+export ROOMCIRCUIT_WEB_PORT=11464 ROOMCIRCUIT_WEB_BIND="$test_bind" ROOMCIRCUIT_WEB_RELAY_HOST="$test_bind"
+printf '%s\n' "Appointments http://$test_bind:11464/appointments/" "Switch $test_bind:11470 (TCP+UDP)" "LAN Play $test_bind:11451 (UDP)" "Eden $test_bind:24872 (UDP)" "Yuzu $test_bind:24873 (UDP)" "RyuLDN $test_bind:30456 (TCP)" "Test state $state"
 exec "$node_bin" server/relay/server.js --port 11470

@@ -47,9 +47,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-relay_files=(custom-node-registry.js node-catalog.js node-directory.js node-locator.js node-friends.js direct-room-metadata.js server.js stats.js public.js lanplay.js lanplay-fork.js lanplay-fork-tcp.js dashboard.html operations.js traffic-store.js appointments.js appointment-push.js matchmaking.js group-page.js unified-lobby.js regional-directory.js udp-fragments.js upstream-gateway.js room-metadata.js lanplay-providers.js lanplay-realms.js tcp-stream-protocol.js tcp-streams.js inbound-deadline.js update-format.js update-distribution.js emulator-bridge.js emulator-services.js)
+relay_files=(custom-node-registry.js node-catalog.js node-directory.js node-locator.js node-friends.js direct-room-metadata.js server.js stats.js public.js lanplay.js lanplay-fork.js lanplay-fork-tcp.js dashboard.html operations.js traffic-store.js appointments.js appointments-http.js appointments-web.js web-appointment-games.js appointment-push.js web-appointments/index.html web-appointments/styles.css web-appointments/app.js matchmaking.js group-page.js unified-lobby.js regional-directory.js udp-fragments.js upstream-gateway.js room-metadata.js lanplay-providers.js lanplay-realms.js tcp-stream-protocol.js tcp-streams.js inbound-deadline.js update-format.js update-distribution.js emulator-bridge.js emulator-services.js)
 crossplay_files=(eden/host.js ryuldn/protocol.js ryuldn/server.js ryuldn/streams.js)
 ops_files=(manage-custom-nodes.cjs healthcheck.cjs validate-config.cjs metrics.cjs smoke-relay.cjs smoke-relay-v2.cjs)
+install -d -m 0755 "$stage/web-appointments"
 for file in "${relay_files[@]}"; do
     install -m 0644 "$root/server/relay/$file" "$stage/$file"
 done

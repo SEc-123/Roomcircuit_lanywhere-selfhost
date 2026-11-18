@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Appointments · RoomCircuit</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="wordmark"><span class="brand-symbol" aria-hidden="true"></span>RoomCircuit</div>
+      <div class="header-actions">
+        <button id="connection-button" type="button" class="text-button" data-i18n="connections">Connect a device</button>
+        <button id="language-button" type="button" class="language-button" lang="zh-CN">中文</button>
+      </div>
+    </div>
+  </header>
+  <main class="wrap">
+    <div class="title-row">
+      <h1 data-i18n="appointments">Appointments</h1>
+      <button id="create-button" type="button" class="primary" data-i18n="newAppointment">New appointment</button>
+    </div>
+    <p id="status" class="status" role="status" aria-live="polite" hidden></p>
+    <div class="workspace">
+      <section class="schedule panel" aria-labelledby="schedule-heading">
+        <div class="panel-header">
+          <h2 id="schedule-heading" data-i18n="schedule">Schedule</h2>
+          <button id="refresh-button" type="button" class="text-button" data-i18n="refresh">Refresh</button>
+        </div>
+        <div id="appointment-list" class="appointment-list" aria-busy="true">
+          <p class="empty" data-i18n="loading">Loading appointments…</p>
+        </div>
+        <nav id="pages" class="pagination" aria-label="Appointment pages" hidden>
+          <button id="previous-button" type="button" class="secondary" data-i18n="previous">Previous</button>
+          <span id="page-number"></span>
+          <button id="next-button" type="button" class="secondary" data-i18n="next">Next</button>
+        </nav>
+      </section>
+      <aside class="detail panel" aria-labelledby="detail-heading">
+        <div class="panel-header"><h2 id="detail-heading" data-i18n="details">Details</h2></div>
+        <div id="appointment-detail" class="detail-content">
+          <p class="empty" data-i18n="chooseAppointment">Select an appointment.</p>
+        </div>
+      </aside>
+    </div>
+    <footer class="footer">
+      <span id="local-timezone"></span>
+      <button id="notification-button" type="button" class="text-button" data-i18n="enableAlerts" hidden>Enable browser alerts</button>
+    </footer>
+  </main>
+  <dialog id="create-dialog" aria-labelledby="create-heading">
+    <form id="create-form">
+      <div class="dialog-header">
+        <h2 id="create-heading" data-i18n="newAppointment">New appointment</h2>
+        <button type="button" class="close-button" data-close="create-dialog" data-i18n="close">Close</button>
+      </div>
+      <fieldset id="create-fields">
+        <label for="game-select" data-i18n="game">Game</label>
+        <select id="game-select" required></select>
+        <div id="manual-game" hidden>
+          <label for="game-id" data-i18n="gameId">Local communication ID</label>
+          <input id="game-id" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="16" pattern="[0-9A-Fa-f]{16}" placeholder="16 hexadecimal digits">
+          <label for="application-id" data-i18n="appId">Application ID (optional)</label>
+          <input id="application-id" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="16" pattern="[0-9A-Fa-f]{16}">
+        </div>
+        <label for="start-time" data-i18n="localStart">Start time (local)</label>
+        <input id="start-time" type="datetime-local" required>
+      </fieldset>
+      <p id="create-error" class="status error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close="create-dialog" data-i18n="cancel">Cancel</button>
+        <button id="submit-appointment" type="submit" class="primary" data-i18n="create">Create</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="connection-dialog" aria-labelledby="connection-heading">
+    <div class="dialog-header">
+      <h2 id="connection-heading" data-i18n="connections">Connect a device</h2>
+      <button type="button" class="close-button" data-close="connection-dialog" data-i18n="close">Close</button>
+    </div>
+    <div id="connection-list" class="connection-list"></div>
+  </dialog>
+  <dialog id="share-dialog" aria-labelledby="share-heading">
+    <div class="dialog-header">
+      <h2 id="share-heading" data-i18n="share">Share appointment</h2>
+      <button type="button" class="close-button" data-close="share-dialog" data-i18n="close">Close</button>
+    </div>
+    <label for="share-url" data-i18n="shareUrl">Appointment link</label>
+    <input id="share-url" type="url" readonly>
+    <p id="copy-status" role="status" hidden></p>
+    <button id="copy-button" type="button" class="primary" data-i18n="copy">Copy link</button>
+  </dialog>
+</body>
+</html>

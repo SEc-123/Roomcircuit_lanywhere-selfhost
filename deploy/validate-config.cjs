@@ -6,6 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { parseEndpoint } = require(fs.existsSync(path.join(__dirname, 'regional-directory.js')) ?
     './regional-directory.js' : '../server/relay/regional-directory.js');
+const { validOrigin, validRelayHost } = require(fs.existsSync(path.join(__dirname, 'appointments-web.js')) ?
+    './appointments-web.js' : '../server/relay/appointments-web.js');
 
 // Keep the managed service ports and state directory in the unit, and only
 // accept documented tuning values, regional address and operations token here.
@@ -14,6 +16,7 @@ const integerRanges = new Map([
     ['ROOMCIRCUIT_EDEN_PORT', [0, 65535]],
     ['ROOMCIRCUIT_YUZU_PORT', [0, 65535]],
     ['ROOMCIRCUIT_RYULDN_PORT', [0, 65535]],
+    ['ROOMCIRCUIT_WEB_PORT', [0, 65535]],
     ['LANYWHERE_ENABLE_PUBLIC_UPSTREAM', [0, 1]],
     ['LANYWHERE_ENABLE_COMMUNITY_DIRECT', [0, 1]],
     ['LANYWHERE_ENABLE_LANPLAY_UPSTREAM', [0, 1]],
@@ -68,7 +71,11 @@ function validateConfig(source, { localAddresses = Object.values(os.networkInter
             const ids = value.split(',');
             if (!ids.length || ids.some(id => !allowed.has(id)) || new Set(ids).size !== ids.length)
                 throw new Error(`${prefix}: select unique, built-in LAN Play provider IDs`);
-        } else if (['LANYWHERE_UDP_BIND_ADDRESS', 'LANYWHERE_LANPLAY_BIND_ADDRESS', 'ROOMCIRCUIT_EMULATOR_BIND'].includes(key)) {
+        } else if (key === 'ROOMCIRCUIT_WEB_ORIGIN') {
+            if (!validOrigin(value)) throw new Error(`${prefix}: use the exact http or https origin without a path or trailing slash`);
+        } else if (key === 'ROOMCIRCUIT_WEB_RELAY_HOST') {
+            if (!validRelayHost(value)) throw new Error(`${prefix}: use a relay hostname or IPv4 address without a port`);
+        } else if (['LANYWHERE_UDP_BIND_ADDRESS', 'LANYWHERE_LANPLAY_BIND_ADDRESS', 'ROOMCIRCUIT_EMULATOR_BIND', 'ROOMCIRCUIT_WEB_BIND'].includes(key)) {
             if (!net.isIPv4(value)) throw new Error(`${prefix}: ${key} must be a literal IPv4 address`);
             if (value !== '0.0.0.0' && !localAddresses.includes(value))
                 throw new Error(`${prefix}: ${key} must be assigned to a local interface (use the local address behind NAT)`);
@@ -84,9 +91,13 @@ function validateConfig(source, { localAddresses = Object.values(os.networkInter
     const yuzu = Number(settings.get('ROOMCIRCUIT_YUZU_PORT') || 0);
     const lanplay = Number(settings.get('LANYWHERE_LANPLAY_PORT') || 0);
     const ryuldn = Number(settings.get('ROOMCIRCUIT_RYULDN_PORT') || 0);
+    const web = Number(settings.get('ROOMCIRCUIT_WEB_PORT') || 0);
     if (eden && [11460, lanplay].includes(eden)) throw new Error('The Eden UDP listener needs its own port');
     if (yuzu && [11460, lanplay, eden].includes(yuzu)) throw new Error('The Yuzu UDP listener needs its own port');
     if ([11460, 11461, 11462].includes(ryuldn)) throw new Error('The RyuLDN TCP listener needs its own port');
+    if (web && [11460, 11461, 11462, 11463, ryuldn].includes(web)) throw new Error('The appointments web listener needs its own TCP port');
+    if (web && settings.get('ROOMCIRCUIT_WEB_BIND') === '0.0.0.0' && !settings.get('ROOMCIRCUIT_WEB_ORIGIN'))
+        throw new Error('Set ROOMCIRCUIT_WEB_ORIGIN for the all-interface web listener');
     if (Number(settings.get('LANYWHERE_ENABLE_COMMUNITY_DIRECT')) === 1 &&
         Number(settings.get('LANYWHERE_ENABLE_PUBLIC_UPSTREAM')) !== 1)
         throw new Error('Community direct requires LANYWHERE_ENABLE_PUBLIC_UPSTREAM=1');

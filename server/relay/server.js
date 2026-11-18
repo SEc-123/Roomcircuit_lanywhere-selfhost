@@ -63,6 +63,7 @@ const PORT = integerSetting(args[1], 11460, '--port', 0, 65535);
 const STATS_PORT = envInt('LANYWHERE_STATS_PORT', 11461, 0, 65535);
 const PUBLIC_PORT = envInt('LANYWHERE_PUBLIC_PORT', 11463, 0, 65535);
 const OPS_PORT = envInt('LANYWHERE_OPS_PORT', 0, 0, 65535);
+const WEB_PORT = process.env.LANYWHERE_LANPLAY_REALM ? 0 : envInt('ROOMCIRCUIT_WEB_PORT', 0, 0, 65535);
 const LANPLAY_PORT = envInt('LANYWHERE_LANPLAY_PORT', 0, 0, 65535);
 const LANPLAY_BIND = process.env.LANYWHERE_LANPLAY_BIND_ADDRESS || '0.0.0.0';
 if (!net.isIPv4(LANPLAY_BIND)) throw new Error('Invalid LAN Play bind address');
@@ -83,7 +84,7 @@ const communityDirect = envInt('LANYWHERE_ENABLE_COMMUNITY_DIRECT', 0, 0, 1);
 const communityProvider = communityDirect && !process.env.LANYWHERE_LANPLAY_REALM &&
     publicProviders.find(provider => provider.id === upstreamGateway.PUBLIC_PROVIDER_ID);
 const communityEndpoint = communityProvider ? regionalDirectory.parseEndpoint(`${communityProvider.host}:${communityProvider.port}`) : null;
-const tcpPorts = [PORT, STATS_PORT, PUBLIC_PORT, OPS_PORT, RYULDN_PORT].filter(Boolean);
+const tcpPorts = [PORT, STATS_PORT, PUBLIC_PORT, OPS_PORT, RYULDN_PORT, WEB_PORT].filter(Boolean);
 const udpPorts = [PORT, LANPLAY_PORT, EDEN_PORT, YUZU_PORT].filter(Boolean);
 if (new Set(tcpPorts).size !== tcpPorts.length || new Set(udpPorts).size !== udpPorts.length)
     throw new Error('los puertos del servidor se superponen');
@@ -232,7 +233,7 @@ const matches = matchmaking.create({ rooms: () => rooms.values(), capacity: nati
 setInterval(matches.sweep, 250).unref();
 const appointmentPush = realmId ? null : pushProtocol.create({
     rooms: () => rooms.values(),
-    isEligible: room => listedSelfGameRoom(room) && isOpen(room) && nativeMatchCapacity(room) > 0,
+    isEligible: appointmentRoomOpen,
     applicationId: roomMetadata.applicationId,
     summarize: room => roomMetadata.summary(room, describeGameAccess(room)),
     activeAppointment: appointments.activeAppointment,
@@ -528,6 +529,18 @@ function listedSelfGameRoom(room) {
     const host = room?.members[0], publication = room?.published;
     return room?.gameId && active(host) && !host.socket.writableEnded && upstreams.isSelf(host.socket) &&
         publication?.member === host && publication.info[ACCEPT_POLICY] !== ALWAYS_REJECT;
+}
+
+function localBridgedRoom(room) {
+    const host = room?.members[0], socket = host?.socket;
+    return !realmId && room?.net13 && room.published?.member === host &&
+        (socket?.emulatorBridge || socket?.lanPlayPeer) && isOpen(room) &&
+        room.published.info[ACCEPT_POLICY] === 0;
+}
+
+function appointmentRoomOpen(room) {
+    return (listedSelfGameRoom(room) || localBridgedRoom(room)) && isOpen(room) &&
+        room.published.info[ACCEPT_POLICY] === 0;
 }
 
 function describeGameAccess(room) {
@@ -1088,7 +1101,7 @@ function onFrame(socket, type, body) {
             if (!allowed(ip, 'find')) return sendError(socket, E.BUSY, 'demasiadas búsquedas');
             stats.noteSearch(ip, 'app');
             const { entries, nextOffset } = groupPage({ rooms: rooms.values(), lcid: body.readBigUInt64LE(0),
-                offset: body.readUInt32LE(8), isOpen: extended ? listedSelfGameRoom : isOpen });
+                offset: body.readUInt32LE(8), isOpen: extended ? room => listedSelfGameRoom(room) || localBridgedRoom(room) : isOpen });
             return send(socket, T.META_PAGE, roomMetadata.page(entries, nextOffset, extended ? describeGameAccess : undefined));
         }
         case T.FIND_PAGE: {
@@ -1338,6 +1351,26 @@ function publicGroups() {
     }
     return out.sort((a, b) => b.players - a.players).slice(0, 50);
 }
+
+function appointmentWebRooms(id, now) {
+    const event = appointments.activeAppointment(id, now);
+    if (!event) return [];
+    const result = [];
+    for (const room of rooms.values()) {
+        if (room.gameId !== event.game || !appointmentRoomOpen(room)) continue;
+        const host = room.members[0], publication = room.published;
+        if (publication.gameAccess?.shared) continue;
+        if (publication.appointmentId && publication.appointmentId !== id) continue;
+        const app = roomMetadata.applicationId(room);
+        if (event.app && app && event.app !== app) continue;
+        result.push({ host: host.nick, players: describeGameAccess(room).players, max: publication.info[NODE_MAX],
+            appointmentBound: publication.appointmentId === id, crossplay: Boolean(room.net13),
+            titleConfirmed: Boolean(event.app && app === event.app) });
+    }
+    return result.sort((a, b) => Number(b.appointmentBound) - Number(a.appointmentBound) ||
+        b.players - a.players || a.host.localeCompare(b.host)).slice(0, 20);
+}
+
 require('./public').create({ stateDir: path.dirname(STATE_FILE), port: PUBLIC_PORT, snapshot, groups: publicGroups });
 // Pasarela LAN Play (Ryujinx): miembros virtuales que usan las mismas salas.
 const memberAt = (ip) => byIp13.get(ip) || null;
@@ -1379,10 +1412,23 @@ if (!realmId && (EDEN_PORT || YUZU_PORT || RYULDN_PORT)) {
         bridge: emulatorBridge, host: EMULATOR_ADDRESS, port: RYULDN_PORT, log,
     }));
 }
-const emulatorReady = Promise.all(emulatorServices.map(service => service.ready));
-emulatorReady.catch(error => {
+const appointmentWeb = require('./appointments-web').create({
+    port: WEB_PORT, bind: process.env.ROOMCIRCUIT_WEB_BIND || '127.0.0.1',
+    origin: process.env.ROOMCIRCUIT_WEB_ORIGIN, relayHost: process.env.ROOMCIRCUIT_WEB_RELAY_HOST,
+    relayPorts: () => [
+        { id: 'switch', port: tcp.address()?.port || PORT, transport: 'TCP/UDP' },
+        { id: 'eden', port: EDEN_PORT, transport: 'UDP' },
+        { id: 'yuzu', port: YUZU_PORT, transport: 'UDP' },
+        { id: 'ryuldn', port: RYULDN_PORT, transport: 'TCP' },
+        { id: 'lanplay', port: LANPLAY_PORT, transport: 'UDP' },
+    ],
+    store: appointments, available: () => ready && !paused && !draining,
+    rooms: appointmentWebRooms, rateAllowed: ip => allowed(ip, 'appointments'), log,
+});
+const listenersReady = Promise.all([...emulatorServices.map(service => service.ready), appointmentWeb?.ready]);
+listenersReady.catch(error => {
     if (draining) return;
-    log(`emulator listener failed: ${error.message}`);
+    log(`optional listener failed: ${error.message}`);
     process.exit(1);
 });
 stats = require('./stats').create({ stateDir: path.dirname(STATE_FILE), port: STATS_PORT, snapshot, traffic,
@@ -1413,6 +1459,7 @@ async function finishShutdown() {
     clearTimeout(realmDiscoveryTimer);
     clearInterval(streamSweep);
     streams.shutdown();
+    appointmentWeb?.close();
     updates.shutdown();
     upstreams.shutdown();
     emulatorBridge?.close();
@@ -1443,7 +1490,7 @@ tcp.listen({ port: PORT, ...(CONTROL_BIND_ADDRESS ? { host: CONTROL_BIND_ADDRESS
     const port = tcp.address().port;
     log(`control TCP en ${port}; tráfico del mes ${(traffic.bytes / 1e9).toFixed(2)} GB de ${CAP_BYTES / 1e9} GB`);
     udp.bind(port, UDP_BIND_ADDRESS, () => {
-        emulatorReady.then(() => { ready = true; realmNativePort = port; realmReady(); }, () => {});
+        listenersReady.then(() => { ready = true; realmNativePort = port; realmReady(); }, () => {});
         log(`datos UDP en ${port}`);
     });
 });

@@ -60,6 +60,8 @@ An administrator-published node and its rooms appear in the shared lobby. An unr
 
 Open **Appointments** with **−** from the lobby. Press **L** to create a session and **A** to join or leave one. From 30 minutes before the start, press **Y** to mark yourself ready. Press **X** to find rooms near the start time. Game-time room alerts require **Main server** and Ultrahand with API notifications enabled.
 
+On a phone or computer, open the relay’s [shared appointments panel](docs/WEB-APPOINTMENTS.md) to schedule, share, get ready and find open rooms with Switch players.
+
 Press **→** from the room list to open the in-app guide. See [node routing and game compatibility](docs/REGIONS.md) for details.
 
 ## Update

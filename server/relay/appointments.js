@@ -10,13 +10,17 @@ const READY_BEFORE = 30 * 60, READY_LEASE = 5 * 60;
 const U64_MAX = (1n << 64n) - 1n;
 const STATUS = { OK: 0, UNAVAILABLE: 1, INVALID: 2, LIMIT: 3, NOT_FOUND: 4, STORAGE: 5 };
 
+function readinessKey(rawIdentity) {
+    // A hash is held in memory only, for the life of a five-minute readiness lease.
+    return crypto.createHash('sha256').update('lanywhere-ready-v2\0').update(rawIdentity).digest('hex').slice(0,32);
+}
+
 function parse(body) {
     if (!Buffer.isBuffer(body) || body.length !== REQUEST_BYTES || body[1] || body[2] || body[3]) return null;
     const op = body[0], offset = body.readUInt32LE(4), rawIdentity = body.subarray(8, 24);
     const id = body.readBigUInt64LE(24), starts = body.readBigUInt64LE(32), game = body.readBigUInt64LE(40), app = body.readBigUInt64LE(48);
     if (op < 1 || op > 4 || rawIdentity.every(x => x === 0)) return null;
-    // A hash is held in memory only, for the life of a five-minute readiness lease.
-    const identity = crypto.createHash('sha256').update('lanywhere-ready-v2\0').update(rawIdentity).digest('hex').slice(0,32);
+    const identity = readinessKey(rawIdentity);
     if (op === 1 && (id || starts || game || app)) return null;
     if (op === 2 && (offset || id || !starts || !game || game === U64_MAX)) return null;
     if (op >= 3 && (offset || !id || starts || game || app)) return null;
@@ -187,6 +191,25 @@ function create({ filename, now = () => Math.floor(Date.now() / 1000), maxPerSou
         const event = eventsById.get(id);
         return healthy && event && current >= event.starts - READY_BEFORE && current < event.starts + GRACE ? event : null;
     }
-    return { handle, activeAppointment, healthy: () => healthy };
+    async function detail(id, identity) {
+        await startup;
+        const current = now();
+        if (!healthy) return response(STATUS.STORAGE, current);
+        if (typeof identity !== 'string' || !/^[0-9a-f]{32}$/i.test(identity) || /^0+$/.test(identity))
+            return response(STATUS.INVALID, current);
+        const event = eventsById.get(id);
+        if (!event || event.starts + GRACE <= current) return response(STATUS.NOT_FOUND, current);
+        sweep(current);
+        const key = id.toString();
+        let count = 0;
+        for (const lease of ready.values()) if (lease.id === key) count++;
+        const own = ready.get(readinessKey(Buffer.from(identity, 'hex')));
+        return response(STATUS.OK, current, [{ id, ...event, interested: count, ready: own?.id === key }]);
+    }
+    function createdAppointment(starts, game, app) {
+        const key = [starts.toString(), game.toString(), app.toString()];
+        return events.find(event => event.starts === key[0] && event.game === key[1] && event.app === key[2])?.id ?? null;
+    }
+    return { handle, activeAppointment, detail, createdAppointment, healthy: () => healthy };
 }
 module.exports = { create, parse, response, validateState: validate, STATUS };
