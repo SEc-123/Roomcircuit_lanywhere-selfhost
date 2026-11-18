@@ -67,6 +67,7 @@ const LANPLAY_PORT = envInt('LANYWHERE_LANPLAY_PORT', 0, 0, 65535);
 const LANPLAY_BIND = process.env.LANYWHERE_LANPLAY_BIND_ADDRESS || '0.0.0.0';
 if (!net.isIPv4(LANPLAY_BIND)) throw new Error('Invalid LAN Play bind address');
 const EDEN_PORT = envInt('ROOMCIRCUIT_EDEN_PORT', 0, 0, 65535);
+const YUZU_PORT = envInt('ROOMCIRCUIT_YUZU_PORT', 0, 0, 65535);
 const RYULDN_PORT = envInt('ROOMCIRCUIT_RYULDN_PORT', 0, 0, 65535);
 const EMULATOR_ADDRESS = process.env.ROOMCIRCUIT_EMULATOR_BIND || '127.0.0.1';
 if (!net.isIPv4(EMULATOR_ADDRESS)) throw new Error('Invalid emulator bind address');
@@ -83,7 +84,7 @@ const communityProvider = communityDirect && !process.env.LANYWHERE_LANPLAY_REAL
     publicProviders.find(provider => provider.id === upstreamGateway.PUBLIC_PROVIDER_ID);
 const communityEndpoint = communityProvider ? regionalDirectory.parseEndpoint(`${communityProvider.host}:${communityProvider.port}`) : null;
 const tcpPorts = [PORT, STATS_PORT, PUBLIC_PORT, OPS_PORT, RYULDN_PORT].filter(Boolean);
-const udpPorts = [PORT, LANPLAY_PORT, EDEN_PORT].filter(Boolean);
+const udpPorts = [PORT, LANPLAY_PORT, EDEN_PORT, YUZU_PORT].filter(Boolean);
 if (new Set(tcpPorts).size !== tcpPorts.length || new Set(udpPorts).size !== udpPorts.length)
     throw new Error('los puertos del servidor se superponen');
 
@@ -286,6 +287,8 @@ const ipOf = (index) => (NET_BASE | (index + 1)) >>> 0;
 function allocIp13() {
     for (let n = 0; n < 1000; n++) {
         const ip = (NET13 | ((1 + crypto.randomInt(254)) << 8) | (1 + crypto.randomInt(254))) >>> 0;
+        // Routed mobile endpoints retain their configured addresses between connections.
+        if (((ip >>> 8) & 255) === 250) continue;
         if (ip === ((NET13 | 0x2501) >>> 0) || ip === ((NET13 | 0xfefe) >>> 0)) continue;
         if (byIp13.has(ip) || lanplay?.taken(ip) || emulatorBridge?.taken(ip)) continue;
         return ip;
@@ -1261,7 +1264,7 @@ function unsupportedDatagram(member, reason = 'el destinatario necesita actualiz
     }
 }
 
-function forwardData(member, dst, portsPayload, rateChecked = false) {
+function forwardData(member, dst, portsPayload, rateChecked = false, routeLanPeers = false) {
     if (paused || !active(member) || portsPayload.length < 4 || portsPayload.length - 4 > MAX_GAME_PAYLOAD) return;
     const { room } = member;
     const published = room.published;
@@ -1276,7 +1279,7 @@ function forwardData(member, dst, portsPayload, rateChecked = false) {
         if (paused) break;
         if (!active(m) || (room.gameId && !published.connected.has(m))) continue;
         if (!(BROADCASTS.has(dst) || m.ip === dst)) continue;
-        if (m.socket.virtual) m.socket.data(member, dst, portsPayload);
+        if (m.socket.virtual) m.socket.data(member, dst, portsPayload, routeLanPeers);
         else if (m.udp) {
             const payload = portsPayload.subarray(4);
             if ((m.udpFeatures & 4) && payload.length > FRAGMENT_CHUNK) {
@@ -1358,7 +1361,7 @@ const lanplay = require('./lanplay').create({
     },
 });
 const emulatorServices = [];
-if (!realmId && (EDEN_PORT || RYULDN_PORT)) {
+if (!realmId && (EDEN_PORT || YUZU_PORT || RYULDN_PORT)) {
     emulatorBridge = require('./emulator-bridge').create({
         rooms, frame: onFrame, forwardData, isOpen, allocateIp: allocIp13, memberAt,
         paused: () => paused || draining, count, streams, log,
@@ -1366,6 +1369,10 @@ if (!realmId && (EDEN_PORT || RYULDN_PORT)) {
     const { createEden, createRyuLdn } = require('./emulator-services');
     if (EDEN_PORT) emulatorServices.push(createEden({
         bridge: emulatorBridge, host: EMULATOR_ADDRESS, port: EDEN_PORT, log,
+        binary: process.env.ROOMCIRCUIT_ENET_BINARY,
+    }));
+    if (YUZU_PORT) emulatorServices.push(createEden({
+        bridge: emulatorBridge, host: EMULATOR_ADDRESS, port: YUZU_PORT, log, legacyYuzu: true,
         binary: process.env.ROOMCIRCUIT_ENET_BINARY,
     }));
     if (RYULDN_PORT) emulatorServices.push(createRyuLdn({

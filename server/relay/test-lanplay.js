@@ -4,6 +4,7 @@
 //   node test-lanplay.js
 
 const assert = require('assert');
+const crypto = require('node:crypto');
 const net = require('net');
 const dgram = require('dgram');
 const fs = require('fs');
@@ -247,6 +248,8 @@ async function main() {
         host.send(0x07, sync);
         host.send(0x04, Buffer.concat([Buffer.from([stationIndex, LDN.SYNC]), sync]));
         const got = await until(() => emu.syncs && emu.syncs[0], 3000, 'SyncNetwork en el emulador');
+        assert(!host.frames.some(f => f.type === 0x84 && f.body[1] === LDN.CONNECT),
+            'a single LAN accept must deliver exactly one connect to the host');
         assert.strictEqual(got.readUInt32LE(NODES), host13);
         assert.strictEqual(got.readUInt32LE(NODES + NS), emu.ip, 'la estación aparece con su propia IP 10.13');
         ok('el emulador recibe la sincronización con las mismas IPs');
@@ -283,16 +286,18 @@ async function main() {
         ok('paquetes de 1472 bytes en los dos sentidos (fragmentos IP del emulador reensamblados)');
 
         // Fragmentos de LAN Play (el cliente parte el paquete IPv4 entero, con cabecera de 16 bytes).
-        const whole2 = L.udpPacket(emu.ip, 12345, host13, 12345, Buffer.from('partido'.padEnd(1200, '-')));
-        for (let part = 0; part < 3; part++) {
-            const chunk = whole2.subarray(part * 500, (part + 1) * 500);
+        const fragmentedGame = crypto.randomBytes(65507);
+        const whole2 = L.udpPacket(emu.ip, 12345, host13, 12345, fragmentedGame);
+        const fragmentMtu = 1200, parts = Math.ceil(whole2.length / fragmentMtu);
+        for (let part = parts - 1; part >= 0; part--) {
+            const chunk = whole2.subarray(part * fragmentMtu, (part + 1) * fragmentMtu);
             const fh = Buffer.alloc(16);
             fh.writeUInt32BE(emu.ip, 0); fh.writeUInt32BE(host13, 4); fh.writeUInt16LE(77, 8);
-            fh[10] = part; fh[11] = 3; fh.writeUInt16LE(chunk.length, 12); fh.writeUInt16LE(500, 14);
+            fh[10] = part; fh[11] = parts; fh.writeUInt16LE(chunk.length, 12); fh.writeUInt16LE(fragmentMtu, 14);
             emu.sock.send(Buffer.concat([Buffer.from([L.P.IPV4_FRAG]), fh, chunk]), LP_PORT, '127.0.0.1');
         }
-        const d7 = await until(() => host.data.find((m) => m.subarray(13, 20).toString() === 'partido'), 3000, 'fragmentos de LAN Play en la consola');
-        assert.strictEqual(d7.length - 13, 1200);
+        const d7 = await until(() => host.data.find(m => m.length === 13 + fragmentedGame.length), 3000, 'fragmentos de LAN Play en la consola');
+        assert.deepEqual(d7.subarray(13), fragmentedGame);
         ok('fragmentos de LAN Play hacia una consola, reensamblados');
 
         // ---------- B: grupo de un emulador, una consola se une ----------
@@ -370,6 +375,23 @@ async function main() {
         emu.sendIp(L.ipv4(emu.ip, host13, 1, icmp));
         await until(() => echoed, 2000, 'eco ICMP');
         ok('responde al ping en sus IPs (Ryujinx no las reutiliza)');
+
+        const oldInfo = Buffer.from(emu2.hosting);
+        emu2.host();
+        emu2.hosting[0x10] = 3;
+        emu2.hosting.writeBigUInt64LE(GAME + 1n);
+        const announce = info => emu2.udp(L.GATEWAY_IP, 11452, 11452, L.ldnFrame(L.LT.SCAN_RESP, info));
+        announce(emu2.hosting);
+        announce(oldInfo); // An earlier poll reply can arrive after the host changed games.
+        const replacement = new Console('Next game');
+        await replacement.connect();
+        const nextGame = Buffer.alloc(8);
+        nextGame.writeBigUInt64LE(GAME + 1n);
+        replacement.send(8, nextGame);
+        const nextRooms = await replacement.frame(0x87);
+        assert.equal(nextRooms[0], 1, 'new game at the same address must be published immediately');
+        assert.notEqual(nextRooms.subarray(1, 7).toString(), code);
+        replacement.close();
 
         // ---------- E: una sala de un sysmodule antiguo sigue en 10.114.0.x y no se cruza con LAN Play ----------
         const legacy = new Console('Antiguo');

@@ -20,7 +20,7 @@ GATEWAY = ipaddress.IPv4Address("10.13.254.254").packed
 KEEPALIVE = b"\0"
 IPV4 = b"\1"
 TUNSETIFF, IFF_TUN, IFF_NO_PI = 0x400454CA, 1, 0x1000
-MAX_PACKET = 65507 - len(IPV4)
+MAX_WIRE_IP = 65507 - len(IPV4)
 LDN_PORT = 11452
 LDN_SCAN = bytes.fromhex("001445110000000000000000")
 
@@ -53,7 +53,7 @@ def wifi_scan_frame(client, scan, port):
 
 
 def unpack(packet):
-    if len(packet) < 20 or len(packet) > MAX_PACKET or packet[0] != 0x45:
+    if len(packet) < 20 or len(packet) > 65535 or packet[0] != 0x45:
         return None
     if int.from_bytes(packet[2:4], "big") != len(packet):
         return None
@@ -63,6 +63,8 @@ def unpack(packet):
 
 
 def from_client(packet, client):
+    if len(packet) > MAX_WIRE_IP:
+        return None  # The routed interface uses an MTU of 1400.
     endpoints = unpack(packet)
     if not endpoints:
         return None
@@ -99,6 +101,54 @@ def from_relay(frame, client):
     return result
 
 
+class RelayReceiver:
+    """Reassemble switch-lan-play's type-3 transport fragments before TUN delivery."""
+
+    def __init__(self, client):
+        self.client = client
+        self.pending = {}
+
+    def receive(self, frame):
+        if frame[:1] != b"\x03":
+            return from_relay(frame, self.client)
+        if len(frame) <= 17:
+            return None
+        source, dest = frame[1:5], frame[5:9]
+        if source[:2] != PREFIX or dest not in (self.client, BROADCAST, LIMITED_BROADCAST):
+            return None
+        data = frame[17:]
+        for order in ("<", ">"):
+            ident, part, total, length, mtu = struct.unpack_from(order + "HBBHH", frame, 9)
+            if length == len(data) and 0 < length <= mtu and part < total and part * mtu + length <= 65535 and (
+                part == total - 1 or length == mtu
+            ) and mtu * (total - 1) + 1 <= 65535:
+                break
+        else:
+            return None
+        now = time.monotonic()
+        for key in list(self.pending):
+            if self.pending[key][0] <= now:
+                del self.pending[key]
+        key = source, dest, ident
+        record = self.pending.get(key)
+        if record is None:
+            if len(self.pending) >= 32:
+                return None
+            record = self.pending[key] = (now + 5, mtu, [None] * total)
+        _, first_mtu, pieces = record
+        if mtu != first_mtu or total != len(pieces):
+            del self.pending[key]
+            return None
+        pieces[part] = data
+        if any(piece is None for piece in pieces):
+            return None
+        del self.pending[key]
+        packet = b"".join(pieces)
+        if unpack(packet) != (source, dest):
+            return None
+        return from_relay(IPV4 + packet, self.client)
+
+
 def attach_tun(name):
     fd = os.open("/dev/net/tun", os.O_RDWR | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
@@ -110,6 +160,7 @@ def attach_tun(name):
 
 
 def run(tun, relay, client, wifi=None):
+    receiver = RelayReceiver(client)
     with selectors.DefaultSelector() as poller:
         poller.register(tun, selectors.EVENT_READ)
         poller.register(relay, selectors.EVENT_READ)
@@ -131,7 +182,7 @@ def run(tun, relay, client, wifi=None):
                         if frame:
                             relay.send(frame)
                     elif key.fileobj == relay:
-                        packet = from_relay(relay.recv(65536), client)
+                        packet = receiver.receive(relay.recv(65536))
                         if packet:
                             os.write(tun, packet)
                     else:

@@ -148,6 +148,11 @@ try {
         });
         await suite('Eden ENet transport', process.execPath, ['server/eden/test-host.js']);
         await suite('Eden to Switch wire crossplay', process.execPath, ['server/eden/test-crossplay.js']);
+        await suite('Original Yuzu to Switch wire crossplay', process.execPath, ['server/eden/test-crossplay.js'], {
+            ...process.env, ROOMCIRCUIT_TEST_YUZU: '1',
+        });
+        await suite('Eden, Yuzu and RyuLDN host roles, maximum game datagrams and room lifecycle',
+            process.execPath, ['server/eden/test-ryuldn-crossplay.js']);
     }
     await suite('UDP fragment memory and replay bounds', process.execPath, ['--test', 'server/relay/test-udp-fragments.js']);
     await suite('UDP v2 MTU-safe public wire protocol', process.execPath, ['--test', 'server/relay/test-udp-v2.js']);

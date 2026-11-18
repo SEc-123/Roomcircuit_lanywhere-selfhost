@@ -34,23 +34,24 @@ function create({ peer, network, send }) {
     }
     function add(remote, localPort, remotePort, owner, id, n) {
         const t = tuple(remote, localPort, remotePort);
-        if (tuples.has(t) || tuples.size >= MAX_FLOWS) return null;
+        if (tuples.has(t) || identities.size >= MAX_FLOWS) return null;
         const i = identity(remote, owner, id, n);
         const f = { remote, localPort, remotePort, owner, id, nonce: n, tuple: t, identity: i,
-            tx: 0n, rx: 0n, consumed: 0n, credit: 0, open: false, queued: [], bytes: 0 };
+            tx: 0n, rx: 0n, consumed: 0n, credit: 0, open: false, queued: [], bytes: 0,
+            closing: false, finSent: false, remoteFin: false };
         tuples.set(t, f);
         identities.set(i, f);
         return f;
     }
     function remove(f) {
         pendingBytes -= f.bytes;
-        tuples.delete(f.tuple);
+        if (tuples.get(f.tuple) === f) tuples.delete(f.tuple);
         identities.delete(f.identity);
     }
     function reset(f, reason, notify = true) {
         remove(f);
         emit(f, OP.RST, { aux: reason });
-        if (notify) clientClose(clientRoute(f));
+        if (notify && !f.closing) clientClose(clientRoute(f));
     }
     function pump(f) {
         while (f.open && f.queued.length) {
@@ -67,6 +68,11 @@ function create({ peer, network, send }) {
             if (length === head.length) f.queued.shift();
             else f.queued[0] = head.subarray(length);
         }
+        if (f.closing && f.open && !f.finSent) {
+            if (!emit(f, OP.FIN, { seq: f.tx })) return reset(f, REASON.BACKPRESSURE, false);
+            f.finSent = true;
+        }
+        if (f.finSent && f.remoteFin && f.consumed === f.tx) remove(f);
     }
     function fromClient(type, body) {
         const current = network();
@@ -89,7 +95,10 @@ function create({ peer, network, send }) {
             f.open = true;
             pump(f);
         } else if (type === TYPE.PROXY_DISCONNECT && body.length === SIZE.PROXY_DATA) {
-            reset(f, REASON.CLOSED, false);
+            if (!f.open || body.readInt32LE(SIZE.PROXY_INFO) !== 0) return reset(f, REASON.CLOSED, false);
+            f.closing = true;
+            tuples.delete(f.tuple);
+            pump(f);
         } else if (type === TYPE.PROXY_DATA && body.length >= SIZE.PROXY_DATA &&
             body.readUInt32LE(SIZE.PROXY_INFO) === body.length - SIZE.PROXY_DATA) {
             const payload = body.subarray(SIZE.PROXY_DATA);
@@ -125,11 +134,11 @@ function create({ peer, network, send }) {
             pump(f);
         } else if (h.op === OP.RST) {
             remove(f);
-            clientClose(clientRoute(f));
+            if (!f.closing) clientClose(clientRoute(f));
         } else if (h.op === OP.DATA && f.open && h.seq === f.rx) {
             const head = encodeProxyInfo(clientRoute(f), SIZE.PROXY_DATA);
             head.writeUInt32LE(h.payload.length, SIZE.PROXY_INFO);
-            send(TYPE.PROXY_DATA, Buffer.concat([head, h.payload]));
+            if (!f.closing) send(TYPE.PROXY_DATA, Buffer.concat([head, h.payload]));
             f.rx += BigInt(h.payload.length);
             if (!emit(f, OP.WINDOW, { seq: f.rx, aux: MAX_WINDOW })) reset(f, REASON.BACKPRESSURE);
         } else if (h.op === OP.WINDOW && h.seq >= f.consumed && h.seq <= f.tx) {
@@ -137,10 +146,12 @@ function create({ peer, network, send }) {
             f.credit = h.aux;
             pump(f);
         } else if (h.op === OP.FIN && f.open && h.seq === f.rx) {
-            // RyuLDN has a whole-connection close message, with no half-close command.
-            emit(f, OP.FIN, { seq: f.tx });
-            remove(f);
-            clientClose(clientRoute(f));
+            // RyuLDN closes both directions. Preserve all writes already accepted
+            // from its client before advertising the final native byte offset.
+            if (!f.closing) clientClose(clientRoute(f));
+            f.closing = f.remoteFin = true;
+            if (tuples.get(f.tuple) === f) tuples.delete(f.tuple);
+            pump(f);
         } else reset(f, REASON.PROTOCOL);
     }
     return { fromClient, fromRelay, clear() { tuples.clear(); identities.clear(); pendingBytes = 0; } };

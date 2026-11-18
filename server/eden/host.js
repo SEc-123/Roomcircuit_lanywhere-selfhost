@@ -14,14 +14,19 @@ const Message = Object.freeze({
     NAME_COLLISION: 8, IP_COLLISION: 9, VERSION: 10, PASSWORD: 11, CLOSED: 12, FULL: 13,
 });
 const Protocol = Object.freeze({ TCP: 3, UDP: 4 });
+// Historical yuzu and current Eden both advertise Room protocol v1, but yuzu
+// predates the separate IP enum value. Choose the wire mapping at the listener.
+const YuzuProtocol = Object.freeze({ TCP: 2, UDP: 3 });
 const Ldn = Object.freeze({ SCAN: 0, SCAN_RESPONSE: 1, CONNECT: 2, SYNC: 3, DISCONNECT: 4, DESTROY: 5 });
 const LDN_LENGTHS = [0, 0x480, 0x40, 0x480, 0x40, 0];
 const ANY_IP = Buffer.from([255, 255, 255, 255]);
 const NETWORK_VERSION = 1;
 const INET = 1;
 const MAX_DATA = 65507;
-const MAX_IPC_FRAME = 65535;
 const PROXY_HEADER_SIZE = 21;
+// A legal IPv4 UDP datagram can grow slightly when compressed. This also
+// bounds the ENet worker's accepted packet size (enet-host.c).
+const MAX_IPC_FRAME = PROXY_HEADER_SIZE + MAX_DATA + 1024;
 const ZSTD_MAGIC = 0xfd2fb528;
 const DECOMPRESS = {
     maxOutputLength: MAX_DATA,
@@ -79,7 +84,7 @@ function u64(value) {
 function sized(value) { return Buffer.concat([u32(value.length), value]); }
 function text(value) { return sized(Buffer.from(value, 'utf8')); }
 
-function decode(buffer) {
+function decode(buffer, wireProtocol) {
     const reader = new Reader(buffer);
     const message = reader.u8();
     let packet;
@@ -102,10 +107,11 @@ function decode(buffer) {
     case Message.PROXY: {
         const sourceFamily = reader.u8(), source = reader.bytes(4), sourcePort = reader.u16();
         const destFamily = reader.u8(), destination = reader.bytes(4), destinationPort = reader.u16();
-        const protocol = reader.u8(), broadcast = reader.u8();
+        const wire = reader.u8(), broadcast = reader.u8();
+        const protocol = wire === wireProtocol.UDP ? Protocol.UDP : wire === wireProtocol.TCP ? Protocol.TCP : null;
         const data = reader.sized(MAX_IPC_FRAME - PROXY_HEADER_SIZE);
         if (sourceFamily !== INET || destFamily !== INET || broadcast > 1 ||
-            (protocol !== Protocol.UDP && protocol !== Protocol.TCP)) return null;
+            protocol === null) return null;
         packet = { source, destination, sourcePort, destinationPort, protocol, broadcast, data };
         break;
     }
@@ -131,7 +137,7 @@ function encodeLdn(packet) {
     ]);
 }
 
-function encodeProxy(packet) {
+function encodeProxy(packet, wireProtocol) {
     if (!isIp(packet.source) || !isIp(packet.destination) || !isPort(packet.sourcePort) ||
         !isPort(packet.destinationPort) || !Buffer.isBuffer(packet.data) || packet.data.length > MAX_DATA ||
         (packet.protocol !== Protocol.UDP && packet.protocol !== Protocol.TCP))
@@ -144,7 +150,8 @@ function encodeProxy(packet) {
     if (compressed.length + PROXY_HEADER_SIZE > MAX_IPC_FRAME) return null;
     return Buffer.concat([
         u8(Message.PROXY), u8(INET), packet.source, u16(packet.sourcePort),
-        u8(INET), packet.destination, u16(packet.destinationPort), u8(packet.protocol),
+        u8(INET), packet.destination, u16(packet.destinationPort),
+        u8(packet.protocol === Protocol.UDP ? wireProtocol.UDP : wireProtocol.TCP),
         u8(Boolean(packet.broadcast)), sized(compressed),
     ]);
 }
@@ -170,6 +177,7 @@ function create({
     host = '127.0.0.1',
     port,
     name = 'RoomCircuit',
+    legacyYuzu = false,
     slots = 32,
     password = '',
     allocateIp,
@@ -187,6 +195,7 @@ function create({
         throw new TypeError('Eden transport requires a binary, an address allocator and packet handlers');
     if (typeof zstdCompressSync !== 'function' || typeof zstdDecompressSync !== 'function')
         throw new Error('Eden requires a Node.js release with Zstandard support (22.15+ or 24 LTS)');
+    const wireProtocol = legacyYuzu ? YuzuProtocol : Protocol;
     const roomPassword = Buffer.from(password, 'utf8');
     if (roomPassword.length > 128) throw new RangeError('Eden room password exceeds 128 bytes');
     const peers = new Map();
@@ -277,7 +286,7 @@ function create({
 
         let packet;
         try {
-            packet = decode(bytes);
+            packet = decode(bytes, wireProtocol);
         } catch (error) {
             if (!(error instanceof RangeError)) throw error;
             return;
@@ -386,7 +395,7 @@ function create({
         ready,
         peers,
         sendLdn: (peer, packet) => sendPacket(peer, encodeLdn(packet)),
-        sendProxy: (peer, packet) => sendPacket(peer, encodeProxy(packet)),
+        sendProxy: (peer, packet) => sendPacket(peer, encodeProxy(packet, wireProtocol)),
         close() {
             if (!closing) {
                 closing = true;

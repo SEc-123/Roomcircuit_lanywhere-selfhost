@@ -111,6 +111,14 @@ function create({ rooms, frame, forwardData, isOpen, allocateIp, memberAt, pause
                 }
                 if ((kind === LDN.SYNC || kind === LDN.SCAN_RESPONSE) && index === 0 &&
                     networkInfo(payload) && session && sameNetwork(payload, session)) {
+                    // A fresh guest can receive a delayed host-only snapshot while
+                    // the game processes its CONNECT. Only the host publication and
+                    // a matching connected row together confirm admission.
+                    if (kind === LDN.SYNC && (!member.room.published?.connected.has(member) ||
+                        !member.room.members.some((_, i) => {
+                            const row = FIRST_NODE + i * NODE_SIZE;
+                            return payload[row + 11] === 1 && payload.readUInt32LE(row) === ip;
+                        }))) return true;
                     return notify(onControl, { type: kind === LDN.SYNC ? 'sync' : 'scan',
                         ip: remote.ip, info: Buffer.from(payload) }, member);
                 }

@@ -65,6 +65,7 @@ def init(peer, source):
     assert kind == 0
     packet.decode(frame(kind, body))
     assert any(packet.client_id) and len(packet.mac_address) == 6
+    return body
 
 with tempfile.TemporaryDirectory() as d:
     env = dict(os.environ, ROOMCIRCUIT_RYULDN_PORT=str(port), LANYWHERE_STATS_PORT='0',
@@ -84,7 +85,7 @@ with tempfile.TemporaryDirectory() as d:
         with first, first.makefile('rb') as f, socket.create_connection(('127.0.0.1',port), 1) as second, second.makefile('rb') as s:
             first.settimeout(3)
             second.settimeout(3)
-            init(first, f)
+            identity = init(first, f)
             init(second, s)
             host = CreateAccessPointPacket()
             host.username = b'Upstream Wire Probe'
@@ -126,6 +127,11 @@ with tempfile.TemporaryDirectory() as d:
             payload = struct.pack('<IHIHII', ip2, 9501, ip1, 9500, 17, len(data)) + data
             second.sendall(frame(20, payload))
             assert read(f) == (20, payload)
+            data = bytes(range(251)) * 260 + bytes(247)
+            assert len(data) == 65507
+            payload = struct.pack('<IHIHII', ip2, 9501, ip1, 9500, 17, len(data)) + data
+            second.sendall(frame(20, payload))
+            assert read(f) == (20, payload)
             opener = struct.pack('<IHIHI', ip1, 45000, ip2, 4000, 6)
             accepter = struct.pack('<IHIHI', ip2, 4000, ip1, 45000, 6)
             first.sendall(frame(18, opener))
@@ -143,6 +149,10 @@ with tempfile.TemporaryDirectory() as d:
             first.close()
             f.close()
             assert read(s) == (16, bytes(4))
+            with socket.create_connection(('127.0.0.1', port), 2) as resumed, resumed.makefile('rb') as back:
+                resumed.sendall(frame(0, identity))
+                kind, new_identity = read(back)
+                assert kind == 0 and new_identity[:16] != identity[:16] and new_identity[16:] == identity[16:]
             print('Real RoomCircuit relay with upstream RyuLDN codec and TCP sockets passed initialize, host, scan, join, sync, UDP and TCP game data in both directions, stream close and host departure')
     finally:
         server.terminate()

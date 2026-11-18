@@ -1,0 +1,414 @@
+diff --git a/src/MeloNX/MeloNX/App/Core/Ryujinx/Ryujinx.swift b/src/MeloNX/MeloNX/App/Core/Ryujinx/Ryujinx.swift
+index 889bfe8..353b5ad 100644
+--- a/src/MeloNX/MeloNX/App/Core/Ryujinx/Ryujinx.swift
++++ b/src/MeloNX/MeloNX/App/Core/Ryujinx/Ryujinx.swift
+@@ -35,6 +35,7 @@ class Ryujinx : ObservableObject {
+     
+     // LDN and Firmware
+     @AppStorage("LDN_MITM") var ldn = printAllIPv4Addresses().first ?? "Unknown"
++    @AppStorage("roomCircuitGateway") private var roomCircuitGateway = false
+     @Published var firmwareversion = "0"
+     
+     // UI
+@@ -469,6 +470,9 @@ class Ryujinx : ObservableObject {
+         
+         if config.ldn_mitm {
+             args.append("--enable-ldn-mitm")
++            if roomCircuitGateway {
++                args.append("--roomcircuit-wifi-gateway")
++            }
+         }
+         
+         // ldn
+diff --git a/src/MeloNX/MeloNX/App/UI/Main/Home/SettingsView/SettingsView.swift b/src/MeloNX/MeloNX/App/UI/Main/Home/SettingsView/SettingsView.swift
+index 5125aa0..2e4a6cc 100644
+--- a/src/MeloNX/MeloNX/App/UI/Main/Home/SettingsView/SettingsView.swift
++++ b/src/MeloNX/MeloNX/App/UI/Main/Home/SettingsView/SettingsView.swift
+@@ -20,6 +20,7 @@ struct SettingsViewNew: View {
+     @AppStorage("useTrollStore") var useTrollStore: Bool = false
+     @AppStorage("OldView") var oldView = true
+     @AppStorage("LDN_MITM") var ldn = printAllIPv4Addresses().first ?? "Unknown"
++    @AppStorage("roomCircuitGateway") private var roomCircuitGateway = false
+     @AppStorage("portal") var gamepo = false
+     
+     @Environment(\.colorScheme) var colorScheme
+@@ -1032,6 +1033,9 @@ struct SettingsViewNew: View {
+                 SettingsToggle(isOn: config.enableInternet, icon: "wifi.router.fill", label: "Guest Internet Access / LAN Mode", infoMessage: "Allows the emulated application to connect to the Internet.\n\nGames with a LAN mode can connect to each other when this is enabled and the systems are connected to the same access point. This includes real consoles as well.\n\nDoes NOT allow connecting to Nintendo servers. May cause crashing in certain games that try to connect to the Internet.\n\nLeave OFF if unsure.")
+                 Divider()
+                 SettingsToggle(isOn: config.ldn_mitm, icon: "ipad.sizes", label: "ldn_mitm", infoMessage: "ldn_mitm will modify local wireless/local play functionality in games to function as if it were LAN, allowing for local, same-network connections with other Ryujinx instances and hacked Nintendo Switch consoles that have the ldn_mitm module installed.\n\nMultiplayer requires all players to be on the same game version (i.e. Super Smash Bros. Ultimate v13.0.1 can't connect to v13.0.0).\n\nLeave OFF if unsure.")
++                if config.ldn_mitm.wrappedValue {
++                    Toggle("RoomCircuit Wi-Fi gateway", isOn: $roomCircuitGateway)
++                }
+             }
+         }
+     }
+diff --git a/src/MeloNX/MeloNX/Info.plist b/src/MeloNX/MeloNX/Info.plist
+index 37decea..2bc8e75 100644
+--- a/src/MeloNX/MeloNX/Info.plist
++++ b/src/MeloNX/MeloNX/Info.plist
+@@ -2,6 +2,8 @@
+ <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+ <plist version="1.0">
+ <dict>
++	<key>NSLocalNetworkUsageDescription</key>
++	<string>Connect to local wireless games and your Wi-Fi game gateway.</string>
+ 	<key>CFBundleURLTypes</key>
+ 	<array>
+ 		<dict>
+diff --git a/src/Ryujinx.HLE/HLEConfiguration.cs b/src/Ryujinx.HLE/HLEConfiguration.cs
+index 63ab442..ea7773d 100644
+--- a/src/Ryujinx.HLE/HLEConfiguration.cs
++++ b/src/Ryujinx.HLE/HLEConfiguration.cs
+@@ -158,6 +158,7 @@ namespace Ryujinx.HLE
+         /// Multiplayer LAN Interface ID (device GUID)
+         /// </summary>
+         public string MultiplayerLanInterfaceId { get; set; }
++        public bool RoomCircuitWifiGateway { get; set; }
+
+         /// <summary>
+         /// Multiplayer Mode
+diff --git a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LanDiscovery.cs b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LanDiscovery.cs
+index 6044331..488f1c4 100644
+--- a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LanDiscovery.cs
++++ b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LanDiscovery.cs
+@@ -33,6 +33,8 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+
+         private readonly AutoResetEvent _apConnected = new(false);
+
++        private readonly RoomCircuitWifiRoute _gateway;
++
+         internal readonly IPAddress LocalAddr;
+         internal readonly IPAddress LocalBroadcastAddr;
+         internal NetworkInfo NetworkInfo;
+@@ -90,13 +92,14 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+             return networkInfo;
+         }
+
+-        public LanDiscovery(LdnMitmClient parent, IPAddress ipAddress, IPAddress ipv4Mask)
++        public LanDiscovery(LdnMitmClient parent, IPAddress ipAddress, IPAddress ipv4Mask, bool useRoomCircuitGateway = false)
+         {
+             Logger.Info?.PrintMsg(LogClass.ServiceLdn, $"Initialize LanDiscovery using IP: {ipAddress}");
+
+             _parent = parent;
+             LocalAddr = ipAddress;
+             LocalBroadcastAddr = GetBroadcastAddress(ipAddress, ipv4Mask);
++            _gateway = RoomCircuitWifiRoute.ForInterface(useRoomCircuitGateway, ipAddress, LocalBroadcastAddr);
+
+             _fakeSsid = new Ssid
+             {
+@@ -143,6 +146,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+                 _parent.InvokeNetworkChange(info, true);
+             }
+
++            _gateway?.Activate();
+             _apConnected.Set();
+         }
+
+@@ -317,12 +321,12 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+                 // NOTE: Linux won't receive any broadcast packets if the socket is not bound to the broadcast address.
+                 //       Windows only works if bound to localhost or the local address.
+                 //       See this discussion: https://stackoverflow.com/questions/13666789/receiving-udp-broadcast-packets-on-linux
+-                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
++                if (_gateway == null && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS()))
+                 {
+                     _udp2 = new LdnProxyUdpServer(_protocol, LocalBroadcastAddr, DefaultPort);
+                 }
+
+-                _udp = new LdnProxyUdpServer(_protocol, LocalAddr, DefaultPort);
++                _udp = new LdnProxyUdpServer(_protocol, LocalAddr, DefaultPort, allowBroadcast: _gateway == null);
+             }
+             catch (Exception ex)
+             {
+@@ -338,7 +342,10 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+         {
+             _udp.ClearScanResults();
+
+-            if (_protocol.SendBroadcast(_udp, LanPacketType.Scan, DefaultPort) < 0)
++            int sent = _gateway == null
++                ? _protocol.SendBroadcast(_udp, LanPacketType.Scan, DefaultPort)
++                : _protocol.SendPacket(_udp, LanPacketType.Scan, Array.Empty<byte>(), new IPEndPoint(RoomCircuitWifiRoute.Address, DefaultPort));
++            if (sent < 0)
+             {
+                 return Array.Empty<NetworkInfo>();
+             }
+@@ -366,9 +373,9 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+
+                 if (filter.Flag.HasFlag(ScanFilterFlag.Ssid))
+                 {
+-                    Span<byte> gameSsid = item.Value.Common.Ssid.Name.AsSpan()[item.Value.Common.Ssid.Length..];
+-                    Span<byte> scanSsid = filter.Ssid.Name.AsSpan()[filter.Ssid.Length..];
+-                    copy &= gameSsid.SequenceEqual(scanSsid);
++                    int length = filter.Ssid.Length;
++                    copy &= length <= LdnConst.SsidLengthMax && length == item.Value.Common.Ssid.Length &&
++                        item.Value.Common.Ssid.Name.AsSpan()[..length].SequenceEqual(filter.Ssid.Name.AsSpan()[..length]);
+                 }
+
+                 if (filter.Flag.HasFlag(ScanFilterFlag.SceneId))
+@@ -490,6 +497,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+             NetworkInfo.NetworkId.IntentId = networkConfig.IntentId;
+
+             NetworkInfo.Ldn.Nodes[0] = GetNodeInfo(NetworkInfo.Ldn.Nodes[0], userConfig, networkConfig.LocalCommunicationVersion);
++            _gateway?.Activate();
+             NetworkInfo.Ldn.Nodes[0].IsConnected = 1;
+             NetworkInfo.Ldn.NodeCount++;
+
+@@ -500,6 +508,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+
+         public void DestroyNetwork()
+         {
++            _gateway?.Deactivate();
+             if (_tcp != null)
+             {
+                 try
+@@ -554,6 +563,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+
+         public void Dispose()
+         {
++            _gateway?.Deactivate();
+             if (_initialized)
+             {
+                 DisconnectAndStop();
+@@ -568,6 +578,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+
+         public void DisconnectAndStop()
+         {
++            _gateway?.Deactivate();
+             if (_udp != null)
+             {
+                 try
+diff --git a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LdnMitmClient.cs b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LdnMitmClient.cs
+index 273acdd..46f91b0 100644
+--- a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LdnMitmClient.cs
++++ b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LdnMitmClient.cs
+@@ -22,7 +22,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
+         {
+             UnicastIPAddressInformation localIpInterface = NetworkHelpers.GetLocalInterface(config.MultiplayerLanInterfaceId).Item2;
+
+-            _lanDiscovery = new LanDiscovery(this, localIpInterface.Address, localIpInterface.IPv4Mask);
++            _lanDiscovery = new LanDiscovery(this, localIpInterface.Address, localIpInterface.IPv4Mask, config.RoomCircuitWifiGateway);
+         }
+
+         internal void InvokeNetworkChange(NetworkInfo info, bool connected, DisconnectReason reason = DisconnectReason.None)
+diff --git a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/Proxy/LdnProxyTcpClient.cs b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/Proxy/LdnProxyTcpClient.cs
+index 7f755b4..45378a6 100644
+--- a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/Proxy/LdnProxyTcpClient.cs
++++ b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/Proxy/LdnProxyTcpClient.cs
+@@ -3,6 +3,7 @@ using System;
+ using System.Net;
+ using System.Net.Sockets;
+ using System.Threading;
++using System.Threading.Tasks;
+
+ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm.Proxy
+ {
+@@ -11,6 +12,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm.Proxy
+         private readonly LanProtocol _protocol;
+         private byte[] _buffer;
+         private int _bufferEnd;
++        private readonly TaskCompletionSource<bool> _connectionResult = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+         public LdnProxyTcpClient(LanProtocol protocol, IPAddress address, int port) : base(address, port)
+         {
+@@ -24,9 +26,12 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm.Proxy
+
+         protected override void OnConnected()
+         {
++            _connectionResult.TrySetResult(true);
+             Logger.Info?.PrintMsg(LogClass.ServiceLdn, $"LdnProxyTCPClient connected!");
+         }
+
++        protected override void OnDisconnected() => _connectionResult.TrySetResult(false);
++
+         protected override void OnReceived(byte[] buffer, long offset, long size)
+         {
+             _protocol.Read(ref _buffer, ref _bufferEnd, buffer, (int)offset, (int)size);
+@@ -64,6 +69,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm.Proxy
+
+         protected override void OnError(SocketError error)
+         {
++            _connectionResult.TrySetResult(false);
+             Logger.Error?.PrintMsg(LogClass.ServiceLdn, $"LdnProxyTCPClient caught an error with code {error}");
+         }
+
+@@ -75,15 +81,12 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm.Proxy
+
+         public override bool Connect()
+         {
+-            // TODO: NetCoreServer has a Connect() method, but it currently leads to weird issues.
+-            base.ConnectAsync();
+-
+-            while (IsConnecting)
+-            {
+-                Thread.Sleep(1);
+-            }
+-
+-            return IsConnected;
++            if (IsConnected) return true;
++            if (!base.ConnectAsync()) return false;
++            // ProcessConnect clears IsConnecting before finishing socket setup.
++            // Wait for its completion callback before the LDN join frame is sent.
++            return _connectionResult.Task.Wait(TimeSpan.FromSeconds(4)) &&
++                _connectionResult.Task.Result && IsConnected;
+         }
+
+         public bool Start()
+diff --git a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/Proxy/LdnProxyUdpServer.cs b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/Proxy/LdnProxyUdpServer.cs
+index 0f5875a..1f5fb8d 100644
+--- a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/Proxy/LdnProxyUdpServer.cs
++++ b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/Proxy/LdnProxyUdpServer.cs
+@@ -15,6 +15,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm.Proxy
+         private const long ScanFrequency = 1000;
+
+         private readonly LanProtocol _protocol;
++        private readonly bool _allowBroadcast;
+         private byte[] _buffer;
+         private int _bufferEnd;
+
+@@ -25,8 +26,9 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm.Proxy
+         private readonly AutoResetEvent _scanResponse = new(false);
+         private long _lastScanTime;
+
+-        public LdnProxyUdpServer(LanProtocol protocol, IPAddress address, int port) : base(address, port)
++        public LdnProxyUdpServer(LanProtocol protocol, IPAddress address, int port, bool allowBroadcast = true) : base(address, port)
+         {
++            _allowBroadcast = allowBroadcast;
+             _protocol = protocol;
+             _protocol.Scan += HandleScan;
+             _protocol.ScanResponse += HandleScanResponse;
+@@ -42,7 +44,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm.Proxy
+         {
+             return new Socket(Endpoint.AddressFamily, SocketType.Dgram, ProtocolType.Udp)
+             {
+-                EnableBroadcast = true,
++                EnableBroadcast = _allowBroadcast,
+             };
+         }
+
+diff --git a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/RoomCircuitWifiRoute.cs b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/RoomCircuitWifiRoute.cs
+new file mode 100644
+index 0000000..2c2ca23
+--- /dev/null
++++ b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/RoomCircuitWifiRoute.cs
+@@ -0,0 +1,43 @@
++using System.Net;
++using System.Net.Sockets;
++using System.Threading;
++
++namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
++{
++    internal sealed class RoomCircuitWifiRoute
++    {
++        public static readonly IPAddress Address = IPAddress.Parse("10.13.254.254");
++        private static readonly IPAddress GameBroadcast = IPAddress.Parse("10.13.255.255");
++        private static RoomCircuitWifiRoute _active;
++        private readonly IPAddress _localBroadcast;
++
++        private RoomCircuitWifiRoute(IPAddress localBroadcast) => _localBroadcast = localBroadcast;
++
++        public static RoomCircuitWifiRoute ForInterface(bool enabled, IPAddress local, IPAddress localBroadcast)
++        {
++            byte[] octets = local.GetAddressBytes();
++            return enabled && octets.Length == 4 && octets[0] == 10 && octets[1] == 13
++                ? new RoomCircuitWifiRoute(localBroadcast)
++                : null;
++        }
++
++        public void Activate() => Interlocked.Exchange(ref _active, this);
++
++        public void Deactivate() => Interlocked.CompareExchange(ref _active, null, this);
++
++        public static IPEndPoint Map(SocketType socketType, IPEndPoint target)
++        {
++            var route = Volatile.Read(ref _active);
++            if (route == null || socketType != SocketType.Dgram || target == null ||
++                target.AddressFamily != AddressFamily.InterNetwork)
++            {
++                return target;
++            }
++
++            IPAddress ip = target.Address;
++            return ip.Equals(IPAddress.Broadcast) || ip.Equals(GameBroadcast) || ip.Equals(route._localBroadcast)
++                ? new IPEndPoint(Address, target.Port)
++                : target;
++        }
++    }
++}
+diff --git a/src/Ryujinx.HLE/HOS/Services/Sockets/Bsd/Impl/ManagedSocket.cs b/src/Ryujinx.HLE/HOS/Services/Sockets/Bsd/Impl/ManagedSocket.cs
+index c42b720..cd3bbc6 100644
+--- a/src/Ryujinx.HLE/HOS/Services/Sockets/Bsd/Impl/ManagedSocket.cs
++++ b/src/Ryujinx.HLE/HOS/Services/Sockets/Bsd/Impl/ManagedSocket.cs
+@@ -1,4 +1,5 @@
+ using Ryujinx.Common.Logging;
++using Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm;
+ using Ryujinx.HLE.HOS.Services.Sockets.Bsd.Types;
+ using System;
+ using System.Collections.Generic;
+@@ -23,7 +24,9 @@ namespace Ryujinx.HLE.HOS.Services.Sockets.Bsd.Impl
+
+         public IntPtr Handle => Socket.Handle;
+
+-        public IPEndPoint RemoteEndPoint => Socket.RemoteEndPoint as IPEndPoint;
++        private IPEndPoint _guestBroadcastPeer;
++
++        public IPEndPoint RemoteEndPoint => _guestBroadcastPeer ?? Socket.RemoteEndPoint as IPEndPoint;
+
+         public IPEndPoint LocalEndPoint => Socket.LocalEndPoint as IPEndPoint;
+
+@@ -124,7 +127,9 @@ namespace Ryujinx.HLE.HOS.Services.Sockets.Bsd.Impl
+         {
+             try
+             {
+-                Socket.Connect(remoteEndPoint);
++                IPEndPoint routed = RoomCircuitWifiRoute.Map(SocketType, remoteEndPoint);
++                Socket.Connect(routed);
++                _guestBroadcastPeer = ReferenceEquals(routed, remoteEndPoint) ? null : remoteEndPoint;
+
+                 return LinuxError.SUCCESS;
+             }
+@@ -144,6 +149,7 @@ namespace Ryujinx.HLE.HOS.Services.Sockets.Bsd.Impl
+         public void Disconnect()
+         {
+             Socket.Disconnect(true);
++            _guestBroadcastPeer = null;
+         }
+
+         public void Dispose()
+@@ -283,7 +289,7 @@ namespace Ryujinx.HLE.HOS.Services.Sockets.Bsd.Impl
+         {
+             try
+             {
+-                sendSize = Socket.SendTo(buffer[..size], ConvertBsdSocketFlags(flags), remoteEndPoint);
++                sendSize = Socket.SendTo(buffer[..size], ConvertBsdSocketFlags(flags), RoomCircuitWifiRoute.Map(SocketType, remoteEndPoint));
+
+                 return LinuxError.SUCCESS;
+             }
+diff --git a/src/Ryujinx.Headless.SDL2/Options.cs b/src/Ryujinx.Headless.SDL2/Options.cs
+index eda71b6..f457dff 100644
+--- a/src/Ryujinx.Headless.SDL2/Options.cs
++++ b/src/Ryujinx.Headless.SDL2/Options.cs
+@@ -219,6 +219,9 @@ namespace Ryujinx.Headless.SDL2
+         [Option("enable-ldn-mitm", Required = false, Default = false, HelpText = "Enables the ldn mitm mode, allowing for local wireless play.")]
+         public bool ldnMitm { get; set; }
+
++        [Option("roomcircuit-wifi-gateway", Required = false, Default = false, HelpText = "Use the RoomCircuit gateway on a routed 10.13.0.0/16 test network.")]
++        public bool RoomCircuitWifiGateway { get; set; }
++
+         [Option("lan-interface-id", Required = false, Default = "0", HelpText = "GUID for the network interface used by LAN.")]
+         public string MultiplayerLanInterfaceId { get; set; }
+
+diff --git a/src/Ryujinx.Headless.SDL2/Program.cs b/src/Ryujinx.Headless.SDL2/Program.cs
+index 9f12014..55dda98 100644
+--- a/src/Ryujinx.Headless.SDL2/Program.cs
++++ b/src/Ryujinx.Headless.SDL2/Program.cs
+@@ -1755,7 +1755,10 @@ namespace Ryujinx.Headless.SDL2
+                 options.AudioVolume,
+                 AppleHV,
+                 options.MultiplayerLanInterfaceId,
+-                options.ldnMitm ? MultiplayerMode.LdnMitm : MultiplayerMode.Disabled);
++                options.ldnMitm ? MultiplayerMode.LdnMitm : MultiplayerMode.Disabled)
++            {
++                RoomCircuitWifiGateway = OperatingSystem.IsIOS() && options.ldnMitm && options.RoomCircuitWifiGateway,
++            };
+
+             return new Switch(configuration);
+         }

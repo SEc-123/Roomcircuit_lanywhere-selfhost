@@ -30,6 +30,7 @@ function sameNetworkIdentity(first, second) {
         first.subarray(0, 32).equals(second.subarray(0, 32)) &&
         first.subarray(0x20, 0x26).equals(second.subarray(0x20, 0x26));
 }
+function networkKey(info) { return info.subarray(0, 0x26).toString('hex'); }
 function recordDirectInfo(bridge, info, fork, now = Date.now()) {
     const current = bridge.fork?.raw || bridge.info;
     if (current && !sameNetworkIdentity(current, info)) return;
@@ -477,11 +478,14 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
                 if (type === StreamWire.RESPONSE && vs.forkTcp) return vs.forkTcp.receiveControl(body);
                 return onFrame(vs, type, body);
             },
-            data: (from, dst, portsPayload) => {
-                // Paquete de una consola de la sala para el emulador (entre emuladores ya va por LAN Play).
-                if (from.socket?.lanPlayPeer || byIp.get(ip13) !== vs.endpoint) return;
+            data: (from, dst, portsPayload, routeLanPeers = false) => {
+                // Ordinary LAN-to-LAN packets already travel on the raw path.
+                // A mobile unicast addressed to the gateway only travels through its room.
+                if ((from.socket?.lanPlayPeer && !routeLanPeers) || byIp.get(ip13) !== vs.endpoint) return;
                 const sport = portsPayload.readUInt16LE(0), dport = portsPayload.readUInt16LE(2);
-                const to = dst === ip13 ? ip13 : BCAST;
+                // One LAN Play endpoint may serve devices in different rooms.
+                // A routed fan-out addresses each admitted device individually.
+                const to = routeLanPeers || dst === ip13 ? ip13 : BCAST;
                 traffic.down++; traffic.downBytes += portsPayload.length - 4;
                 traffic.downMax = Math.max(traffic.downMax, portsPayload.length - 4);
                 const b = vs.member && bridges.get(vs.member.room.code);
@@ -521,14 +525,16 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
     // ---------- Grupos de consolas → emuladores --------------------------------------------------------------
     // Un emulador busca grupo: respondemos con los grupos abiertos de consolas, como si sus anfitriones estuvieran
     // en la LAN.
-    function answerScan(client, src, sport) {
+    function answerScan(client, src, sport, gatewayRequest) {
         for (const room of rooms.values()) {
             const pub = room.published;
-            if (!room.net13 || !isOpen(room)) continue;
+            if (!room.net13 || !isOpen(room) || pub.member.ip === src) continue;
             const existing = bridges.get(room.code);
-            if (existing && existing.origin === 'emu') continue;  // ese grupo ya lo ve por LAN Play
-            if (pub.member.socket?.lanPlayPeer) continue;
-            bridge(room.code, 'console');
+            if (pub.member.socket?.lanPlayPeer) {
+                // A directed scan never reaches the other LAN hosts. Return their
+                // public standard sessions from the gateway's discovery cache.
+                if (!gatewayRequest || !existing || existing.fork || existing.origin !== 'emu') continue;
+            } else bridge(room.code, 'console');
             sendTo(client, P.IPV4, udpPacket(pub.member.ip, LDN_PORT, src, sport, ldnFrame(LT.SCAN_RESP, pub.info)));
         }
     }
@@ -538,13 +544,12 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
         const room = rooms.get(b.code);
         if (!room) return t.abort();
         const vs = virtualMember(client.address, ip, onStationFrame);
-        let joined = false, nodeInfo = null;
+        let nodeInfo = null;
         const st = {};
         t.bridge = b;
         t.endpoint = client;
         function onStationFrame(_vs, type, body) {
             if (type === T.ROOM) {
-                joined = true;
                 b.emu.set(ip, vs);
                 if (nodeInfo) sendConnect();
             } else if (type === T.ERROR) {
@@ -575,7 +580,6 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
                 const gameId = Buffer.alloc(8);
                 gameId.writeBigUInt64LE(room.gameId);
                 frame(vs, T.JOIN, Buffer.concat([Buffer.from(b.code, 'ascii'), nick, gameId, F_NET13]));
-                if (joined) sendConnect();
             }
         };
         t.onClose = () => {
@@ -603,8 +607,27 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             if (info[at + 11] && !consoleAt(info.readUInt32LE(at))) ownsSource(client, info.readUInt32LE(at), true);
         }
         let b = [...bridges.values()].find((x) => x.origin === 'emu' && x.host13 === host13);
-        if (b) recordDirectInfo(b, info, forkControl);
-        if (b && (!!b.fork !== !!forkControl || (b.fork && b.fork.key !== identity.key))) return;
+        const now = Date.now();
+        const retired = client.retiredHosts?.get(host13);
+        if ((retired?.get(networkKey(info)) || 0) > now) return;
+        if (b && !!b.fork !== !!forkControl) {
+            recordDirectInfo(b, info, forkControl);
+            return;
+        }
+        const previous = b?.fork?.raw || b?.info;
+        if (previous && !sameNetworkIdentity(previous, info)) {
+            // A host can re-create immediately at the same IP. Keep delayed
+            // replies from the old session from resurrecting its room or seats.
+            const history = retired || new Map();
+            for (const [key, expiry] of history) if (expiry <= now) history.delete(key);
+            if (history.size >= 16) return;
+            history.set(networkKey(previous), now + HOST_GONE_MS);
+            dropBridge(b);
+            b = null;
+            client.retiredHosts ??= new Map();
+            client.retiredHosts.set(host13, history);
+        }
+        if (b?.fork && b.fork.key !== identity.key) return;
         if (!b) {
             const node0 = NODES;
             const name = info.subarray(node0 + 12, node0 + 45);
@@ -912,10 +935,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             if (!toGateway) rawGame(client, p.src, p.dst, P.IPV4, pkt);
             traffic.frags++;
             const whole = reassemble(client, p);
-            if (whole && whole.proto === 17 && whole.body.length >= 8) {
-                const sport = whole.body.readUInt16BE(0), dport = whole.body.readUInt16BE(2);
-                if (dport !== LDN_PORT) gameData(p.src, p.dst, sport, dport, whole.body.subarray(8, whole.body.readUInt16BE(4)), p.id);
-            }
+            if (whole) reassembledGame(whole, p.id);
             return;
         }
         // ICMP eco a una IP de la pasarela (Ryujinx comprueba así que su IP no esté ocupada).
@@ -942,7 +962,7 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
                         else if (f.type === 5) forkBye(p.src, f.data);
                     }
                     if (f.type === LT.SCAN && (p.dst === BCAST || p.dst === 0xffffffff || p.dst === gatewayIp))
-                        answerScan(client, p.src, sport);
+                        answerScan(client, p.src, sport, p.dst === gatewayIp);
                     else if (f.type === LT.SCAN_RESP && f.data.length === NETWORK_INFO_SIZE) {
                         const forkControl = p.id === Fork.CONTROL && (p.dst === BCAST || p.dst === 0xffffffff);
                         if (p.dst === gatewayIp || forkControl) onEmuGroup(client, p.src, f.data, forkControl);
@@ -1001,7 +1021,8 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
         if (!le && payload.readUInt16BE(12) !== payload.length - 16) return null;
         const u16 = (o) => (le ? payload.readUInt16LE(o) : payload.readUInt16BE(o));
         const id = u16(8), part = payload[10], total = payload[11], len = u16(12), pmtu = u16(14);
-        if (!total || total > 30 || part >= total || !pmtu || pmtu * total > 65535 ||
+        if (!total || part >= total || !pmtu || (total - 1) * pmtu >= 65535 ||
+            part * pmtu + len > 65535 ||
             !len || len > pmtu || (part < total - 1 && len !== pmtu)) return null;
         return { id, part, total, len, pmtu };
     }
@@ -1010,23 +1031,49 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
         const key = `f-${client.id}-${payload.readUInt32BE(0)}-${payload.readUInt32BE(4)}-${id}`;
         let r = reassembly.get(key);
         if (!r) {
-            if (reassembly.size >= MAX_REASSEMBLY || reassemblyBytes + pmtu * total > MAX_REASSEMBLY_BYTES) return null;
-            r = { at: Date.now(), client, buf: Buffer.alloc(pmtu * total), mask: 0, total, pmtu, size: 0, bytes: pmtu * total };
+            const capacity = Math.min(65535, pmtu * total);
+            if (reassembly.size >= MAX_REASSEMBLY || reassemblyBytes + capacity + total > MAX_REASSEMBLY_BYTES) return null;
+            r = { at: Date.now(), client, buf: Buffer.alloc(capacity), seen: new Uint8Array(total),
+                received: 0, total, pmtu, size: 0, bytes: capacity + total };
             reassembly.set(key, r);
             reassemblyBytes += r.bytes;
         }
         if (r.total !== total || r.pmtu !== pmtu) { dropAssembly(key); return null; }
-        if (r.mask & (1 << part)) return null;
+        if (r.seen[part]) return null;
         payload.copy(r.buf, pmtu * part, 16, 16 + len);
-        r.mask |= 1 << part;
+        r.seen[part] = 1;
+        r.received++;
         r.size = Math.max(r.size, pmtu * part + len);
-        if (r.mask !== (1 << total) - 1) return null;
+        if (r.received !== total) return null;
         dropAssembly(key);
         return r.buf.subarray(0, r.size);
     }
 
+    function reassembledGame(packet, ipId) {
+        if (packet.proto !== 17 || packet.body.length < 8) return;
+        const length = packet.body.readUInt16BE(4), dport = packet.body.readUInt16BE(2);
+        if (length < 8 || length > packet.body.length || dport === LDN_PORT) return;
+        gameData(packet.src, packet.dst, packet.body.readUInt16BE(0), dport, packet.body.subarray(8, length), ipId);
+    }
+
     // Un emulador envía un paquete del juego: si va a una consola de su sala (o a todos), sale por la sala.
     function gameData(src13, dst13, sport, dport, data, ipId) {
+        if (dst13 === gatewayIp) {
+            // On iOS a game broadcast may be sent to the selected gateway as a
+            // unicast. Only an admitted standard LAN Play member can originate
+            // it. The normal relay fan-out enforces recipient admission, limits
+            // and per-recipient format; no raw packet is reflected onto the LAN.
+            if (upstream || dport === LDN_PORT || dport === 11453 || !dport) return;
+            const member = lanMember(src13);
+            if (!member?.room.published?.connected.has(member) ||
+                member.socket.endpoint !== byIp.get(src13) ||
+                bridges.get(member.room.code)?.fork?.realByVirtual.has(src13)) return;
+            const ports = Buffer.alloc(4);
+            ports.writeUInt16LE(sport, 0); ports.writeUInt16LE(dport, 2);
+            traffic.up++; traffic.upBytes += data.length; traffic.upMax = Math.max(traffic.upMax, data.length);
+            forwardData(member, BCAST, Buffer.concat([ports, data]), false, true);
+            return;
+        }
         for (const b of bridges.values()) {
             const vs = b.emu.get(src13);
             if (!vs || !vs.member) continue;
@@ -1131,12 +1178,11 @@ function create({ port, log, rooms, count, paused, frame, forwardData, memberAt,
             if (!upstream && !toConsole && dst !== gatewayIp) {
                 rawGame(client, src, dst, P.IPV4_FRAG, payload);
             }
-            if (toConsole || broadcast) {
+            if (toConsole || broadcast || (!upstream && dst === gatewayIp)) {
                 const whole = relayReassemble(client, payload, fragment);
                 const p = whole && parseIpv4(whole);
-                if (p && p.src === src && p.dst === dst && p.proto === 17 && !p.mf && !p.off &&
-                    p.body.length >= 8 && p.body.readUInt16BE(2) !== LDN_PORT)
-                    gameData(p.src, p.dst, p.body.readUInt16BE(0), p.body.readUInt16BE(2), p.body.subarray(8, p.body.readUInt16BE(4)), p.id);
+                if (p && p.src === src && p.dst === dst && !p.mf && !p.off)
+                    reassembledGame(p, p.id);
             }
         }
     });

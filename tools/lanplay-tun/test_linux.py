@@ -65,6 +65,16 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as relay:
             assert client.recvfrom(128) == (b"scan", (GATEWAY, DISCOVERY_PORT))
             relay.sendto(b"\1" + datagram("10.13.5.80", CLIENT, port, b"game"), bridge)
             assert client.recvfrom(128) == (b"game", ("10.13.5.80", DISCOVERY_PORT))
+            large = (b"match-data" * 6600)[:65507]
+            fragmented = datagram("10.13.5.80", CLIENT, port, large)
+            chunk = 1200
+            parts = (len(fragmented) + chunk - 1) // chunk
+            for part in reversed(range(parts)):
+                body = fragmented[part * chunk:(part + 1) * chunk]
+                fragment = (b"\x03" + fragmented[12:20] +
+                            struct.pack("<HBBHH", 11, part, parts, len(body), chunk) + body)
+                relay.sendto(fragment, bridge)
+            assert client.recv(65507) == large
             client.sendto(b"game-reply", ("10.13.5.80", DISCOVERY_PORT))
             frame, _ = relay.recvfrom(4096)
             assert frame[17:21] == socket.inet_aton("10.13.5.80") and frame[29:] == b"game-reply"

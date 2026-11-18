@@ -5,12 +5,13 @@ Use the same Switch game and update on every device. Choose **Local Wireless** i
 | Client | Connection |
 | --- | --- |
 | Atmosphère Switch | Install the configurable Switch test ZIP. Open RoomCircuit and set the test server IPv4 and port **11470**. Choose **Main server**. |
-| Eden on Android or desktop | In Multiplayer, use **Direct Connect**, enter the test server IPv4 and UDP port **24872**, and join. Then search or host inside the game. This preview speaks Eden v0.2.1 and the compatible version-1 room protocol. Game data uses UDP. |
-| Ryubing / Kenji-NX desktop | Set `ldn_server` in the emulator's JSON configuration to the test IPv4. Choose **RyuLDN** and disable P2P hosting. The tested protocol uses TCP **30456**. See the [version-specific settings](../server/ryuldn/README.md). |
-| Kenji-NX Android | Use the included opt-in source patch for revision `280c427c550c5fe3bcc46b378e06a9b90a7e6b09b`. Set **Local wireless server** in System. Release Android builds that hardcode Disabled need this code rebuilt into the APK. |
+| Eden v0.2.1 on Android or desktop | In Multiplayer, use **Direct Connect**, enter the test server IPv4 and UDP port **24872**, and join. Then search or host inside the game. This preview speaks Eden v0.2.1 and the compatible version-1 room protocol. Game data uses UDP. |
+| Original Yuzu or Eden v0.2.0 (UDP enum 3) | Use **Direct Connect** on UDP **24873**. Original Yuzu and Eden report the same room version and use different game-packet encodings. Choose the port that matches the client build. |
+| Ryubing / Kenji-NX desktop | Set `ldn_server` in the emulator's JSON configuration to the test IPv4. Choose **RyuLDN** and disable P2P hosting. The listener uses TCP **30456**. The pinned upstream builds need a [client socket patch](../server/ryuldn/README.md) for reliable blocking I/O and TCP games. |
+| Kenji-NX Android | Apply the Android server setting and socket patches to the pinned source and rebuild. Set **Local wireless server** in System. See the [build-specific instructions](../server/ryuldn/README.md). |
 | Ryujinx-family build with **LAN Play** | Set the test server IPv4 and UDP port **11451**. Use a build that explicitly offers LAN Play. |
 | NX Pocket for iPhone or Mac | Use a supported game's **Local play** mode. Use the routed LAN Play setup below and set **Other devices' addresses** to `10.13.254.254`. |
-| MeloNX for iOS / other builds with only **ldn_mitm** | Use the routed LAN Play setup below and select the phone's test Wi-Fi interface if the build offers a choice. This path needs device verification. |
+| MeloNX for iOS | Build with the [MeloNX Wi-Fi gateway patch](../server/ryuldn/melonx.md). Select the phone's test Wi-Fi interface and enable **ldn_mitm** and **RoomCircuit Wi-Fi gateway**. This provides unicast discovery and game broadcast forwarding on iOS. |
 
 ### Start the preview
 
@@ -29,7 +30,7 @@ To reproduce the test ZIP from source, use a separate checkout. Set the default 
 Use a Linux gateway on the device's test Wi-Fi. This guide uses one client, with its own address and relay connection. The gateway must also have a working uplink. Example Wi-Fi address plan, on a dedicated test network:
 
 - Linux Wi-Fi interface `wlan0`, address `10.13.250.1/30`.
-- Apple device Wi-Fi address `10.13.250.2`, mask `255.255.255.252`, router `10.13.250.1`. Do not reuse that address for a second device.
+- Apple device Wi-Fi address `10.13.250.2`, mask `255.255.255.252`, router `10.13.250.1`. RoomCircuit reserves `10.13.250.0/24` from automatic allocations. Assign each routed client a unique IP.
 - Enable IPv4 forwarding on the test gateway. Permit forwarding only between the provisioned client and the game network over `rcgame0`. Preserve the existing uplink route.
 
 ```sh
@@ -46,13 +47,13 @@ The connected Wi-Fi /30 route keeps replies to the device on Wi-Fi. The TUN rout
 ### Operator and maintainer details
 
 - `server/relay/emulator-bridge.js` uses the native RoomCircuit room and participant state. Native, LAN Play, Eden and RyuLDN players can share the same game room on that relay. Crossplay uses shared, open Local Wireless rooms. Password-protected RoomCircuit admission is outside this preview.
-- `ROOMCIRCUIT_EDEN_PORT`, `ROOMCIRCUIT_RYULDN_PORT` and `LANYWHERE_LANPLAY_PORT` are opt-in. `ROOMCIRCUIT_EMULATOR_BIND` and `LANYWHERE_LANPLAY_BIND_ADDRESS` choose listening IPv4 interfaces. Build the pinned ENet worker on the target architecture with `sh server/eden/build.sh` before enabling Eden. Eden requires Node.js with the Zstd API (22.15 or newer, Node 24 recommended).
-- Crossplay depends on the game's local communication ID, local wireless version and sockets. RyuLDN supports the tested UDP and TCP stream paths. Eden's emulator socket proxy and this standard LAN Play bridge support UDP game traffic. TCP used for LAN Play discovery and join is separate. Compatibility per game needs a completed real match or in-game trade.
+- `ROOMCIRCUIT_EDEN_PORT`, `ROOMCIRCUIT_YUZU_PORT`, `ROOMCIRCUIT_RYULDN_PORT` and `LANYWHERE_LANPLAY_PORT` are opt-in. `ROOMCIRCUIT_EMULATOR_BIND` and `LANYWHERE_LANPLAY_BIND_ADDRESS` choose listening IPv4 interfaces. Build the pinned ENet worker on the target architecture with `sh server/eden/build.sh` before enabling Eden. Eden requires Node.js with the Zstd API (22.15 or newer, Node 24 recommended).
+- Crossplay depends on the game's local communication ID, local wireless version and sockets. See the [pairwise audit](CROSSPLAY-AUDIT.md) for the coverage of UDP, TCP and the required client patches. Compatibility per game needs a completed real match or in-game trade.
 - `ROOMCIRCUIT_TEST_ENET=1 npm test` includes the ENet transport and crossplay tests. Linux TUN validation uses `docker run --rm --cap-add NET_ADMIN --device /dev/net/tun -v "$PWD/tools/lanplay-tun:/test:ro" python:3.12-alpine python /test/test_linux.py`.
 
 ### 中文试用
 
 1. 在电脑上运行 `bash deploy/start-crossplay-test.sh 电脑的局域网IPv4`。首次测试用同一个 Wi-Fi。
 2. Switch 装可配置测试包，RoomCircuit 填电脑 IP 和 **11470**，重启大气层并选 **主服务器**。
-3. 安卓 Eden 进 **多人 → 直连**，填同一个 IP 和 **24872**。龙神选支持自定义地址的 **RyuLDN**，用 **30456**。支持 **LAN Play** 的版本，用 **11451**。Kenji 安卓需用随源码提供的补丁构建，iPhone 本地联机模式需通过上面的 Linux 网关。
+3. 安卓 Eden v0.2.1 进 **多人 → 直连**，填同一个 IP 和 **24872**。旧版编码的原版柚子和 Eden v0.2.0 填 **24873**。龙神选 **RyuLDN**，用 **30456**，所查版本需要套接字补丁。Kenji 安卓还需要服务器设置补丁。支持 **LAN Play** 的版本用 **11451**。NX Pocket 使用上面的 Linux 网关，MeloNX 还需构建带单播补丁的 iOS 版本。
 4. 打开同一款、同版本游戏，进「本地通信」。两端轮流建房，各玩完一局。宝可梦本地交换以双方实际完成一次交换为准。

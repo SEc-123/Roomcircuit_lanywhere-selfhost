@@ -21,6 +21,18 @@ function create({ bridge, host = '127.0.0.1', port = 30456, maxConnections = 256
     maxConnectionsPerIp = 12, joinTimeoutMs = 10000, log = () => {} }) {
     const clients = new Set();
     const connectionsByIp = new Map();
+    // Stock Ryujinx sends its previous Initialize ID and MAC after idle
+    // disconnects. Games may keep the MAC in scan filters and saved sessions.
+    const previousIdentities = new Map();
+    const rememberMs = 15 * 60 * 1000;
+    function rememberIdentity(id, mac) {
+        const now = Date.now();
+        for (const [key, entry] of previousIdentities) {
+            if (entry.expires > now && previousIdentities.size < maxConnections * 8) break;
+            previousIdentities.delete(key);
+        }
+        previousIdentities.set(id.toString('hex'), { mac, expires: now + rememberMs });
+    }
 
     const server = net.createServer(socket => {
         const address = socket.remoteAddress;
@@ -94,13 +106,13 @@ function create({ bridge, host = '127.0.0.1', port = 30456, maxConnections = 256
             if (event.type === 'connect') {
                 const version = event.node.readUInt16LE(OFFSET.NODE_VERSION);
                 if (info[OFFSET.ACCEPT_POLICY] !== 0 ||
-                    version !== node(info, 0).readUInt16LE(OFFSET.NODE_VERSION)) return;
+                    version !== node(info, 0).readUInt16LE(OFFSET.NODE_VERSION)) return void peer.kick(event.ip);
                 let slot = 1;
                 for (; slot < info[OFFSET.MAX_NODES]; slot++) {
                     const existing = node(info, slot);
                     if (!existing[OFFSET.NODE_ONLINE] || existing.readUInt32LE(0) === event.ip) break;
                 }
-                if (slot >= info[OFFSET.MAX_NODES]) return;
+                if (slot >= info[OFFSET.MAX_NODES]) return void peer.kick(event.ip);
                 const row = node(next, slot);
                 if (!row[OFFSET.NODE_ONLINE]) next[OFFSET.NODE_COUNT]++;
                 event.node.copy(row);
@@ -130,10 +142,17 @@ function create({ bridge, host = '127.0.0.1', port = 30456, maxConnections = 256
             head.writeUInt32LE(payload.length, SIZE.PROXY_INFO);
             send(TYPE.PROXY_DATA, Buffer.concat([head, payload]));
         }
-        function initialize() {
+        function initialize(body) {
             id = randomBytes(16);
-            mac = randomBytes(6);
-            mac[0] = (mac[0] | 2) & 0xfe;
+            const key = body.subarray(0, 16).toString('hex');
+            const previous = previousIdentities.get(key);
+            if (previous && previous.expires > Date.now() && previous.mac.equals(body.subarray(16))) {
+                mac = previous.mac;
+                previousIdentities.delete(key);
+            } else {
+                mac = randomBytes(6);
+                mac[0] = (mac[0] | 2) & 0xfe;
+            }
             peer = bridge.connect({ address, name: 'Ryujinx', onControl: control, onData: datagram,
                 onStream: bytes => streamProxy.fromRelay(bytes) });
             if (!peer) return socket.destroy();
@@ -227,7 +246,7 @@ function create({ bridge, host = '127.0.0.1', port = 30456, maxConnections = 256
                 return false;
             }
             if (type === TYPE.INITIALIZE && body.length === 22) {
-                if (!id) initialize();
+                if (!id) initialize(body);
             } else if (type === TYPE.PING && body.length === 2) {
                 if (body[0] !== 0) send(TYPE.PING, body);
             } else if (type === TYPE.PASSPHRASE && body.length === 128) {
@@ -267,6 +286,7 @@ function create({ bridge, host = '127.0.0.1', port = 30456, maxConnections = 256
             try { reader(chunk); } catch { socket.destroy(); }
         });
         socket.on('close', () => {
+            if (peer && id && mac) rememberIdentity(id, mac);
             leave(true);
             clients.delete(socket);
             const now = connectionsByIp.get(address);

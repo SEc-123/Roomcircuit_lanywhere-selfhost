@@ -12,6 +12,7 @@ const { parseEndpoint } = require(fs.existsSync(path.join(__dirname, 'regional-d
 const integerRanges = new Map([
     ['LANYWHERE_LANPLAY_PORT', [0, 65535]],
     ['ROOMCIRCUIT_EDEN_PORT', [0, 65535]],
+    ['ROOMCIRCUIT_YUZU_PORT', [0, 65535]],
     ['ROOMCIRCUIT_RYULDN_PORT', [0, 65535]],
     ['LANYWHERE_ENABLE_PUBLIC_UPSTREAM', [0, 1]],
     ['LANYWHERE_ENABLE_COMMUNITY_DIRECT', [0, 1]],
@@ -80,9 +81,11 @@ function validateConfig(source, { localAddresses = Object.values(os.networkInter
     const perIp = Number(settings.get('LANYWHERE_MAX_CONNECTIONS_PER_IP') || 12);
     if (perIp > total) throw new Error('The per-IP connection limit exceeds the total connection limit');
     const eden = Number(settings.get('ROOMCIRCUIT_EDEN_PORT') || 0);
+    const yuzu = Number(settings.get('ROOMCIRCUIT_YUZU_PORT') || 0);
     const lanplay = Number(settings.get('LANYWHERE_LANPLAY_PORT') || 0);
     const ryuldn = Number(settings.get('ROOMCIRCUIT_RYULDN_PORT') || 0);
     if (eden && [11460, lanplay].includes(eden)) throw new Error('The Eden UDP listener needs its own port');
+    if (yuzu && [11460, lanplay, eden].includes(yuzu)) throw new Error('The Yuzu UDP listener needs its own port');
     if ([11460, 11461, 11462].includes(ryuldn)) throw new Error('The RyuLDN TCP listener needs its own port');
     if (Number(settings.get('LANYWHERE_ENABLE_COMMUNITY_DIRECT')) === 1 &&
         Number(settings.get('LANYWHERE_ENABLE_PUBLIC_UPSTREAM')) !== 1)
@@ -95,7 +98,7 @@ if (require.main === module) {
         const source = fs.readFileSync(filename, 'utf8');
         validateConfig(source);
         if (fs.existsSync(path.join(__dirname, 'server.js')) &&
-            Number(source.match(/^\s*ROOMCIRCUIT_EDEN_PORT=(\d+)\s*$/m)?.[1] || 0))
+            [...source.matchAll(/^\s*ROOMCIRCUIT_(?:EDEN|YUZU)_PORT=(\d+)\s*$/gm)].some(match => Number(match[1]) > 0))
             fs.accessSync(path.join(__dirname, 'eden', 'build', 'enet-host'), fs.constants.X_OK);
         console.log('Switch Online configuration valid');
     } catch (error) {

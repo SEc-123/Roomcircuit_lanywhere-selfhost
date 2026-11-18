@@ -139,6 +139,7 @@ async function ryuldn(port) {
     await once(socket, 'connect');
     const client = {
         send(type, body) { socket.write(Ryu.frame(type, body)); },
+        pending(type) { return frames.some(frame => frame.type === type); },
         wait(type) {
             return until(() => take(frames, f => f.type === type)?.body, `RyuLDN frame ${type} missing`);
         },
@@ -171,7 +172,7 @@ async function nativeHost(client, game, marker) {
 
 async function lanClient(port, ip) {
     const socket = dgram.createSocket('udp4');
-    const answers = [], syncs = [], datagrams = [], fragments = [];
+    const answers = [], syncs = [], datagrams = [], destinations = [], fragments = [];
     let connection;
     function send(packet) {
         socket.send(Buffer.concat([Buffer.from([Lan.P.IPV4]), packet]), port, '127.0.0.1');
@@ -186,6 +187,7 @@ async function lanClient(port, ip) {
         if (packet.proto !== 17 || packet.body.length < 8) return;
         if (packet.body.readUInt16BE(2) !== 11452) {
             datagrams.push(packet.body.subarray(8));
+            destinations.push({ payload: packet.body.subarray(8), dst: packet.dst });
             return;
         }
         for (const reply of Lan.ldnRead({}, packet.body.subarray(8))) {
@@ -199,7 +201,9 @@ async function lanClient(port, ip) {
             send(Lan.udpPacket(ip, 11452, Lan.BCAST, 11452, Lan.ldnFrame(Lan.LT.SCAN)));
         },
         join(host) {
-            const node = Ryu.nodeInfo({ ip, mac: Buffer.from('020001020399', 'hex'), name: NAME, version: 9 });
+            const mac = Buffer.from('020000000000', 'hex');
+            mac.writeUInt32BE(ip, 2);
+            const node = Ryu.nodeInfo({ ip, mac, name: NAME, version: 9 });
             connection = new Lan.Tcp(ip, 37451, host, 11452, send);
             const pending = {};
             connection.onOpen = () => connection.write(Lan.ldnFrame(Lan.LT.CONNECT, node));
@@ -224,7 +228,7 @@ async function lanClient(port, ip) {
             header.writeUInt16LE(body.length, 14);
             socket.send(Buffer.concat([Buffer.from([Lan.P.IPV4_FRAG]), header, body]), port, '127.0.0.1');
         },
-        answers, syncs, datagrams, fragments, ip,
+        answers, syncs, datagrams, destinations, fragments, ip,
         close() { connection?.finish(); socket.close(); },
     };
 }
@@ -276,7 +280,22 @@ test('Switch, RyuLDN and LAN Play share an isolated game with UDP and a native t
     emu.send(Ryu.TYPE.CONNECT, connection);
     const conn = await host.wait(T.CONTROL, frame => frame[1] === LDN.CONNECT);
     const hostInfo = addStation(picked, conn.subarray(2));
+    // The relay seat exists before the host game admits its guest. An early
+    // SYNC cannot stand in for PUBLISH, and a delayed host-only SYNC can
+    // still arrive after publication. Only the final pair grants admission.
+    host.send(T.RELAY, Buffer.concat([Buffer.from([conn[0], LDN.SYNC]), hostInfo]));
+    host.send(0x05);
+    await host.wait(0x86);
+    emu.send(Ryu.TYPE.PING, Buffer.from([1, 1]));
+    await emu.wait(Ryu.TYPE.PING);
+    assert.equal(emu.pending(Ryu.TYPE.CONNECTED), false, 'premature SYNC must wait for host admission');
     host.send(T.PUBLISH, hostInfo);
+    host.send(T.RELAY, Buffer.concat([Buffer.from([conn[0], LDN.SYNC]), picked]));
+    host.send(0x05);
+    await host.wait(0x86);
+    emu.send(Ryu.TYPE.PING, Buffer.from([1, 2]));
+    await emu.wait(Ryu.TYPE.PING);
+    assert.equal(emu.pending(Ryu.TYPE.CONNECTED), false, 'delayed host-only SYNC cannot complete a guest join');
     host.send(T.RELAY, Buffer.concat([Buffer.from([conn[0], LDN.SYNC]), hostInfo]));
     emu.ip = (await emu.wait(Ryu.TYPE.PROXY_CONFIG)).readUInt32LE();
     assert.equal(emu.ip, conn.readUInt32LE(2));
@@ -380,6 +399,34 @@ test('Switch, RyuLDN and LAN Play share an isolated game with UDP and a native t
     assert.equal(legacy.fragments.length, 0);
     assert.equal(lan.fragments.length, 0);
 
+    // A routed phone substitutes the relay gateway for a local game broadcast.
+    // The reserved address is shared by all games; only admitted seats may use it.
+    const mobile = Buffer.from('iOS routed broadcast');
+    legacy.sendData(Lan.GATEWAY_IP, Buffer.from('unadmitted'));
+    legacy.sendFragments(Lan.GATEWAY_IP);
+    legacy2.join(emu.ip);
+    assert.equal((await emu.wait(Ryu.TYPE.SYNC))[NODE_COUNT], 4);
+    await until(() => legacy2.syncs.some(info => info[NODE_COUNT] === 4), 'second LAN seat was not admitted');
+    lan.sendData(Lan.GATEWAY_IP, mobile);
+    const routed = await emu.wait(Ryu.TYPE.PROXY_DATA);
+    assert.equal(Ryu.proxyInfo(routed).dst, BCAST);
+    assert.deepEqual(routed.subarray(Ryu.SIZE.PROXY_DATA), mobile);
+    await host.waitData(mobile);
+    await until(() => take(legacy2.datagrams, data => data.equals(mobile)), 'routed broadcast did not reach LAN peer');
+    assert.equal(legacy2.destinations.find(row => row.payload.equals(mobile)).dst, legacy2.ip);
+
+    lan.sendFragments(Lan.GATEWAY_IP);
+    const fragments = await emu.wait(Ryu.TYPE.PROXY_DATA);
+    assert.deepEqual(fragments.subarray(Ryu.SIZE.PROXY_DATA), Buffer.alloc(1600, 42));
+    const relayFragments = await emu.wait(Ryu.TYPE.PROXY_DATA);
+    assert.deepEqual(relayFragments.subarray(Ryu.SIZE.PROXY_DATA), Buffer.from('LAN Play relay fragment'));
+    await until(() => take(legacy2.datagrams, data => data.equals(Buffer.from('LAN Play relay fragment'))),
+        'encapsulated LAN fragments failed to reach an admitted LAN peer');
+    assert.equal(legacy.datagrams.length, 0, 'routed broadcast leaked to unrelated LAN endpoint');
+    assert.equal(legacy.fragments.length, 0);
+    assert.equal(lan.datagrams.length, 0, 'routed broadcast echoed to sender');
+    assert.equal(other.datagrams.length, 0, 'routed broadcast leaked to another game');
+
     host.send(T.LEAVE);
-    assert.equal((await emu.wait(Ryu.TYPE.SYNC))[NODE_COUNT], 2);
+    assert.equal((await emu.wait(Ryu.TYPE.SYNC))[NODE_COUNT], 3);
 });

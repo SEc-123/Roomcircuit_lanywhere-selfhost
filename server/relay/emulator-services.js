@@ -18,7 +18,31 @@ const load = (name, filename) => {
     return require(path.join(directory, filename));
 };
 
-function createEden({ bridge, host, port, binary, log = () => {} }) {
+// Eden filters rooms inside the game after receiving scan replies. The scan
+// request itself carries no game filter. Rotate the shared relay's bounded
+// page and include exact title/LCID matches when the client supplied a title.
+function scanEdenRooms(member, state, gameId) {
+    const own = member.ip;
+    const hostIp = info => info.readUInt32LE(FIRST_NODE);
+    const pageSize = 32;
+    const earlier = [];
+    let after = !state.cursor;
+    const page = member.scan(info => {
+        const ip = hostIp(info);
+        if (after) return ip !== own;
+        if (ip !== own && earlier.length < pageSize) earlier.push(info);
+        if (ip === state.cursor) after = true;
+        return false;
+    });
+    // A local game clears its previous discoveries on every scan. Wrap the
+    // final page in this reply so a small lobby still includes every live host.
+    if (page.length < pageSize) page.push(...earlier.slice(0, pageSize - page.length));
+    state.cursor = page.length ? hostIp(page[page.length - 1]) : 0;
+    const preferred = gameId ? member.scan(info => hostIp(info) !== own && info.readBigUInt64LE(0) === gameId) : [];
+    return new Map([...preferred, ...page].map(info => [hostIp(info), info]));
+}
+
+function createEden({ bridge, host, port, binary, legacyYuzu = false, log = () => {} }) {
     const { create, Ldn, Protocol } = load('eden', 'host.js');
     const peers = new Map();
     const discovery = address(DISCOVERY_ADDRESS);
@@ -27,9 +51,9 @@ function createEden({ bridge, host, port, binary, log = () => {} }) {
         return frontend.sendLdn(peer, { kind, source: address(from), destination: peer.ip, data });
     }
     const frontend = create({
-        host, port, binary, log, onError: error => log(error.message),
+        host, port, binary, legacyYuzu, log, onError: error => log(error.message),
         allocateIp(peer) {
-            const state = { published: null, joined: null, seen: 0, lastPoll: 0, lastScan: 0, advertised: new Map() };
+            const state = { published: null, joined: null, seen: 0, lastPoll: 0, cursor: 0, advertised: new Map() };
             const member = bridge.connect({
                 address: peer.address, name: peer.name,
                 onControl(event) {
@@ -45,6 +69,10 @@ function createEden({ bridge, host, port, binary, log = () => {} }) {
                         if (state.joined) packet(peer, Ldn.DESTROY, state.joined.readUInt32LE(FIRST_NODE));
                         break;
                     case 'error':
+                        // A rejected host update leaves its last valid publication active.
+                        if (!state.joined || member.admitted()) break;
+                        member.leave();
+                        // fall through: clear a rejected join and allow another search.
                     case 'closed':
                         if (state.joined) packet(peer, Ldn.DESTROY, state.joined.readUInt32LE(FIRST_NODE));
                         state.joined = state.published = null;
@@ -72,11 +100,11 @@ function createEden({ bridge, host, port, binary, log = () => {} }) {
             switch (kind) {
             case Ldn.SCAN:
                 if (!message.broadcast) return;
-                state.lastScan = Date.now();
-                state.advertised.clear();
-                for (const info of member.scan(candidate => candidate.readUInt32LE(FIRST_NODE) !== member.ip)) {
-                    const ip = info.readUInt32LE(FIRST_NODE);
-                    if (packet(peer, Ldn.SCAN_RESPONSE, ip, info)) state.advertised.set(ip, info);
+                for (const [ip, info] of scanEdenRooms(member, state, peer.game?.id)) {
+                    if (!packet(peer, Ldn.SCAN_RESPONSE, ip, info)) continue;
+                    state.advertised.delete(ip);
+                    state.advertised.set(ip, info);
+                    if (state.advertised.size > 128) state.advertised.delete(state.advertised.keys().next().value);
                 }
                 break;
             case Ldn.SCAN_RESPONSE:
@@ -89,9 +117,17 @@ function createEden({ bridge, host, port, binary, log = () => {} }) {
                 if (member.publish(data)) { state.published = Buffer.from(data); state.seen = Date.now(); }
                 break;
             case Ldn.CONNECT: {
-                if (message.broadcast || state.published || state.joined) return;
+                if (message.broadcast || state.joined) return;
                 const ip = targetIp(message);
-                const info = Date.now() - state.lastScan < 30000 && state.advertised.get(ip);
+                const info = state.advertised.get(ip);
+                // DestroyNetwork is silent when Eden stops hosting an empty room.
+                // A station CONNECT after a scan explicitly switches roles.
+                if (info && state.published) {
+                    member.leave();
+                    state.published = null;
+                }
+                // join verifies the selected session against the current host. Games
+                // may keep a scan result on screen for an arbitrary amount of time.
                 if (info && member.join(info, data)) state.joined = info;
                 else packet(peer, Ldn.DESTROY, ip);
                 break;
@@ -146,4 +182,4 @@ function createRyuLdn(options) {
     return { ready: service.listen(), close: service.close };
 }
 
-module.exports = { createEden, createRyuLdn };
+module.exports = { createEden, createRyuLdn, scanEdenRooms };

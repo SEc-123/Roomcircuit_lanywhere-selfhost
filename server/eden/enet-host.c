@@ -13,7 +13,7 @@
 
 /* IPC, stdin/stdout only: operation, big-endian peer ID, big-endian size, payload. */
 enum { READY = 1, CONNECT = 2, RECEIVE = 3, DISCONNECT = 4, SEND = 5, DROP = 6 };
-enum { HEADER_SIZE = 9, MAX_PAYLOAD = 65535, MAX_PEERS = 128, MAX_QUEUED = 128 };
+enum { HEADER_SIZE = 9, MAX_PAYLOAD = 21 + 65507 + 1024, MAX_PEERS = 128, MAX_QUEUED = 128 };
 
 typedef struct {
     uint32_t id;

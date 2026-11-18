@@ -72,9 +72,30 @@ test('translates Switch-initiated TCP and handles disconnect without echo', () =
     proxy.fromClient(TYPE.PROXY_DATA, payload(destination, Buffer.from('client data')));
     assert.equal(relay.shift().payload.toString(), 'client data');
     proxy.fromClient(TYPE.PROXY_DISCONNECT, encodeProxyInfo(destination, SIZE.PROXY_DATA));
-    assert.equal(relay.shift().op, Stream.OP.RST);
+    assert.equal(relay.shift().op, Stream.OP.FIN);
     assert.equal(client.length, 0);
     proxy.fromRelay(Stream.encode(remote, { owner: 0, id: 4, nonce: 5n, op: Stream.OP.RST, aux: 6 }));
     assert.equal(client.length, 0);
     assert.equal(relay.length, 0);
+});
+
+test('orderly close preserves the tail of a write waiting for receive credit', () => {
+    const { relay, client, proxy } = fixture();
+    proxy.fromClient(TYPE.PROXY_CONNECT, encodeProxyInfo(destination));
+    const { id, nonce } = relay.shift();
+    const incoming = (op, fields) => Stream.encode(remote, { id, nonce, owner: 1, op, ...fields });
+    proxy.fromRelay(incoming(Stream.OP.OPEN_OK, { aux: 2 }));
+    client.shift();
+    proxy.fromClient(TYPE.PROXY_DATA, payload(destination, Buffer.from('abcdef')));
+    assert.equal(relay.shift().payload.toString(), 'ab');
+    proxy.fromClient(TYPE.PROXY_DISCONNECT, encodeProxyInfo(destination, SIZE.PROXY_DATA));
+    assert.equal(relay.length, 0);
+    proxy.fromRelay(incoming(Stream.OP.FIN, { seq: 0n }));
+    assert.equal(relay.length, 0);
+    proxy.fromRelay(incoming(Stream.OP.WINDOW, { seq: 2n, aux: 6 }));
+    assert.equal(relay.shift().payload.toString(), 'cdef');
+    const fin = relay.shift();
+    assert.equal(fin.op, Stream.OP.FIN);
+    assert.equal(fin.seq, 6n);
+    assert.equal(client.length, 0);
 });

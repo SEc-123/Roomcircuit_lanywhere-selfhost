@@ -12,7 +12,42 @@ const ipOne = Buffer.from([10, 13, 0, 10]);
 const ipTwo = Buffer.from([10, 13, 0, 11]);
 const { client, uint, waitFor, anyIp } = require('./test-peer');
 
+function checkCrowdedDiscovery() {
+    const { scanEdenRooms } = require('../relay/emulator-services');
+    const rooms = Array.from({ length: 101 }, (_, i) => {
+        const info = Buffer.alloc(0x480);
+        info.writeUInt32LE(0x0a0d0100 + i, 0x68);
+        info.writeBigUInt64LE(BigInt(i + 1));
+        return info;
+    });
+    const member = { ip: 0x0a0d1234, scan: predicate => rooms.filter(predicate).slice(0, 32) };
+    const state = { cursor: 0 };
+    const seen = new Set();
+    for (let i = 0; i < 4; i++) {
+        const results = scanEdenRooms(member, state, 98n);
+        assert(results.size <= 33);
+        assert(results.has(0x0a0d0100 + 97), 'the selected game should appear even on the first scan');
+        for (const ip of results.keys()) seen.add(ip);
+    }
+    assert.equal(seen.size, rooms.length, 'an unrelated LCID beyond the first page must remain discoverable');
+
+    // Below the scan limit a game must rediscover *every* room on each scan,
+    // including when another host starts playing after the previous page.
+    const lobby = rooms.slice(0, 2);
+    const small = { ip: member.ip, scan: predicate => lobby.filter(predicate).slice(0, 32) };
+    const browsing = { cursor: 0 };
+    const allVisible = () => assert.deepEqual(new Set(scanEdenRooms(small, browsing, 0n).keys()),
+        new Set(lobby.map(info => info.readUInt32LE(0x68))));
+    allVisible();
+    lobby.push(rooms[2]);
+    allVisible();
+    allVisible();
+    lobby.splice(lobby.findIndex(info => info.readUInt32LE(0x68) === browsing.cursor), 1);
+    allVisible();
+}
+
 async function main() {
+    checkCrowdedDiscovery();
     const connected = [], departed = [], received = [];
     const room = create({
         binary: path.resolve(binaryDir, 'enet-host'), port: 0, password: 'play',

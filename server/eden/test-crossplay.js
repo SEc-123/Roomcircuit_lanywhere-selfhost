@@ -165,11 +165,11 @@ async function recvLdn(client, type, from) {
         (!from || from.equals(bytes.subarray(2, 6)))), `Eden LDN ${type}`);
 }
 
-function game(client, to, data) {
+function game(client, to, data, broadcast = false) {
     const compressed = zstdCompressSync(data);
     client.command(5, Buffer.concat([
         Buffer.from([5, 1]), client.ip, uint(3756, 2), Buffer.from([1]), to, uint(7788, 2),
-        Buffer.from([4, 0]), uint(compressed.length, 4), compressed,
+        Buffer.from([client.udpProtocol ?? 4, Number(broadcast)]), uint(compressed.length, 4), compressed,
     ]));
 }
 
@@ -188,6 +188,7 @@ async function acceptData(rc, emu) {
         'RoomCircuit game packet at Eden guest or host');
     assert.deepEqual(atEden.subarray(2, 6), rcIp);
     assert.equal(atEden.readUInt16BE(6), 3344);
+    assert.equal(atEden[15], emu.udpProtocol ?? 4);
     assert.deepEqual(zstdDecompressSync(atEden.subarray(21)), two);
 }
 
@@ -256,6 +257,9 @@ async function reserveUdpPort() {
 }
 
 async function main() {
+    const legacyYuzu = process.env.ROOMCIRCUIT_TEST_YUZU === '1';
+    const profile = legacyYuzu ? 'Historical Yuzu' : 'Eden';
+    console.log('ENet client profile:', profile, legacyYuzu ? 'v1 (UDP enum 3)' : 'v1 (UDP enum 4)');
     const edenPort = await reserveUdpPort();
     let lanPlayPort = await reserveUdpPort();
     while (lanPlayPort === edenPort) lanPlayPort = await reserveUdpPort();
@@ -264,7 +268,9 @@ async function main() {
         stdio: ['ignore', 'pipe', 'inherit'],
         env: { ...process.env,
             LANYWHERE_STATE_DIR: stateDir, LANYWHERE_STATS_PORT: '0', LANYWHERE_PUBLIC_PORT: '0',
-            LANYWHERE_LANPLAY_PORT: String(lanPlayPort), ROOMCIRCUIT_RYULDN_PORT: '0', ROOMCIRCUIT_EDEN_PORT: String(edenPort),
+            LANYWHERE_LANPLAY_PORT: String(lanPlayPort), ROOMCIRCUIT_RYULDN_PORT: '0',
+            ROOMCIRCUIT_EDEN_PORT: legacyYuzu ? '0' : String(edenPort),
+            ROOMCIRCUIT_YUZU_PORT: legacyYuzu ? String(edenPort) : '0',
             ROOMCIRCUIT_ENET_BINARY: path.join(binaryDir, 'enet-host'),
             ROOMCIRCUIT_EMULATOR_BIND: '127.0.0.1', LANYWHERE_CONTROL_BIND_ADDRESS: '127.0.0.1',
             LANYWHERE_UDP_BIND_ADDRESS: '127.0.0.1', LANYWHERE_SHUTDOWN_GRACE_MS: '0',
@@ -276,6 +282,7 @@ async function main() {
     const clients = [];
     async function openEden(name) {
         const peer = client(edenPort, binaryDir);
+        peer.udpProtocol = legacyYuzu ? 3 : 4;
         clients.push(peer);
         await waitFor(() => peer.connected, 'Eden ENet handshake');
         peer.join(name);
@@ -304,7 +311,7 @@ async function main() {
         assert.deepEqual(restoredIp(edenSync.subarray(15), 1), edenGuest.ip);
         await acceptData(rcHost, edenGuest);
         assert(!idleEden.messages.some(packet => packet[0] === 5), 'unrelated Eden peer received gameplay');
-        console.log('Switch hosts, Eden finds and joins, game datagrams in both directions');
+        console.log(`Switch hosts, ${profile} finds and joins, game datagrams in both directions`);
 
         const third = await lanPlayGuest(lanPlayPort, rcHost.ip);
         clients.push(third);
@@ -328,7 +335,7 @@ async function main() {
         assert.equal(atEden.readUInt32BE(2), third.ip);
         assert.deepEqual(zstdDecompressSync(atEden.subarray(21)), lanToEmu);
         await acceptData(rcHost, edenGuest);
-        console.log('Switch, Eden and LAN Play share one room and exchange actual wire payloads');
+        console.log(`Switch, ${profile} and LAN Play share one room and exchange actual wire payloads`);
 
         // Stock Eden only publishes its room when polled with Scan.
         const edenHost = await openEden('EdenHost');
@@ -363,7 +370,7 @@ async function main() {
         rcGuest.send(0x03);
         const disconnect = await recvLdn(edenHost, 4, rcGuestIp);
         assert.equal(disconnect.subarray(15).readUInt32LE(), rcGuest.ip);
-        console.log('Eden hosts, Switch finds and joins, game datagrams in both directions, station leaves');
+        console.log(`${profile} hosts, Switch finds and joins, game datagrams in both directions, station leaves`);
 
         // Use only repeated poll replies, as stock Eden does after a peer leaves.
         // Measure across the full 6.5-second expiry window for the first reply.
@@ -381,6 +388,47 @@ async function main() {
         const roomsAfterDestroy = await rcGuest.recv(0x87);
         assert.equal(roomsAfterDestroy[0], 0, 'Destroyed room still appears in console discovery');
         console.log('Repeated stock-style poll replies keep the room visible, then stop on destroy');
+
+        // A real Eden host leaving an empty AP emits no DESTROY. Its next
+        // operation can be a guest scan followed immediately by CONNECT.
+        await recvLdn(edenHost, 0, POLL_SOURCE);
+        ldn(edenHost, 1, POLL_SOURCE, edenInfo);
+        await rcGuest.search(2);
+        await rcHost.host(3);
+        const liveHostIp = uint(rcHost.ip, 4);
+        for (const station of [edenHost, idleEden]) {
+            ldn(station, 0, anyIp, Buffer.alloc(0), 1);
+            await recvLdn(station, 1, liveHostIp);
+        }
+        ldn(edenHost, 2, liveHostIp, nodeInfo(edenHost.ip, 'Former host'));
+        const firstJoin = await rcHost.recv(RELAY_IN, body => body[1] === 3);
+        const firstSync = withStations(rcHost.info, firstJoin.subarray(2));
+        rcHost.send(PUBLISH, firstSync);
+        rcHost.send(RELAY, Buffer.concat([Buffer.from([firstJoin[0], 4]), firstSync]));
+        await recvLdn(edenHost, 3, liveHostIp);
+        await acceptData(rcHost, edenHost);
+        console.log('Eden can join as a station immediately after silently closing an empty room');
+
+        // Normal CI covers both identities promptly. Enable the real-time pause
+        // to exercise a game's room list kept open beyond the old 30-second TTL.
+        if (process.env.ROOMCIRCUIT_TEST_SLOW_EDEN === '1') {
+            const keepalive = setInterval(() => rcHost.send(0x05), 1000);
+            try { await DELAY(31000); } finally { clearInterval(keepalive); }
+        }
+        ldn(idleEden, 2, liveHostIp, nodeInfo(idleEden.ip, 'Second guest'));
+        const delayedJoin = await rcHost.recv(RELAY_IN, body => body[1] === 3);
+        const delayedSync = withStations(rcHost.info, firstJoin.subarray(2), delayedJoin.subarray(2));
+        rcHost.send(PUBLISH, delayedSync);
+        rcHost.send(RELAY, Buffer.concat([Buffer.from([delayedJoin[0], 4]), delayedSync]));
+        await recvLdn(idleEden, 3, liveHostIp);
+        await acceptData(rcHost, idleEden);
+
+        rcHost.send(0x03);
+        await recvLdn(idleEden, 5, liveHostIp);
+        ldn(idleEden, 2, liveHostIp, nodeInfo(idleEden.ip, 'Expired target'));
+        await recvLdn(idleEden, 5, liveHostIp);
+        console.log('A cached selection joins the same live game and rejects a closed session');
+
     } catch (error) {
         console.error(logs);
         throw error;
@@ -392,4 +440,10 @@ async function main() {
     }
 }
 
-main().catch(error => { console.error(error); process.exitCode = 1; });
+if (require.main === module)
+    main().catch(error => { console.error(error); process.exitCode = 1; });
+
+module.exports = {
+    GAME, VERSION, FIRST_NODE, POLL_SOURCE, game, ldn, recvLdn, nodeInfo, networkInfo,
+    withStations, take, reserveUdpPort, consolePeer,
+};
