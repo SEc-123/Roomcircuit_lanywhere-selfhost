@@ -1,0 +1,30 @@
+name: Verify Switch maintenance candidate
+on:
+  push:
+    branches: [build/ultrahand-overlay-092]
+permissions:
+  contents: read
+jobs:
+  switch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b9ed73e0c3b1a872d465537f192eb4a9e19465f7
+          persist-credentials: false
+      - name: Compile paired Switch binaries and package
+        run: |
+          git rev-parse HEAD > evidence/build-commit.txt
+          bash scripts/build-container.sh --embedded
+          python3 scripts/toolchain/verify_switch_build.py . --app-title RoomCircuit --overlay-title RoomCircuit --app-version 0.9.2 --ipc-abi 5 --require-capabilities --report evidence/switch-build.json --build-command 'bash scripts/build-container.sh --embedded'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: switch-maintenance-candidate
+          retention-days: 5
+          if-no-files-found: error
+          path: |
+            dist/switch-online-0.9.2-sd.zip
+            evidence/build-commit.txt
+            evidence/switch-build.json
+            evidence/container-build-environment.json
