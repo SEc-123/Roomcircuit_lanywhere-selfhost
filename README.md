@@ -7,7 +7,7 @@ RoomCircuit brings compatible Nintendo Switch games online through their built-i
 ## What you can do
 
 - **Browse and join rooms.** See public rooms across available nodes and filter by game or region.
-- **Choose where to host.** Test built-in, administrator-published and locally configured LAN Play nodes. Compare the 13 built-in nodes with friends using a shared test code.
+- **Choose where to host.** Test built-in, administrator-published and locally configured LAN Play nodes. Compare the  built-in nodes with friends using a shared test code.
 - **Manage room passwords.** Share your in-game password in the lobby or keep it private.
 - **Schedule a session.** Agree on a time with other players so nobody has to leave a game room open while waiting. Players can mark themselves ready and find the room when it opens.
 
