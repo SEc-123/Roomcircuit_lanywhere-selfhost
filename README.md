@@ -89,6 +89,8 @@ sudo python3 setup_lanplay_node.py
 
 The script installs Docker if needed, starts the server, asks for the public node address, display name and region, then prints and saves a `nodes.ini` entry. Copy that entry into `config/RoomCircuit/nodes.ini` on each Switch. It adds an inbound UDP rule if UFW is already active. Open UDP **11451** in the VPS provider's cloud firewall too.
 
+If Docker Compose is already installed, you can instead use [compose.yaml](deploy/lanplay-node/compose.yaml) and run `docker compose up -d` in its folder. On the VPS, `curl http://127.0.0.1:11451/info` shows the connected-client count. Choose either the Python installer or Compose for this node.
+
 To see how many LAN Play clients are connected, SSH into the VPS and run `sudo python3 setup_lanplay_node.py --status`. This monitor reports a count only and is bound to localhost. The server has no per-user authentication in the RoomCircuit node settings, so anyone who can reach the UDP port can use it.
 
 RoomCircuit supplies the Switch client; players do not need the upstream desktop `lan-play` client. No special physical hardware is required. A home server needs a public inbound route and router/firewall configuration. The script does not change cloud-provider firewall settings.
