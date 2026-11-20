@@ -14,8 +14,6 @@ routes=importlib.util.module_from_spec(spec);spec.loader.exec_module(routes)
 game_type=re.search(r'typedef struct\s*\{[^}]*\}\s*GameInfo;',source).group()
 functions='\n\n'.join(routes.function(source,'static '+name) for name in (
     'const GameInfo *local_game_info(', 'CatalogMatch room_catalog_match(', 'bool game_info_has_lcid(', 'const char *room_title(', 'const GameInfo *display_game_icon(', 'const char *room_title_note(', 'const char *provider_label(', 'const char *region_label(', 'void group_card('))
-node_source=(root/'app/source/nodes_ui.c').read_text(encoding='utf-8')
-functions=routes.function(node_source,'const char *nodes_ui_region(')+'\n'+functions
 harness=r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -37,7 +35,7 @@ static bool g_zh;
 static GameCatalog g_catalog;static GameInfo fake;static int image_count,question_count;static char title[160];
 static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || id == 13; }
 static const char *nodes_ui_name(uint32_t id) { return id == 0 ? ui_text("Main server") : id == 13 ? "Russia LAN" : id < NODE_CATALOG_COUNT ? LanywhereNodes[id].name_en : "Unknown node"; }
-static uint8_t nodes_ui_region_for(uint32_t id) { (void)id; return NodeRegionEurope; }
+static const char *nodes_ui_location(uint32_t id) { return id == 13 ? "Moscow" : ui_text("China"); }
 static const char private_owner[] = "Private room owner 073";
 static char details[160];
 static const GameInfo *game_info(u64 id) { assert(id==fake.id); return &fake; }
@@ -85,6 +83,8 @@ int main(void){
     room.room_access=RoomAccessHidden;
     group_card(0,0,760,&room,"self",true);
     assert(strstr(details,"Main server")&&strstr(details,"Password required"));
+    group_card(0,0,760,&room,"custom-13",true);
+    assert(strstr(details,"Russia LAN · Moscow"));
     ui_set_language(true,false);
     group_card(0,0,760,&room,"self",true);
     assert(strstr(details,"主服务器")&&strstr(details,ui_text("Password required")));

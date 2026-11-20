@@ -71,9 +71,16 @@ def main():
     extracted = '\n\n'.join(function(main_source, name) for name in host_predicates + FUNCTIONS)
     node_labels = """static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || id == 13; }
 static const char *nodes_ui_provider(uint32_t id) { return id == 13 ? "custom-13" : LanywhereNodes[id].provider; }
-static uint8_t nodes_ui_region_for(uint32_t id) { return id == 13 ? NodeRegionEurope : id < NODE_CATALOG_COUNT ? LanywhereNodes[id].region : NodeRegionUnknown; }
+static const char *nodes_ui_location(uint32_t id);
 static const char *nodes_ui_name(uint32_t id) { if (id == 13) return "Russia"; if (id == 0) return ui_text("Main server"); return id < NODE_CATALOG_COUNT ? (ui_chinese() ? LanywhereNodes[id].name_zh : LanywhereNodes[id].name_en) : ui_text("Unknown node"); }
-""" + '\n\n'.join(function(node_source, name) for name in ('nodes_ui_region', 'nodes_ui_country'))
+""" + '\n\n'.join(function(node_source, name) for name in ('nodes_ui_region', 'nodes_ui_country')) + """
+static const char *nodes_ui_location(uint32_t id) {
+    if (id == 13) return "Moscow";
+    if (id >= NODE_CATALOG_COUNT) return nodes_ui_region(NodeRegionUnknown);
+    const LanywhereNode *node = &LanywhereNodes[id];
+    return node->country[0] ? nodes_ui_country(node->country) : nodes_ui_region(node->region);
+}
+"""
     source = '''#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
