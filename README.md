@@ -38,23 +38,53 @@ You can also choose the hosting node from the RoomCircuit overlay in Ultrahand. 
 
 If the game uses link codes instead of a room list, choose the same node, enter the same code in the game, and start local matchmaking on both consoles.
 
-### Add a LAN Play node
+### LAN Play nodes
 
-Create `config/RoomCircuit/nodes.ini` on the SD card. Add one section per node:
+A LAN Play node is a public service that relays Local Wireless traffic between players over the internet. Its hostname and port identify an existing service. A `nodes.ini` entry does not create or install a server.
+
+**Using RoomCircuit's built-in nodes needs no extra computer, server software or server hardware.** Install RoomCircuit on the Switch, connect it to the internet, and select a node in **Nodes**. To use another operator's node, ask that operator for its public hostname or IPv4 address, UDP port and region.
+
+The RoomCircuit **Main server** is not a LAN Play node. Do not copy the Main server address from `config.ini` into `nodes.ini`.
+
+#### Add a node on Switch
+
+On the SD card, create or edit `config/RoomCircuit/nodes.ini`. Add one `[node]` block for each endpoint. This example uses reserved example hostnames and will not connect until you replace them with real values:
 
 ```ini
 [node]
-name=Russia
-host=lanplay.example.org
+name=Amsterdam
+host=eu-lanplay.example.net
 port=11451
 region=europe
+
+[node]
+name=North America test
+host=us-lanplay.example.net
+port=11451
+region=americas
 ```
 
-Open **Nodes** again to load changes. `name`, `host` and `port` are required; `region` may be `unknown`, `asia`, `europe`, `americas`, `oceania` or `africa`. Up to seven local-only endpoints are supported. Use a public IPv4 address or hostname and UDP port supplied by the LAN Play server operator. The sample hostname is a placeholder.
+| Entry | What it controls | Example |
+| --- | --- | --- |
+| `[node]` | Starts one node entry. Repeat it for every endpoint. | A second block starts another node. |
+| `name` | Required. The label shown in the node list. It can describe the operator or location. | `name=Amsterdam` |
+| `host` | Required. The server's public IPv4 address or DNS hostname, supplied by its operator. | `host=eu-lanplay.example.net` |
+| `port` | Required. The node's UDP listening port. Use the exact port supplied by the operator. | `port=11451` |
+| `region` | Optional region label used by the list filter. It does not move the server or guarantee lower latency. Omit it to use `unknown`. | `region=europe` |
 
-If both the old and new `nodes.ini` changed differently, back up both, keep the intended content in `config/RoomCircuit/nodes.ini`, move the old file aside, and reopen **Nodes**.
+Allowed regions are `unknown`, `asia`, `europe`, `americas`, `oceania` and `africa`. Up to seven local nodes are supported.
 
-An administrator-published node and its rooms appear in the shared lobby. An unregistered local node is selected by each player; its rooms are found from the game's Local Wireless search. Matching host and port use the administrator-published identity. The shared friend test currently compares the 13 built-in nodes. [Administrator setup and script example](deploy/CUSTOM-NODES.md)
+After saving the file, reopen **Nodes**. Select the endpoint and press **X** to test it. Choose it with **A**, check **Hosting line** in the lobby, then return to the game and create or search for a room in **Local Wireless**.
+
+A custom node that is not published in RoomCircuit's shared directory is local to each player. For that node, everyone must configure and select the same host and port, then find the room from the game's Local Wireless search. To show its rooms in the shared lobby, the node operator must ask a RoomCircuit administrator to register that endpoint. See the [administrator setup](deploy/CUSTOM-NODES.md).
+
+#### Running your own node
+
+You only need a server if you want to operate a new node. Use a public VPS or another internet-reachable host, install LAN Play-compatible server software, and allow its UDP listening port through the host firewall and network. No special physical server is required. A home computer also needs a public inbound route and the correct router/firewall configuration. RoomCircuit does not install or launch this server for you.
+
+`nodes.ini` configures the Switch RoomCircuit client only. Android, desktop and other mobile clients use their own network settings and may require a compatible client build. See the [crossplay preview](docs/CROSSPLAY.md) for the client-specific setup currently documented; adding a Switch node entry does not configure those clients.
+
+If the old and new `nodes.ini` files changed differently during an upgrade, back up both, keep the intended entries in `config/RoomCircuit/nodes.ini`, move the old file aside, and reopen **Nodes**.
 
 ### Schedule a session
 

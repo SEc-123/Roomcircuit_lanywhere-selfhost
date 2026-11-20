@@ -30,16 +30,35 @@ RoomCircuit
 • 密码与提醒。在游戏内设密码。自己的房间显示「我的房间」后，可在大厅分享或隐藏游戏密码。第三方直连时仍在游戏里验密码。约局提醒使用主服务器。
 • 兼容范围。标准和 fork 协议不能混房；首个被游戏接受的访客确定协议，重建房间可更换。建议同版 RoomCircuit、同版游戏。节点可达不代表每款游戏已实测，详见项目的节点说明与验证记录。
 
-自定义节点
-在 config/RoomCircuit/nodes.ini 中按下面格式添加节点，保存后重新打开节点页：
+自定义 LAN Play 节点（Switch）
+LAN Play 节点是可从公网访问的服务端，为异地玩家转发本地无线游戏数据。使用 RoomCircuit 预置节点不需要额外电脑、服务器软件或服务器硬件；使用别人运营的节点，也只需对方提供地址和端口。
+RoomCircuit「主服务器」不是 LAN Play 节点，不要把 config.ini 中的主服务器地址填进 nodes.ini。
+
+在 SD 卡的 config/RoomCircuit/nodes.ini 添加节点。每个 [node] 区块代表一个地址，可以重复多个：
 [node]
-name=Russia
-host=lanplay.example.org
+name=Amsterdam
+host=eu-lanplay.example.net
 port=11451
 region=europe
-name、host、port 为必填。地址为示例，请替换为服务器运营者提供的公网域名或 IPv4 和 UDP 端口。最多 7 个本机节点；region 可省略，或填写 unknown、asia、europe、americas、oceania、africa。
-管理员收录的节点及房间会出现在统一大厅。本机未收录节点需双方都配置相同地址并选择，再到游戏内搜索。
-新旧 nodes.ini 同时修改且内容不一致时，请先备份两份，再将需要的内容保留在 config/RoomCircuit/nodes.ini，移走旧版文件并重新打开节点页。
+
+[node]
+name=备用节点
+host=backup.example.net
+port=11451
+region=unknown
+
+[node] 开始一条节点记录，添加第二条时再次写 [node]。
+name、host、port 为必填：name 是节点列表名称，如 Amsterdam；host 是运营者提供的公网 IPv4 或域名，如 eu-lanplay.example.net；port 是服务器 UDP 监听端口，请使用运营者给出的值（11451 仅为示例）。
+region 是可选的地区筛选标签，可填 unknown、asia、europe、americas、oceania 或 africa。它只用于分类，不会改变线路或保证延迟。省略时按 unknown 处理。
+上面的域名均为示例，不能直接连接。最多可配置 7 个本机节点。
+
+保存后重新打开节点页。选中节点按 X 测试，按 A 选择。两名玩家使用未收录节点时，双方都需配置并选择相同的 host 和 port，再在游戏内搜索本地无线房间。只有管理员将节点登记到 RoomCircuit 共享目录后，该节点的房间才会出现在统一大厅。
+
+自己运营新节点才需要额外服务器。可使用公网可达的 VPS 或主机，安装兼容 LAN Play 的服务端软件，并开放对应 UDP 端口。RoomCircuit 不会代为安装或启动这个服务端。若在家中运行，还需要路由器和网络允许外部 UDP 连接。
+
+此文件只配置 Atmosphère 上的 RoomCircuit。Android、桌面模拟器和其他移动端需按各自客户端设置，且需兼容的客户端构建；见 Crossplay preview。
+
+若升级时新旧 nodes.ini 都有修改且内容不一致，请备份两份，将需要的节点保留在 config/RoomCircuit/nodes.ini，移走旧文件后重新打开节点页。
 
 约局与双人配对
 • 在大厅按 − 或点「约局」安排游戏。约局页按 A 参加或退出、L 发起、Y 准备、X 找房，按 B 回大厅。
@@ -78,16 +97,35 @@ Host or join
 • Passwords and alerts. Set the password in the game. Once your room appears as My room, you can share or hide its password in the lobby. Games check passwords on direct nodes. Appointment alerts use Main server.
 • Compatibility. Standard and fork clients cannot mix in one room. The first accepted guest fixes the protocol until the host recreates the room. Use matching RoomCircuit and game versions. Node reachability does not prove every game works; see Nodes and compatibility and Validation.
 
-Custom nodes
-Add entries to config/RoomCircuit/nodes.ini. Reopen Nodes to load changes:
+Custom LAN Play nodes (Switch)
+A LAN Play node is an internet-reachable service that relays Local Wireless game traffic between players. RoomCircuit's built-in nodes need no extra computer, server software or server hardware. To use an existing community node, get its address and port from its operator.
+RoomCircuit's Main server is not a LAN Play node. Do not copy its address from config.ini into nodes.ini.
+
+Add entries to config/RoomCircuit/nodes.ini on the SD card. Each [node] block is one endpoint; repeat the block for another node:
 [node]
-name=Russia
-host=lanplay.example.org
+name=Amsterdam
+host=eu-lanplay.example.net
 port=11451
 region=europe
-`name`, `host` and `port` are required. Replace the example with the operator’s public hostname or IPv4 and UDP port. Up to seven local nodes are supported. Region is optional: unknown, asia, europe, americas, oceania or africa.
-Administrator-published nodes and rooms appear in the shared lobby. For unregistered local nodes, both players configure and select the same endpoint, then search in the game.
-If both old and new nodes.ini files changed differently, back up both, keep the intended content in config/RoomCircuit/nodes.ini, move the old file aside and reopen Nodes.
+
+[node]
+name=Backup
+host=backup.example.net
+port=11451
+region=unknown
+
+[node] starts an entry. Repeat it for each endpoint.
+name, host and port are required. name labels the entry, such as Amsterdam. host is the operator's public IPv4 address or hostname. port is the server's UDP listening port. 11451 is an example; use the port the operator provides.
+region is an optional list filter label: unknown, asia, europe, americas, oceania or africa. It only categorizes the entry; it does not change routing or promise lower latency. If omitted, it is unknown.
+These example hostnames are placeholders and cannot be used to connect. Up to seven local nodes are supported.
+
+Save the file and reopen Nodes. Select an entry and press X to test it, then press A to choose it. For a node that is not in RoomCircuit's shared directory, both players must configure and select the same host and port, then search in the game's Local Wireless mode. Only an administrator-registered node can publish its rooms in the unified lobby.
+
+You need a separate server only to operate a new node. Use an internet-reachable VPS or host, install LAN Play-compatible server software, and allow its UDP port through the host firewall and network. RoomCircuit does not install or start that server. A home-hosted server also needs a public inbound route and correct router/firewall settings.
+
+This file configures RoomCircuit on an Atmosphère Switch only. Android, desktop emulator and other mobile clients use their own network settings and need a compatible client build. See the Crossplay preview for the currently documented client-specific setup.
+
+If both old and new nodes.ini files changed differently, back up both, keep the intended entries in config/RoomCircuit/nodes.ini, move the old file aside and reopen Nodes.
 
 Appointments and pairing
 • Press − or tap Appointments in the lobby to schedule a game. Press A to join or leave, L to create, Y for Ready, X to find rooms or B to return.
