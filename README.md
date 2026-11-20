@@ -1,6 +1,6 @@
 # RoomCircuit (formerly LANywhere Self-host)
 
-RoomCircuit brings **Local Wireless multiplayer** for compatible Nintendo Switch games online. Its main client runs on **Atmosphère**. Players can find rooms across different servers, choose a faster route, and schedule a game before anyone needs to open a room.
+RoomCircuit brings **Local Wireless multiplayer** for compatible Nintendo Switch games online. Its main client runs on **Atmosphère** in both **emuMMC** and **sysMMC** modes. Players can find rooms across different servers, choose a faster route, and schedule a game before anyone needs to open a room.
 
 [Download the latest release](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest) · [Install](#install) · [Play](#play) · [Update](#update)
 
@@ -8,7 +8,7 @@ RoomCircuit brings **Local Wireless multiplayer** for compatible Nintendo Switch
 
 | Platform | Client |
 | --- | --- |
-| Nintendo Switch | RoomCircuit on Atmosphère |
+| Nintendo Switch | RoomCircuit on Atmosphère (emuMMC or sysMMC) |
 | Desktop | Eden, compatible Yuzu builds, and supported Ryujinx-family builds such as Ryubing and Kenji-NX |
 | Android | Eden and supported Kenji-NX builds |
 | iPhone | NX Pocket and patched MeloNX with the LAN Play gateway setup |
@@ -73,7 +73,7 @@ Press **→** from the room list to open the in-app guide. See [node routing and
 
 1. Open RoomCircuit and press **LS** (click the left stick) to check for updates. **Update available** is highlighted when a newer version is detected.
 2. Open **Update available** to review both versions and what's changed.
-3. Close the game, select **Download and install**, then restart Atmosphère when prompted.
+3. Close the game, select **Download and install**, then restart into the same Atmosphère mode when prompted.
 
 ### Manual update (any version)
 
