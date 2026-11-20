@@ -459,7 +459,7 @@ static void draw_update(const UpdateView *view)
         if (percentage) gfx_round_rect(56, 380, (int)(1168 * percentage / 100), 16, 8, Accent);
         if (view->screen == UpdateInstalling) gfx_text(56, 440, 23, Dim, ui_text("Keep the console on until installation finishes."));
     }
-    if (view->screen == UpdateRestart) gfx_text(56, 330, 26, Text, ui_text("Exit and restart into your virtual system."));
+    if (view->screen == UpdateRestart) gfx_text(56, 330, 26, Text, ui_text("Restart into the same Atmosphère mode."));
     if (view->error) gfx_text_fit(56, view->screen == UpdateOffered ? 569 : 500, 23, Error, ui_text(view->error), 1168);
     gfx_rect(0, 648, 1280, 1, RGBA(0x36, 0x36, 0x36, 0xFF));
     if (view->screen == UpdateOffered) gfx_button(56, 670, "A", ui_text("Download and install"));

@@ -19,7 +19,7 @@ SOURCE = HERE.parent.parent / 'source'
 FUNCTIONS = ['tr_error', 'button_mask', 'add_zone', 'draw_language_control', 'touch_action_at', 'hosting_node_label', 'storage_health_text', 'show_matching', 'external_room_expired', 'supports_reserved', 'is_self_network', 'can_enter_game_password', 'room_password_allows_launch', 'match_state_text', 'list_error_title', 'status_pill', 'seats',
              'local_game_info', 'room_catalog_match', 'game_info_has_lcid', 'room_title', 'direct_host_title', 'display_game_icon', 'room_title_note', 'provider_label', 'region_label', 'group_card', 'draw_room_password_panel', 'matching_column', 'network_offline_hint', 'list_error_hint', 'groups_column', 'can_change_visibility', 'can_change_provider', 'can_change_host_region', 'current_host_line_available', 'is_self_room_context', 'can_share_game_password', 'provider_column', 'private_column',
              'appointment_entry_available', 'lobby_guide_available', 'side_column', 'room_board_available', 'room_board_games',
-             'draw_brand', 'draw_update_action', 'board_game_title', 'board_room_node', 'board_room_region', 'draw_room_board', 'draw_board_header', 'draw_password_visibility', 'draw_update_entry', 'draw_appointments_link', 'draw', 'draw_no_service']
+             'draw_brand', 'draw_update_action', 'board_game_title', 'board_room_node', 'board_room_region', 'draw_room_board', 'draw_board_header', 'draw_password_visibility', 'draw_update_entry', 'draw_appointments_link', 'draw_board_route', 'draw', 'draw_no_service']
 
 
 def block_end(source, start):
@@ -115,7 +115,7 @@ static unsigned failures;
 static bool sample_update_available;
 bool roomcircuit_storage_available(void) { return true; }
 static bool update_ui_available(void) { return sample_update_available; }
-static const char *update_ui_app_version(void) { return "0.8.8"; }
+static const char *update_ui_app_version(void) { return PREVIEW_APP_VERSION; }
 static const char *update_ui_button_label(bool available) { return ui_text(available ? "Update available" : "Check updates"); }
 static bool appointments_active(void) { return false; }
 static void appointments_draw(const GameCatalog *catalog, void (*touch)(int,int,int,int,u64)) { (void)catalog; (void)touch; }
@@ -130,6 +130,8 @@ static const GameInfo *game_info(u64 id) {
 }
 static void save_capture_if_requested(void) { if (!gfx_save_png(output_path)) failures++; }
 ''' + extracted + '\n' + (HERE / 'main_fixture.inc').read_text()
+    version = json.loads((SOURCE.parents[1] / 'package.json').read_text())['version']
+    source = source.replace('PREVIEW_APP_VERSION', json.dumps(version))
     flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', '--libs', 'freetype2', 'libpng'], text=True))
     with tempfile.TemporaryDirectory(prefix='main-preview-') as temporary:
         build = Path(temporary); generated = build / 'main_render.c'; generated.write_text(source)

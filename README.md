@@ -1,6 +1,6 @@
 # RoomCircuit (formerly LANywhere Self-host)
 
-RoomCircuit brings **Local Wireless multiplayer** for compatible Nintendo Switch games online. Its main client runs on **Atmosphère**. Players can find rooms across different servers, choose a faster route, and schedule a game before anyone needs to open a room.
+RoomCircuit brings **Local Wireless multiplayer** for compatible Nintendo Switch games online. Its main client runs on **Atmosphère** in both **emuMMC** and **sysMMC** modes. Players can find rooms across different servers, choose a faster route, and schedule a game before anyone needs to open a room.
 
 [Download the latest release](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest) · [Install](#install) · [Play](#play) · [Update](#update)
 
@@ -8,7 +8,7 @@ RoomCircuit brings **Local Wireless multiplayer** for compatible Nintendo Switch
 
 | Platform | Client |
 | --- | --- |
-| Nintendo Switch | RoomCircuit on Atmosphère |
+| Nintendo Switch | RoomCircuit on Atmosphère (emuMMC or sysMMC) |
 | Desktop | Eden, compatible Yuzu builds, and supported Ryujinx-family builds such as Ryubing and Kenji-NX |
 | Android | Eden and supported Kenji-NX builds |
 | iPhone | NX Pocket and patched MeloNX with the LAN Play gateway setup |
@@ -35,15 +35,15 @@ You need a Switch running Atmosphère, an internet connection, and a game with a
 
 ### Host a room
 
-1. From the lobby, press **Y** to open **Nodes**. Choose a node and press **A**. In the picker, press **R** to filter by region, **X** to retest, or **L** to test with friends.
-2. Check **Hosting line** at the bottom of the lobby. Press **+** to close RoomCircuit, then return to the game and create a room in **Local Wireless**. The new room uses the selected node.
-3. Set the room password in the game, then reopen RoomCircuit. Once the lobby shows **My room** and the password action is available, press **Y** and choose **Share in lobby** or **Keep password hidden**.
+1. Press **Y** next to **Hosting line** at the bottom of the lobby. Choose a node and press **A**. In the picker, press **R** to filter by region, **X** to retest, or **L** to test with friends.
+2. Press **+** to return to the game and create a room in **Local Wireless**.
+3. Set the room password in the game, then reopen RoomCircuit. Press **Y** next to **My room** and choose **Share in lobby** or **Keep password hidden**.
 
 You can also choose the hosting node from the RoomCircuit overlay in Ultrahand. Leave the current local-wireless session before switching nodes. The overlay follows Ultrahand's theme, side and sound settings. It needs Ultrahand and its loader; the Album app works separately.
 
 ### Join a room
 
-1. Use **ZL + ZR** to filter the lobby by game and region. Select a room and press **A**. RoomCircuit checks your connection and selects the room's node.
+1. Press **ZL + ZR** by the room list to filter by game and region. Select a room and press **A**. RoomCircuit checks your connection and selects the room's node.
 2. Open or return to the game, choose **Local Wireless**, and search for the room. Enter the game's password when prompted.
 
 If the game uses link codes instead of a room list, choose the same node, enter the same code in the game, and start local matchmaking on both consoles.
@@ -73,7 +73,7 @@ Press **→** from the room list to open the in-app guide. See [node routing and
 
 1. Open RoomCircuit and press **LS** (click the left stick) to check for updates. **Update available** is highlighted when a newer version is detected.
 2. Open **Update available** to review both versions and what's changed.
-3. Close the game, select **Download and install**, then restart Atmosphère when prompted.
+3. Close the game, select **Download and install**, then restart into the same Atmosphère mode when prompted.
 
 ### Manual update (any version)
 

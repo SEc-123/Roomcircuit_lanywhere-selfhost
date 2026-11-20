@@ -14,7 +14,6 @@
 #define NODE_ROWS 6
 #define NODE_ALL_REGIONS 255u
 #define NODE_REGION_CHINA 6u
-#define NODE_REGION_CUSTOM 7u
 #define NODE_COLOR_BG RGBA(0x00, 0x00, 0x00, 0xFF)
 #define NODE_COLOR_PANEL RGBA(0x11, 0x11, 0x11, 0xFF)
 #define NODE_COLOR_RAIL RGBA(0x08, 0x08, 0x08, 0xFF)
@@ -33,12 +32,17 @@
 #define NODE_LIST_Y 275
 #define NODE_ROW_HEIGHT 54
 #define NODE_REGION_Y 244
-#define NODE_REGION_HEIGHT 39
-#define NODE_REGION_COUNT 9
+#define NODE_REGION_HEIGHT 44
+#define NODE_REGION_COUNT 8
 #define NODE_NO_REGION_TOUCHED 254u
 #define NODE_FOOTER_Y 650
 #define NODE_FILTER_LIST_Y 291
 #define NODE_FILTER_ROW_HEIGHT 50
+#define NODE_FILTER_SEARCH_X 826
+#define NODE_FILTER_ALL_X 1048
+#define NODE_FILTER_FIRST_X 662
+#define NODE_FILTER_NEXT_X 880
+#define NODE_BACK_X 1140
 
 typedef struct {
     NodeMeasurement measurements[NODE_TOTAL_CAPACITY];
@@ -196,7 +200,7 @@ uint8_t nodes_ui_region_for(uint32_t id)
     char label[NODE_REGION_LABEL_BYTES];
     custom_region_label(id, label);
     if (!strcmp(label, "China")) return NODE_REGION_CHINA;
-    return *label && entry.region == NodeRegionUnknown ? NODE_REGION_CUSTOM : entry.region;
+    return entry.region;
 }
 const char *nodes_ui_provider(uint32_t id)
 {
@@ -209,7 +213,7 @@ const char *nodes_ui_provider(uint32_t id)
 }
 const char *nodes_ui_region(uint8_t region)
 {
-    static const char *labels[] = {"Region unverified", "Asia", "Europe", "Americas", "Oceania", "Africa", "China", "Other locations"};
+    static const char *labels[] = {"Other regions", "Asia", "Europe", "Americas", "Oceania", "Africa", "China"};
     return ui_text(region < sizeof(labels) / sizeof(*labels) ? labels[region] : "All regions");
 }
 const char *nodes_ui_country(const char *country)
@@ -773,12 +777,19 @@ static void measurement_label(const NodeMeasurement *m, char text[80])
 }
 static uint8_t region_for_row(unsigned row)
 {
-    return row ? (uint8_t)(row - 1) : NODE_ALL_REGIONS;
+    if (!row) return NODE_ALL_REGIONS;
+    return row == NODE_REGION_COUNT - 1 ? NodeRegionUnknown : (uint8_t)row;
 }
 
 static unsigned region_row(uint8_t region)
 {
-    return region < NODE_REGION_COUNT - 1 ? (unsigned)region + 1 : 0;
+    if (region == NodeRegionUnknown) return NODE_REGION_COUNT - 1;
+    return region < NODE_REGION_COUNT - 1 ? region : 0;
+}
+
+static bool region_header_touched(int x, int y)
+{
+    return x >= NODE_PANEL_X && x < NODE_TABLE_X && y >= NODE_PANEL_Y && y < NODE_REGION_Y - 2;
 }
 
 static void begin_screen(const char *title)
@@ -819,14 +830,14 @@ static void draw_regions(uint8_t region, bool focus, bool draw_counts)
 {
     gfx_round_rect(41, 196, NODE_TABLE_X - 40, NODE_PANEL_H - 2, 10, NODE_COLOR_RAIL);
     gfx_rect(NODE_TABLE_X - 1, 196, 1, NODE_PANEL_H - 2, NODE_COLOR_LINE);
-    gfx_text(58, 207, 21, NODE_COLOR_TEXT, ui_text("Regions"));
+    gfx_button(58, 203, "R", ui_text("Regions"));
     gfx_rect(41, 241, NODE_TABLE_X - 41, 1, NODE_COLOR_LINE);
     for (unsigned i = 0; i < NODE_REGION_COUNT; i++) {
         const uint8_t id = region_for_row(i);
         const bool current = id == region;
         const int y = NODE_REGION_Y + (int)i * NODE_REGION_HEIGHT;
         if (current) {
-            gfx_round_rect(48, y + 4, 301, 42, 6, NODE_COLOR_SELECT);
+            gfx_round_rect(48, y + 3, 301, NODE_REGION_HEIGHT - 5, 6, NODE_COLOR_SELECT);
             if (focus)
                 gfx_round_rect(48, y + 9, 4, 32, 2, NODE_COLOR_ACCENT);
         }
@@ -960,10 +971,9 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
         gfx_text_fit(40, 673, 19, NODE_COLOR_ACCENT, text, 352);
     }
     gfx_button(430, 669, "A", ui_text("Select"));
-    gfx_button(570, 669, "R", ui_text("Region"));
-    gfx_button(730, 669, "X", ui_text("Refresh"));
-    gfx_button(885, 669, "L", ui_text("Test with friends"));
-    gfx_button(1140, 669, "B", ui_text("Back"));
+    gfx_button(615, 669, "X", ui_text("Refresh"));
+    gfx_button(845, 669, "L", ui_text("Test with friends"));
+    gfx_button(NODE_BACK_X, 669, "B", ui_text("Back"));
     gfx_end();
 }
 
@@ -988,6 +998,8 @@ static u64 picker_touch(const uint32_t rendered[NODE_ROWS], uint32_t *touched, u
         if (x >= 1120 && x < 1240 && next)
             return HidNpadButton_ZR;
     }
+    if (region_header_touched(x, y))
+        return HidNpadButton_R;
     if (x >= 40 && x < NODE_TABLE_X && y >= NODE_REGION_Y &&
         y < NODE_REGION_Y + NODE_REGION_COUNT * NODE_REGION_HEIGHT) {
         *touched_region = region_for_row((unsigned)(y - NODE_REGION_Y) / NODE_REGION_HEIGHT);
@@ -1002,15 +1014,13 @@ static u64 picker_touch(const uint32_t rendered[NODE_ROWS], uint32_t *touched, u
         }
     }
     if (y >= NODE_FOOTER_Y) {
-        if (x >= 430 && x < 570)
+        if (x >= 430 && x < 615)
             return HidNpadButton_A;
-        if (x >= 570 && x < 730)
-            return HidNpadButton_R;
-        if (x >= 730 && x < 885)
+        if (x >= 615 && x < 845)
             return HidNpadButton_X;
-        if (x >= 885 && x < 1140)
+        if (x >= 845 && x < NODE_BACK_X)
             return HidNpadButton_L;
-        if (x >= 1140)
+        if (x >= NODE_BACK_X)
             return HidNpadButton_B;
     }
     return 0;
@@ -1440,12 +1450,15 @@ static bool ask_game_search(char query[64])
     return R_SUCCEEDED(result);
 }
 static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *choices, size_t count,
-                         int selected, uint64_t chosen, uint8_t chosen_region, bool region_focus)
+                         int selected, uint64_t chosen, uint8_t chosen_region, bool region_focus,
+                         bool first_page_available, bool next_page_available)
 {
     begin_screen("Filter rooms");
     node_panel();
     draw_regions(chosen_region, region_focus, false);
     gfx_text(379, 207, 21, NODE_COLOR_TEXT, ui_text("Game"));
+    gfx_button(NODE_FILTER_SEARCH_X, 203, "X", ui_text("Search game"));
+    gfx_button(NODE_FILTER_ALL_X, 203, "Y", ui_text("All games"));
     gfx_rect(NODE_TABLE_X, 241, 879, 1, NODE_COLOR_LINE);
     const CatalogMatch selected_title = game_catalog_identify(catalog, 0, chosen);
     const char *active = (chosen && selected_title.kind) ? game_catalog_name(&selected_title, ui_chinese())
@@ -1468,11 +1481,11 @@ static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *ch
         gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text(keyboard_error), 1200);
     node_footer();
     gfx_button(40, 669, "A", ui_text("Apply"));
-    gfx_button(216, 669, "R", ui_text("Region"));
-    gfx_button(390, 669, "X", ui_text("Search game"));
-    gfx_button(620, 669, "Y", ui_text("All games"));
-    gfx_button(880, 669, "ZR", ui_text("Next"));
-    gfx_button(1140, 669, "B", ui_text("Back"));
+    if (first_page_available)
+        gfx_button(NODE_FILTER_FIRST_X, 669, "ZL", ui_text("First page"));
+    if (next_page_available)
+        gfx_button(NODE_FILTER_NEXT_X, 669, "ZR", ui_text("Next"));
+    gfx_button(NODE_BACK_X, 669, "B", ui_text("Back"));
     gfx_end();
 }
 bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_id, uint8_t *region)
@@ -1493,6 +1506,11 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
         if (modal_touch_start(&touch_held, &touch_x, &touch_y)) {
             if (touch_x >= 1056 && touch_y >= 15 && touch_y < 76)
                 down |= HidNpadButton_StickR;
+            else if (region_header_touched(touch_x, touch_y))
+                down |= HidNpadButton_R;
+            else if (touch_y >= NODE_PANEL_Y && touch_y < NODE_REGION_Y - 2 &&
+                     touch_x >= NODE_FILTER_SEARCH_X - 8 && touch_x < NODE_PANEL_X + NODE_PANEL_W)
+                down |= touch_x < NODE_FILTER_ALL_X - 8 ? HidNpadButton_X : HidNpadButton_Y;
             else if (touch_x >= NODE_PANEL_X && touch_x < NODE_TABLE_X && touch_y >= NODE_REGION_Y &&
                      touch_y < NODE_REGION_Y + NODE_REGION_COUNT * NODE_REGION_HEIGHT) {
                 chosen_region = region_for_row((unsigned)(touch_y - NODE_REGION_Y) / NODE_REGION_HEIGHT);
@@ -1508,16 +1526,12 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
             } else if (touch_y >= NODE_FOOTER_Y) {
                 if (touch_x < 216)
                     down |= HidNpadButton_A;
-                else if (touch_x < 390)
-                    down |= HidNpadButton_R;
-                else if (touch_x < 620)
-                    down |= HidNpadButton_X;
-                else if (touch_x < 880)
-                    down |= HidNpadButton_Y;
-                else if (touch_x < 1140)
-                    down |= HidNpadButton_ZR;
-                else
+                else if (touch_x >= NODE_BACK_X - 8)
                     down |= HidNpadButton_B;
+                else if (touch_x >= NODE_FILTER_NEXT_X - 8 && next != SIZE_MAX)
+                    down |= HidNpadButton_ZR;
+                else if (touch_x >= NODE_FILTER_FIRST_X - 8 && touch_x < NODE_FILTER_NEXT_X - 8 && offset)
+                    down |= HidNpadButton_ZL;
             }
         }
         language_input(down);
@@ -1541,6 +1555,7 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
             if (ask_game_search(query)) {
                 offset = 0;
                 selected = -1;
+                region_focus = false;
             }
             dirty = true;
         }
@@ -1549,16 +1564,19 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
             query[0] = 0;
             offset = 0;
             selected = -1;
+            region_focus = false;
             dirty = true;
         }
         if ((down & HidNpadButton_ZR) && next != SIZE_MAX) {
             offset = next;
             selected = 0;
+            region_focus = false;
             dirty = true;
         }
         if (down & HidNpadButton_ZL) {
             offset = 0;
             selected = -1;
+            region_focus = false;
             dirty = true;
         }
         if (down & (HidNpadButton_X | HidNpadButton_Y | HidNpadButton_ZL | HidNpadButton_ZR)) {
@@ -1573,20 +1591,16 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
             selected--;
             dirty = true;
         }
-        if ((down & HidNpadButton_A) && region_focus) {
-            region_focus = false;
-            down &= ~HidNpadButton_A;
-            dirty = true;
-        }
         if (down & HidNpadButton_A) {
-            if (selected >= 0 && (size_t)selected < count)
+            if (!region_focus && selected >= 0 && (size_t)selected < count)
                 chosen = choices[selected].game_id;
             *game_id = chosen;
             *region = chosen_region;
             return true;
         }
         if (dirty || down) {
-            draw_filters(catalog, choices, count, selected, chosen, chosen_region, region_focus);
+            draw_filters(catalog, choices, count, selected, chosen, chosen_region, region_focus,
+                         offset != 0, next != SIZE_MAX);
             dirty = false;
         }
         svcSleepThread(33000000ULL);

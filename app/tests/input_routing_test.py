@@ -56,7 +56,7 @@ def main():
              'static LobbyRoomId room_password_target(', 'static bool can_enter_game_password(',
             'static bool appointment_entry_available(', 'static bool room_board_available(', 'static bool lobby_guide_available(')),
         'ROOM_BOARD_INPUT': '\n'.join(function(source, signature) for signature in (
-            'static unsigned room_board_games(', 'static bool room_board_input(')),
+            'static bool room_filters_requested(', 'static unsigned room_board_games(', 'static bool room_board_input(')),
         'BRAND': function(source, 'static void draw_brand('),
         'ROOM_WIRE': '\n'.join(function(source, signature) for signature in (
             'static Result lanywhere_create(', 'static Result lanywhere_join(')),

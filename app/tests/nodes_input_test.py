@@ -30,15 +30,16 @@ HidNpadButton_StickR=256,HidNpadButton_AnyUp=512,HidNpadButton_AnyDown=1024,
 HidNpadButton_AnyLeft=2048,HidNpadButton_AnyRight=4096};
 static const char *keyboard_error;
 static u64 inputs[8];static size_t frame,frames;static unsigned draws;
-static HidTouchScreenState screen;
-static int hidGetTouchScreenStates(HidTouchScreenState *out,int n){assert(n==1);*out=screen;return 1;}
+static HidTouchScreenState screen, screen_frames[8];
+static bool scripted_touch;
+static int hidGetTouchScreenStates(HidTouchScreenState *out,int n){assert(n==1);*out=scripted_touch?screen_frames[frame-1]:screen;return 1;}
 static bool appletMainLoop(void){return frame<frames;}
 static void padUpdate(PadState *pad){(void)pad;}
 static u64 padGetButtonsDown(PadState *pad){(void)pad;return inputs[frame++];}
 static void language_input(u64 keys){(void)keys;}
 static void svcSleepThread(uint64_t ns){(void)ns;}
 static bool ask_game_search(char query[64]){strcpy(query,"Beta");return true;}
-static void draw_filters(const GameCatalog *c,const CatalogGameChoice *choices,size_t count,int selected,uint64_t chosen,uint8_t region,bool focus){(void)c;(void)choices;(void)count;(void)selected;(void)chosen;(void)region;(void)focus;draws++;}
+static void draw_filters(const GameCatalog *c,const CatalogGameChoice *choices,size_t count,int selected,uint64_t chosen,uint8_t region,bool focus,bool first,bool next){(void)c;(void)choices;(void)count;(void)selected;(void)chosen;(void)region;(void)focus;(void)first;(void)next;draws++;}
 ''' + '\n'.join(line for line in source.splitlines() if line.startswith('#define NODE_')) + r'''
 typedef struct {
  NodeMeasurement measurements[NODE_CATALOG_COUNT];
@@ -100,7 +101,7 @@ static void draw_picker(const NodeView *copy,uint8_t region,const uint32_t *orde
  for(unsigned i=first;i<count&&i<first+NODE_ROWS;i++){visits|=1u<<order[i];picker_rendered_valid[order[i]]=true;picker_rendered_nodes[order[i]].id=node_id(order[i]);}
 }
 ''' + '\n'.join(routes.function(source, name) for name in (
-    'static uint8_t region_for_row(', 'static unsigned region_row(', 'static u64 picker_touch(',
+    'static uint8_t region_for_row(', 'static unsigned region_row(', 'static bool region_header_touched(', 'static u64 picker_touch(',
     'static bool modal_touch_start(', 'bool nodes_ui_filters(', 'static unsigned picker_index(', 'bool nodes_ui_pick(')) + r'''
 static bool run(const GameCatalog *catalog,u64 a,u64 b,u64 c,uint64_t *game,uint8_t *region){
  inputs[0]=a;inputs[1]=b;inputs[2]=c;frames=c?3:b?2:1;frame=0;screen.count=0;
@@ -111,12 +112,20 @@ int main(void){
  const unsigned char names[]="\0Alpha\0Beta\0";
  GameCatalog catalog={.titles=titles,.title_count=2,.text=names,.text_size=sizeof(names)};
  uint64_t game=9;uint8_t region=255;
- assert(run(&catalog,HidNpadButton_R,HidNpadButton_A,0,&game,&region)&&game==9&&region==0);
+ assert(run(&catalog,HidNpadButton_R,HidNpadButton_A,0,&game,&region)&&game==9&&region==NodeRegionAsia);
  assert(run(&catalog,HidNpadButton_AnyDown,HidNpadButton_A,0,&game,&region)&&game==7);
  assert(run(&catalog,HidNpadButton_X,HidNpadButton_AnyDown,HidNpadButton_A,&game,&region)&&game==9);
  assert(run(&catalog,HidNpadButton_Y,HidNpadButton_A,0,&game,&region)&&game==0);
  game=9;assert(!run(&catalog,HidNpadButton_B,0,0,&game,&region)&&game==9);
- assert(run(&catalog,HidNpadButton_AnyLeft|HidNpadButton_AnyDown,HidNpadButton_AnyRight,HidNpadButton_A,&game,&region)&&region==1);
+ assert(run(&catalog,HidNpadButton_AnyLeft,HidNpadButton_AnyDown,HidNpadButton_A,&game,&region)&&game==9&&region==NodeRegionEurope);
+ assert(region_for_row(NODE_REGION_COUNT-1)==NodeRegionUnknown);
+ for(unsigned i=0;i<NODE_REGION_COUNT;i++)assert(region_row(region_for_row(i))==i);
+ scripted_touch=true;frame=0;frames=3;game=0;
+ inputs[0]=HidNpadButton_AnyLeft;inputs[1]=0;inputs[2]=HidNpadButton_AnyDown|HidNpadButton_A;
+ screen_frames[1]=(HidTouchScreenState){.count=1,.touches={{NODE_FILTER_SEARCH_X+8,NODE_PANEL_Y+14}}};
+ PadState search_pad=0;
+ assert(nodes_ui_filters(&search_pad,&catalog,&game,&region)&&game==9);
+ scripted_touch=false;
  bool held=true;uint32_t rendered[6]={10,2,4,3,5,6},touched=NODE_ID_INVALID;
  uint8_t touch_region=NODE_NO_REGION_TOUCHED;
  screen=(HidTouchScreenState){.count=1,.touches={{NODE_TABLE_X+20,NODE_LIST_Y+10}}};
@@ -124,7 +133,9 @@ int main(void){
  screen.count=0;assert(!picker_touch(rendered,&touched,&touch_region,&held,false,true));
  screen.count=1;assert(picker_touch(rendered,&touched,&touch_region,&held,false,true)==HidNpadButton_A&&touched==10);
  assert(!picker_touch(rendered,&touched,&touch_region,&held,false,true));
- held=false;screen.touches[0].x=84;screen.touches[0].y=NODE_REGION_Y+3*NODE_REGION_HEIGHT+8;
+ held=false;screen.touches[0].x=84;screen.touches[0].y=NODE_PANEL_Y+14;
+ assert(picker_touch(rendered,&touched,&touch_region,&held,false,true)==HidNpadButton_R);
+ held=false;screen.touches[0].y=NODE_REGION_Y+NodeRegionEurope*NODE_REGION_HEIGHT+8;
  touched=NODE_ID_INVALID;assert(!picker_touch(rendered,&touched,&touch_region,&held,false,true));
  assert(touch_region==NodeRegionEurope&&touched==NODE_ID_INVALID);
  held=false;screen.touches[0].x=1158;screen.touches[0].y=125;

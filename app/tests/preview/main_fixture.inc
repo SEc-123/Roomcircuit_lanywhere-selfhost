@@ -171,6 +171,10 @@ int main(int argc, char **argv)
                 v.host_info.status = NodeHostReady;
                 snprintf(v.host_info.name, sizeof(v.host_info.name), "%s", "Main server");
                 v.region_filter = 255;
+                if (scene == 41) {
+                    v.page_index = 1;
+                    v.next_page = 2 * LOBBY_PAGE_SIZE;
+                }
                 v.count = scene == 44 ? 0 : scene == 42 ? 3 : 6;
                 v.game_filter = scene == 42 ? 100 : 0;
                 v.game_rail_focused = scene == 43;
@@ -284,15 +288,26 @@ int main(int argc, char **argv)
             }
             if (scene == 45 &&
                 (!owns_direct_room(&v, &v.node_rows[0]) || owns_direct_room(&v, &v.node_rows[1]) ||
-                 touch_action_at(700,124) != HidNpadButton_Y)) {
+                 touch_action_at(MARGIN + 8, FOOTER_Y + 30) != HidNpadButton_Y ||
+                 touch_action_at(700,124) == HidNpadButton_Y)) {
                 fprintf(stderr,"Hosted direct room controls failed in %s\n",path); failures++;
             }
             if (((scene >= 41 && scene <= 44) || scene == 47) &&
                 (touch_action_at(335, 42) != TOUCH_UPDATE || touch_action_at(535, 42) == TOUCH_UPDATE ||
-                 touch_action_at(720, 42) != HidNpadButton_Minus || touch_action_at(900, 42) != HidNpadButton_Y ||
+                 touch_action_at(720, 42) != HidNpadButton_Minus || touch_action_at(900, 42) == HidNpadButton_Y ||
+                 touch_action_at(MARGIN + 8, FOOTER_Y + 30) != HidNpadButton_Y ||
+                 touch_action_at(1195, 176) != TOUCH_NODE_FILTER ||
                  touch_action_at(59, 228) != TOUCH_GAME_RAIL ||
                  (v.count && (touch_action_at(510, 271) != TOUCH_CARD || g_rendered_games[1]!=100)))) {
                 fprintf(stderr,"RoomCircuit board controls not touchable in %s\n",path); failures++;
+            }
+            if (scene == 41) {
+                const int next_x = 1222 - gfx_button_width("ZR", ui_text("Next"));
+                const int prev_x = next_x - 24 - gfx_button_width("ZL", ui_text("Prev"));
+                if (touch_action_at(prev_x + 6, 112) != HidNpadButton_ZL ||
+                    touch_action_at(next_x + 6, 112) != HidNpadButton_ZR) {
+                    fprintf(stderr, "Room list pagination is not touchable in %s\n", path); failures++;
+                }
             }
             for (int i = 0; i < g_zone_count; i++) {
                 TouchZone z = g_zones[i];
