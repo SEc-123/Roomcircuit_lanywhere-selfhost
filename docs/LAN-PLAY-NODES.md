@@ -47,13 +47,14 @@ region=europe
 
 ## 3. Play with friends
 
-1. In the RoomCircuit lobby, press **Y** to open **Nodes**. Press **X** to refresh if needed. When the node responds, select it with **A** and check **Hosting line**.
-2. Use the same node and game version on both Switches. In the game's **Local Wireless** menu, one player creates a room and the other searches for it and joins.
+1. Share your `[node]` block with your friends. Each player saves it to their own `nodes.ini` as shown in step 2.
+2. On each Switch, press **Y** in the RoomCircuit lobby to open **Nodes**. Press **X** to refresh if needed. When the node responds, select it with **A** and check **Hosting line**.
+3. Open the game's **Local Wireless** menu. One player creates a room and the others search for it and join.
 
 ## 4. Request a public listing
 
-After a friend on another network joins successfully, reply in your existing node Issue or open one titled **List a LAN Play node**. Include your `[node]` block, the game and version you tested, and the join result. Confirm you operate the node and want it listed publicly. [Open a GitHub Issue](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/new)
+To save your node in the shared directory, open the template and replace the sample name, public IPv4 address or hostname, and UDP port. Region is optional. The **Main server** administrator adds the entry so other players can see and select it. [Open the node listing template](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/new?template=lan-play-node.md)
 
 ## 5. Confirm the public listing
 
-After confirmation in the Issue, open **Nodes** on a Switch without a local entry for your node. Select it and create a public **Local Wireless** room. The listing is ready when another player can select that room with **A** in the RoomCircuit lobby and join it in the game.
+After confirmation in the Issue, reopen **Nodes** to see the shared entry. Select it to host a public **Local Wireless** room. Other players can select that room with **A** in the RoomCircuit lobby and join it in the game.
