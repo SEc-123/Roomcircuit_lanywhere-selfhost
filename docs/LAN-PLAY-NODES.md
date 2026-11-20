@@ -1,53 +1,36 @@
-# Run and list a LAN Play node
+# Set up a LAN Play node
 
-A LAN Play node relays the game's Local Wireless traffic. RoomCircuit's **Main server** publishes the shared list of nodes and rooms. To run your own node, you need a server reachable over public IPv4. To play, use Switches running the current RoomCircuit release and a compatible game. [RoomCircuit downloads](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest)
+Install the current RoomCircuit release on each Atmosphère Switch. Use a game with **Local Wireless**. Follow steps 1–3 to play with friends, or continue through step 5 to list your node publicly. If you already have a node address, start at step 2. [RoomCircuit downloads](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest)
 
-| What you want | What to do |
-| --- | --- |
-| Play on a node with friends | Follow steps 1–3. Each player adds the same address and UDP port to their Switch and searches for the room in the game. You're ready once a friend can join and play. |
-| Offer a node to all RoomCircuit players | Follow steps 1–3, then [request a listing](#4-request-a-public-listing) and [confirm it](#5-confirm-the-public-listing). The RoomCircuit maintainers review the request and the **Main server** administrator publishes the approved endpoint. |
+## 1. Start the relay
 
-If you already have a compatible LAN Play server or its operator gave you an endpoint, start at [step 2](#2-add-the-node-to-your-switch).
+Use an x86-64 Linux server with public IPv4. Choose Python or Docker Compose. Both use the default Switch LAN Play relay with login disabled.
 
-## 1. Start the LAN Play server
+**Python on Debian or Ubuntu**
 
-Use a Linux x86-64 VPS or host with inbound UDP connectivity for the supplied Docker setups. Both methods run the upstream Switch LAN Play relay. Use the default relay mode with login disabled. Choose one deployment method for this node. [Upstream server documentation](https://github.com/spacemeowx2/switch-lan-play#server) · [Docker image platforms](https://hub.docker.com/r/spacemeowx2/switch-lan-play/tags)
-
-### Python installer
-
-On a Debian or Ubuntu VPS with Python 3, download and run the installer. Enter the public IPv4 address or DNS hostname, a display name and the region when prompted. The script installs Docker if needed, starts the relay and writes `roomcircuit-node.ini` in the current directory. [View the installer](../tools/setup_lanplay_node.py)
+Run the installer with Python 3. Enter the public address, node name and region. It installs Docker if needed and saves `roomcircuit-node.ini`. [Python installer](../tools/setup_lanplay_node.py)
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/SEc-123/Roomcircuit_lanywhere-selfhost/main/tools/setup_lanplay_node.py
 sudo python3 setup_lanplay_node.py
 ```
 
-### Docker Compose
+**Docker Compose**
 
-On the VPS with Docker Compose installed, save the Compose file as `compose.yaml` and run the command from its folder. Use the example in step 2 to create the Switch configuration. [View the Compose file](../deploy/lanplay-node/compose.yaml)
+On a server with Docker Compose installed, download the file and start it. [Compose file](../deploy/lanplay-node/compose.yaml)
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/SEc-123/Roomcircuit_lanywhere-selfhost/main/deploy/lanplay-node/compose.yaml
 docker compose up -d
 ```
 
-### Open the game port and check status
+Allow inbound **UDP 11451**. For a home server, forward the same port on the router. For friends-only access, restrict the port to your players' public IP addresses in the cloud firewall.
 
-Allow inbound **UDP 11451** in the VPS provider's firewall and any host firewall that filters Docker traffic. The Python installer adds a UDP rule when UFW is active. For a home server, forward the UDP port on the router as well. RoomCircuit's node settings take an address and port, and players with network access to that port can use the relay.
+Once the relay starts, run `curl -fsS http://127.0.0.1:11451/info` on the server to see the connected-client count. For a custom port, pass `--port` to Python or change the host port in both Compose mappings. Use the same port in the firewall, status URL and Switch configuration.
 
-For a group of friends, the node entry lives on the Switches where you add it. To limit who can connect at the network level, restrict the provider's inbound UDP rule to your players' public IP addresses. For a shared listing, the RoomCircuit main relay and public players need to be able to reach the game port.
+## 2. Add the node to each Switch
 
-Both setups bind the TCP status monitor to the VPS's loopback address. Give the relay a few seconds to start. On the VPS, this command returns the current number of connected LAN Play clients. An `online` count of zero is normal before any clients connect. If the monitor still fails, check `docker logs roomcircuit-lanplay-node`. Confirm public UDP reachability from a Switch in step 3.
-
-```sh
-curl -fsS http://127.0.0.1:11451/info
-```
-
-The Python installer also supports `python3 setup_lanplay_node.py --status`. To use a different port with Python, pass `--port` with that port to both installation and status commands. With Compose, change the host port in the two `ports` mappings and keep the container port at 11451. Use the new host port in the firewall, status URL and Switch configuration.
-
-## 2. Add the node to your Switch
-
-On each Switch's SD card, create or edit `config/RoomCircuit/nodes.ini` as UTF-8 plain text. Append the `[node]` block from the generated `roomcircuit-node.ini` or use the example below with your real endpoint. Preserve the entries already in the file. Each additional node starts with its own `[node]` line. The Switch supports up to seven local entries.
+Create `config/RoomCircuit/nodes.ini` on each SD card if needed. Append the `[node]` block generated by Python or replace the sample values below.
 
 ```ini
 [node]
@@ -57,85 +40,20 @@ port=11451
 region=europe
 ```
 
-| Entry | Purpose | Example |
-| --- | --- | --- |
-| `[node]` | Starts one node entry | Repeat `[node]` before a second endpoint |
-| `name` | Required label in **Nodes**, up to 47 UTF-8 bytes | `name=Amsterdam` |
-| `host` | Required public IPv4 address or hostname that resolves to one | `host=eu-lanplay.example.net` |
-| `port` | Required UDP port published by the relay | `port=11451` |
-| `region` | Optional filter label that defaults to `unknown`. Allowed values are `unknown`, `asia`, `europe`, `americas`, `oceania` and `africa` | `region=europe` |
+- `name` is the label shown in **Nodes**.
+- `host` is the node's public IPv4 address or hostname.
+- `port` is the relay's UDP port.
+- `region` is optional. Use `asia`, `europe`, `americas`, `oceania`, `africa` or `unknown`.
 
-The sample hostname is a placeholder. Use the LAN Play relay endpoint here. RoomCircuit reads its **Main server** settings separately. If two versions of `nodes.ini` conflict after an upgrade, back up both, keep the intended entries in `config/RoomCircuit/nodes.ini`, move the old file aside and reopen **Nodes**.
+## 3. Play with friends
 
-The file configures the RoomCircuit Switch client. Emulator and mobile clients use their own settings. [Crossplay preview](CROSSPLAY.md)
-
-## 3. Check hosting and joining
-
-1. Open RoomCircuit from **Album** and press **Y** in the lobby to open **Nodes**. Find the display name you set. Press **X** to refresh measurements, wait for the node to respond, then select it with **A**. The lobby's **Hosting line** should show the selected node.
-2. On the host's Switch, press **+** to close RoomCircuit, then return to the game and create an open room in **Local Wireless**. Use the same game and update on both consoles.
-3. A friend on another network adds and selects the same hostname and UDP port, then searches for the room in the game's **Local Wireless** menu. Confirm they can join and play. If the node test fails, verify the public IPv4 address, port and firewall before retrying from the Switch.
+1. In the RoomCircuit lobby, press **Y** to open **Nodes**. Press **X** to refresh if needed. When the node responds, select it with **A** and check **Hosting line**.
+2. Use the same node and game version on both Switches. In the game's **Local Wireless** menu, one player creates a room and the other searches for it and joins.
 
 ## 4. Request a public listing
 
-When the node works, the operator can ask to make it available to other RoomCircuit players. If the node is part of the existing discussion, reply in Issue #6. For another node, open a new issue titled **List a LAN Play node**. [Issue #6](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/6) · [Open a new issue](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/new)
-
-Replace the sample values in this submission with your own and paste it into the issue.
-
-```text
-I operate this node and would like it listed in RoomCircuit's shared directory.
-
-[node]
-name=Amsterdam
-host=eu-lanplay.example.net
-port=11451
-region=europe
-
-Join check: <game, version and result from step 3>
-```
-
-The GitHub repository is maintained under **SEc-123**. The maintainers review the endpoint's reachability and LAN Play compatibility. An operator with access to RoomCircuit's public **Main server** registers an approved node and confirms when it is available. A comment starts the review. Editing a Switch SD card adds a node to that Switch.
-
-The shared directory needs a stable public IPv4 address or hostname and a UDP port both the main relay and players can reach. After registration, the main relay discovers compatible rooms on the third-party node and puts the node endpoint and room identity in the unified lobby. A guest who selects that room connects directly to that node for in-game discovery, joining and gameplay.
+After a friend on another network joins successfully, reply in your existing node Issue or open one titled **List a LAN Play node**. Include your `[node]` block, the game and version you tested, and the join result. Confirm you operate the node and want it listed publicly. [Open a GitHub Issue](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/new)
 
 ## 5. Confirm the public listing
 
-After the maintainer confirms the listing, reopen RoomCircuit and open **Nodes** again. Look for the approved node on a Switch that has no local entry for it. The official directory uses the registered name and identity when the hostname and port already match an entry on your SD card.
-
-Select the node and open a compatible public **Local Wireless** room in the game. Refresh the unified lobby from another Switch, check that the room is listed under the shared node, then select the room and join it in the game. The list shows available rooms from the node. An idle node can appear in **Nodes** with no rooms in the lobby.
-
-## For RoomCircuit maintainers
-
-Handle approved listings on the RoomCircuit main relay. In its existing `/etc/switch-online/relay.env`, the registry path is `ROOMCIRCUIT_CUSTOM_NODES=/var/lib/switch-online/custom-nodes.json`. Enable the LAN Play upstream integration with `LANYWHERE_ENABLE_LANPLAY_UPSTREAM=1` if needed, retaining the existing provider allowlist. The standalone node operator uses the server from step 1.
-
-1. Review the public endpoint and inspect the existing registry and its identity ledger. Keep an endpoint's existing ID. For a new endpoint, pick an unassigned ID from 13–23. The ledger keeps prior assignments, including disabled ones. [Registry manager](../deploy/manage-custom-nodes.cjs)
-2. During an idle maintenance window, back up the registry, its identity ledger and the relay configuration. Add the approved endpoint with the manager, confirm the entry with `list`, and apply the configuration by restarting `switch-online.service`. Lowercase hostnames and use numeric regions in the command. The codes are 0 unknown, 1 Asia, 2 Europe, 3 Americas, 4 Oceania and 5 Africa.
-3. Check that the relay is healthy and the node is visible to a Switch without a local entry. Verify room discovery and joining as in step 5, then reply to the operator with the outcome. If a listing needs to be taken offline, run the manager's `disable ID` command and apply the change during a maintenance window. The ID stays assigned to that endpoint.
-
-On the main relay, replace the sample endpoint and ID with the values reviewed above.
-
-```sh
-sudo node /opt/switch-online/current/manage-custom-nodes.cjs list
-sudo node /opt/switch-online/current/manage-custom-nodes.cjs add 13 eu-lanplay.example.net 11451 2 "Amsterdam"
-sudo node /opt/switch-online/current/manage-custom-nodes.cjs list
-sudo node /opt/switch-online/current/validate-config.cjs /etc/switch-online/relay.env
-sudo systemctl restart switch-online.service
-sudo node /opt/switch-online/current/healthcheck.cjs --once
-```
-
-The relay loads the registry at startup and validates public IPv4 destinations before use. If activation fails, restore the previous registry and relay configuration and verify service health. For registry automation, the manager writes an atomic JSON file in the format below. Retain existing entries and the identity ledger.
-
-```json
-{"version":1,"nodes":[{"id":13,"host":"eu-lanplay.example.net","port":11451,"region":2,"name":"Amsterdam","enabled":true}]}
-```
-
-## Tuner or Ultrahand package setup
-
-A package author can supply a local default by placing a prepared `RoomCircuit-nodes.ini` beside the package commands. The example copies it on first setup when no `nodes.ini` exists. To add entries to an existing file, use a parser that preserves every `[node]` block and merges by hostname and port. Reopen **Nodes** after saving. Verify the commands against the target Tuner or Ultrahand version before distribution. [Ultrahand command reference](https://github.com/ppkantorski/Ultrahand-Overlay/wiki/Command-Reference)
-
-```ini
-[Install RoomCircuit node defaults]
-try:
-!path_exists /config/RoomCircuit/nodes.ini
-mkdir /config/RoomCircuit
-copy ./RoomCircuit-nodes.ini /config/RoomCircuit/nodes.ini
-```
+After confirmation in the Issue, open **Nodes** on a Switch without a local entry for your node. Select it and create a public **Local Wireless** room. The listing is ready when another player can select that room with **A** in the RoomCircuit lobby and join it in the game.
