@@ -4,8 +4,8 @@ A LAN Play node relays the game's Local Wireless traffic. RoomCircuit's **Main s
 
 | What you want | What to do |
 | --- | --- |
-| Play on a node with friends | Each player adds the same address and UDP port to their Switch and searches for the room in the game. The node operator can do this as soon as the server is reachable. |
-| Offer a node to all RoomCircuit players | The operator requests a listing. The RoomCircuit maintainers review it, and an administrator of the public **Main server** adds the approved endpoint to the shared directory. Players with a compatible release can then see it without editing their SD cards. |
+| Play on a node with friends | Follow steps 1–3. Each player adds the same address and UDP port to their Switch and searches for the room in the game. You're ready once a friend can join and play. |
+| Offer a node to all RoomCircuit players | Follow steps 1–3, then [request a listing](#4-request-a-public-listing) and [confirm it](#5-confirm-the-public-listing). The RoomCircuit maintainers review the request and the **Main server** administrator publishes the approved endpoint. |
 
 If you already have a compatible LAN Play server or its operator gave you an endpoint, start at [step 2](#2-add-the-node-to-your-switch).
 
@@ -34,6 +34,8 @@ docker compose up -d
 ### Open the game port and check status
 
 Allow inbound **UDP 11451** in the VPS provider's firewall and any host firewall that filters Docker traffic. The Python installer adds a UDP rule when UFW is active. For a home server, forward the UDP port on the router as well. RoomCircuit's node settings take an address and port, and players with network access to that port can use the relay.
+
+For a group of friends, the node entry lives on the Switches where you add it. To limit who can connect at the network level, restrict the provider's inbound UDP rule to your players' public IP addresses. For a shared listing, the RoomCircuit main relay and public players need to be able to reach the game port.
 
 Both setups bind the TCP status monitor to the VPS's loopback address. On the VPS, this command returns the current number of connected LAN Play clients. An `online` count of zero is normal before any clients connect. Confirm public UDP reachability from a Switch in step 3.
 
@@ -77,7 +79,19 @@ The file configures the RoomCircuit Switch client. Emulator and mobile clients u
 
 When the node works, the operator can ask to make it available to other RoomCircuit players. If the node is part of the existing discussion, reply in Issue #6. For another node, open a new issue titled **List a LAN Play node**. [Issue #6](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/6) · [Open a new issue](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/new)
 
-Paste the real `[node]` block from step 2, confirm you operate the endpoint and want it listed publicly, and mention the game and result of your join check. The issue only needs the public endpoint details and the test result.
+Replace the sample values in this submission with your own and paste it into the issue.
+
+```text
+I operate this node and would like it listed in RoomCircuit's shared directory.
+
+[node]
+name=Amsterdam
+host=eu-lanplay.example.net
+port=11451
+region=europe
+
+Join check: <game, version and result from step 3>
+```
 
 The GitHub repository is maintained under **SEc-123**. The maintainers review the endpoint's reachability and LAN Play compatibility. An operator with access to RoomCircuit's public **Main server** registers an approved node and confirms when it is available. A comment starts the review. Editing a Switch SD card adds a node to that Switch.
 
