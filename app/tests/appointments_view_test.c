@@ -267,8 +267,8 @@ int main(void)
     appointments_open(true, false);
     assert(appointments_active() && appointments_list_active() && appointments_tick(tick));
     exchange(AppointmentList);
-    check_draw("View guide", "All rooms", "Refresh");
-    assert(guide_tap && refresh_tap && rooms_tap);
+    check_draw("Appointments", "All rooms", "New appointment");
+    assert(!guide_tap && !refresh_tap && rooms_tap);
     assert(press(HidNpadButton_B) == AppointmentBack);
     assert(wake.signals >= 2);
     check_draw("Appointments", "Join appointment", "2026-11-09  21:02");
@@ -432,12 +432,12 @@ int main(void)
     appointments_open(true, false);
     assert(appointments_tick(++tick));
     exchange(AppointmentList);
-    check_draw("Games on this page", "Games", "All games");
+    check_draw("Games on this page", "Appointments", "All games");
     assert(game_taps[0] && game_taps[1] && game_taps[2] && !game_taps[3]);
     assert(press(HidNpadButton_AnyLeft) == AppointmentStay);
     assert(press(HidNpadButton_AnyDown) == AppointmentStay);
     assert(press(HidNpadButton_AnyDown) == AppointmentStay);
-    check_draw("Appointment list", "Select", "2026-11-09  20:39");
+    check_draw("Appointments", "Select", "2026-11-09  20:39");
     assert(join_taps[0] && !join_taps[1]);
     assert(press(HidNpadButton_A) == AppointmentStay);
     assert(!appointments_worker_exchange(&service)); // Confirming the rail does not subscribe.
@@ -465,18 +465,18 @@ int main(void)
     animation_overflow = true;
     assert(press(HidNpadButton_AnyLeft) == AppointmentStay);
     appointments_tick(++tick);
-    check_draw("Appointment list", "Select", NULL);
+    check_draw("Appointments", "Select", NULL);
     assert(appointments_title_animates() && animation_x < 365 && animation_elapsed == 0);
     tick += 250;
     appointments_tick(tick);
-    check_draw("Appointment list", "Select", NULL);
+    check_draw("Appointments", "Select", NULL);
     assert(appointments_title_animates() && animation_x < 365 && animation_elapsed == 250);
     assert(press(HidNpadButton_A) == AppointmentStay);
     appointments_tick(++tick);
-    check_draw("Games", "Leave appointment", NULL);
+    check_draw("Appointments", "Leave appointment", NULL);
     assert(appointments_title_animates() && animation_x > 365 && animation_elapsed == 0);
     animation_overflow = false;
-    check_draw("Games", "Leave appointment", NULL);
+    check_draw("Appointments", "Leave appointment", NULL);
     assert(!appointments_title_animates());
 
     puts("appointment UI: direct rooms link, local time, direct per-row join, independent ready, saved joins, stale touch, bilingual controls, retry, stable game rail, scoped controllers and focused long titles");

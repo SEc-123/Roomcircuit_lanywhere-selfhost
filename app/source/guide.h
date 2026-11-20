@@ -5,7 +5,6 @@
 enum { GuideAppointmentsPage = 4 };
 int guide_page_count(void);
 // Shared top-right language control. The caller handles StickR and persistence.
-void guide_draw_language(bool chinese);
 // Draw within the caller's gfx_begin()/gfx_end() frame. Spanish uses English.
 void guide_draw(int page, bool chinese, bool spanish);
 // Call on touch release. Navigation uses ZL/ZR/B; the language button uses StickR.

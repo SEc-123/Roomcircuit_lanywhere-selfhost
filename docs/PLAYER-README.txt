@@ -8,7 +8,7 @@ RoomCircuit
 在电脑解压，把 atmosphere、switch 和存在的 config 合并到 SD 卡根目录。覆盖同名文件，保留原目录和设置。
 安装会替换相同模块 ID 的 ldn_mitm。重启进入兼容的 Atmosphère，再从相册打开 RoomCircuit。
    @CONNECTION_ZH@
-默认英文。点右上角或按 RS 切换中英文，设置会保留。右下角可「查看教程」。
+语言跟随系统。中文系统显示中文，其他语言显示英文。
 游戏需要玩家名称时，自动使用 Switch 主机名称。
 应用、浮层与设置分别位于 switch/RoomCircuit/、switch/.overlays/ 和 config/RoomCircuit/。
 自定义服务器安装包保留已有配置；新旧配置冲突时不会覆盖原文件。若仍有旧入口，请选择新路径中的 RoomCircuit.nro，确认后再手动移除旧入口。
@@ -21,7 +21,7 @@ RoomCircuit
 安装中断时，从自制软件菜单打开 RoomCircuit Recovery。
 
 建房与加入
-• 单人建房。在大厅底部「建房线路」旁按 Y 更换节点，按 A 确认。按 + 回游戏，在「本地无线」里建房。节点页按 R 筛地区，X 重新测速。
+• 单人建房。在大厅底部「建房线路」旁按 Y 更换节点，按 A 确认。在游戏的「本地无线」里建房。节点页按 R 筛地区，X 重新测速。
 • 重启后保留所选建房节点。在 Ultrahand 打开 RoomCircuit，选「建房节点」即可切换；请先退出联机房间。
 • 推荐。按你的连接推荐最多三条线路。未分类的节点可在「其他地区」找到。
 • 加入。在房间列表按 ZL+ZR 筛选游戏和地区。按 A 选房并查看连接，再打开游戏搜索。
@@ -48,8 +48,7 @@ Extract on a computer and merge atmosphere, switch and config (if included) into
 Overwrite matching files, but do not delete or replace the whole existing atmosphere folder.
 This replaces an existing ldn_mitm with the same module ID. Restart into compatible Atmosphère and open RoomCircuit from Album.
    @CONNECTION_EN@
-Use the top-right language control or press the right stick (RS) to switch languages. Your selection is remembered.
-Choose View guide at the bottom right for help.
+RoomCircuit follows the system language. Chinese systems use Chinese and all others use English.
 Games that need a player name use your Switch name automatically.
 The app, overlay and settings are in switch/RoomCircuit/, switch/.overlays/ and config/RoomCircuit/.
 Custom-server packages preserve existing settings and do not overwrite conflicting configurations. If an old entry remains, use RoomCircuit.nro at the new path and check the old entry before removing it.
@@ -62,7 +61,7 @@ Open Update to see both versions and what's new. Close the game and press A to i
 If installation is interrupted, open RoomCircuit Recovery from the Homebrew Menu.
 
 Host or join
-• Host on your own. Press Y next to Hosting line, choose a node and press A. Press + to return to the game and host in Local Wireless. In the node picker, press R to filter by region or X to test again.
+• Host on your own. Press Y next to Hosting line, choose a node and press A. Host in the game’s Local Wireless menu. In the node picker, press R to filter by region or X to test again.
 • Your hosting node is remembered after reboot. In Ultrahand, open RoomCircuit and select Hosting node to change it. Leave the local-wireless session first.
 • Recommendations. Up to three, based on your connection. Find unclassified nodes under Other regions.
 • Join. Press ZL+ZR by the room list to filter by game and region. Press A to select a room and check its connection, then search in Local Wireless.

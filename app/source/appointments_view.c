@@ -55,7 +55,7 @@ static PendingReply g_reply;
 static unsigned g_epoch, g_request_epoch;
 
 /* These values belong to the UI thread. Only the request/reply cross the lock. */
-static bool g_worker, g_busy;
+static bool g_worker, g_busy, g_list_failed;
 static AppointmentSubscriptions g_subscriptions;
 static bool g_subscriptions_ok;
 static u32 g_alert_status = UINT32_MAX;
@@ -160,6 +160,7 @@ void appointments_open(bool worker_available, bool resume)
     g_epoch++;
     g_screen = ListScreen;
     g_notice = NULL;
+    g_list_failed = false;
     g_next_refresh = 0;
     g_selection_expired = false;
     g_filter_focus = false;
@@ -330,6 +331,7 @@ bool appointments_tick(u64 monotonic_ms)
             } else {
                 AppointmentResponse reply = result.exchange;
                 AppointmentRequest req = operation.exchange;
+                if (req.op == AppointmentList) g_list_failed = reply.status != AppointmentOk;
                 if (reply.now) {
                     const u64 estimated_now = server_now();
                     g_clock = reply.now > estimated_now ? reply.now : estimated_now;
@@ -774,7 +776,6 @@ static void draw_list(const GameCatalog *catalog, AppointmentTouchZone touch)
 
     int footer = ListX;
     if (count && !g_busy) {
-        footer = action(footer, FooterY + 20, "←", g_filter_focus ? "Appointment list" : "Games", HidNpadButton_Left, touch);
         if (g_filter_focus) {
             action(footer, FooterY + 20, "A", "Select", HidNpadButton_A, touch);
         } else {
@@ -789,11 +790,8 @@ static void draw_list(const GameCatalog *catalog, AppointmentTouchZone touch)
                 action(footer, FooterY + 20, "Y", row->followed ? "Cancel ready" : "Ready now", HidNpadButton_Y, touch);
         }
     }
-    const int guide_width = action_width("→", "View guide");
-    const int guide_x = Right - 6 - guide_width;
-    if (!g_busy)
-        action_right(guide_x - 20, FooterY + 20, "R", "Refresh", HidNpadButton_R, touch);
-    action(guide_x, FooterY + 20, "→", "View guide", HidNpadButton_Right, touch);
+    if (g_worker && !g_busy && g_list_failed)
+        action_right(Right - 6, FooterY + 20, "R", "Refresh", HidNpadButton_R, touch);
 
     const AppointmentRow *active = selected >= 0 ? &g_page.rows[rows[selected]] : NULL;
     const bool watching = (g_subscriptions_ok && g_subscriptions.count) || (active && active->followed);
@@ -801,9 +799,6 @@ static void draw_list(const GameCatalog *catalog, AppointmentTouchZone touch)
     if (!g_notice) {
         if (active && !g_filter_focus && !g_busy && !g_subscriptions_ok)
             gfx_text_fit(ListX, 619, 18, WARN, ui_text("Joined appointments unavailable."), SideX - ListX - 12);
-        else if (active && !g_filter_focus && !g_busy && !active->followed &&
-                 !appointment_rooms_open(active->starts_at, server_now()))
-            gfx_text_fit(ListX, 619, 18, MUTED, ui_text("Ready opens 30 min before."), SideX - ListX - 12);
     }
     if (alert)
         gfx_text_fit(SideX, 619, 18, MUTED, ui_text(alert), Right - SideX);

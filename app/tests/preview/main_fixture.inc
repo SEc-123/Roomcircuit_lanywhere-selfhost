@@ -32,7 +32,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "External offline hint exceeds visible width (language %d)\n", zh); failures++;
         }
         for (unsigned scene = 0; scene < sizeof(scenes) / sizeof(scenes[0]); scene++) {
-            g_guide_open = false; g_language_save_failed = false;
+            g_guide_open = false;
             sample_update_available = scene == 47;
             View v = {0};
             v.sel = -1; v.next_page = LOBBY_PAGE_END; v.config_state = RelayConfigReady;
@@ -65,7 +65,6 @@ int main(int argc, char **argv)
             if (scene == 10) { v.match.mode = LobbyQuick; v.match.state = MatchExpired; }
             if (scene == 12) snprintf(v.message, sizeof(v.message), "%s", zh ? "选择的房间已关闭，请重新选择。" : "The selected room closed. Choose another room.");
             if (scene == 15) { v.st.state = StateError; v.room_notice_visible = true; snprintf(v.st.error, sizeof(v.st.error), "UDP offline; reconnect failed"); }
-            if (scene >= 16 && scene <= 18) g_language_save_failed = true;
             if (scene == 17) { g_guide_open = true; g_guide_page = 0; }
             if (scene == 19) { v.provider_panel = true; v.provider_choice = 1; }
             if (scene == 20) {
@@ -177,8 +176,6 @@ int main(int argc, char **argv)
                 }
                 v.count = scene == 44 ? 0 : scene == 42 ? 3 : 6;
                 v.game_filter = scene == 42 ? 100 : 0;
-                v.game_rail_focused = scene == 43;
-                v.game_focus_id = 100;
                 for (int i = 0; i < v.count; ++i) {
                     v.groups[i] = (LobbyGroup){.game_id=i < 3 ? 100 : 101+i,.application_id=i < 3 ? 200 : 201+i,
                         .metadata_flags=LOBBY_META_HOST,.players=(unsigned)i%4+1,.max_players=4};
@@ -232,8 +229,8 @@ int main(int argc, char **argv)
             if (scene == 13 || scene == 14 || scene == 18) {
                 g_guide_open = true; // Actual startup state before service checks.
                 draw_no_service(scene == 14); save_capture_if_requested();
-                if (touch_action_at(GFX_W - 100, FOOTER_Y + 30) != HidNpadButton_Plus) {
-                    fprintf(stderr, "No-service Exit touch is intercepted by the guide\n"); failures++;
+                if (touch_action_at(GFX_W - 100, FOOTER_Y + 30) != 0) {
+                    fprintf(stderr, "No-service screen exposes an exit button\n"); failures++;
                 }
                 if (touch_action_at(360, 58) != TOUCH_UPDATE) {
                     fprintf(stderr, "No-service manual update action is not touchable in %s\n",path); failures++;
@@ -244,7 +241,7 @@ int main(int argc, char **argv)
                 // Real debug captures intentionally skip the password view.
                 if ((scene == 30 || scene == 46) && !gfx_save_png(path)) failures++;
                 if (scene == 43) {
-                    if (!g_board_title_animates) {
+                    if (gfx_text_width(23, v.groups[0].title_en) > 600 && !g_board_title_animates) {
                         fprintf(stderr, "Focused long title did not enable scrolling in %s\n", path);
                         failures++;
                     }
@@ -269,13 +266,13 @@ int main(int argc, char **argv)
                     }
                 }
             }
-            if (touch_action_at(1120, 62) != HidNpadButton_StickR) {
-                fprintf(stderr, "Language touch is missing in %s\n", path); failures++;
+            if (touch_action_at(1120, 62) == HidNpadButton_StickR) {
+                fprintf(stderr, "Manual language touch remains in %s\n", path); failures++;
             }
-            if ((scene == 0 || scene == 22) && touch_action_at(1180, 682) != HidNpadButton_Right) {
-                fprintf(stderr, "Bottom-right guide is not touchable in %s\n", path); failures++;
+            if ((scene == 0 || scene == 22) && touch_action_at(1180, 682) == HidNpadButton_Right) {
+                fprintf(stderr, "Unnecessary guide shortcut remains in %s\n", path); failures++;
             }
-            if ((scene == 0 || scene == 36) && touch_action_at(SIDE_X + 10, 105) != HidNpadButton_Left) {
+            if ((scene == 0 || scene == 36) && touch_action_at(SIDE_X + 10, 105) != HidNpadButton_Minus) {
                 fprintf(stderr, "Top Appointments link is not touchable in %s\n", path); failures++;
             }
             if (scene == 35 &&
@@ -293,12 +290,10 @@ int main(int argc, char **argv)
                 fprintf(stderr,"Hosted direct room controls failed in %s\n",path); failures++;
             }
             if (((scene >= 41 && scene <= 44) || scene == 47) &&
-                (touch_action_at(335, 42) != TOUCH_UPDATE || touch_action_at(535, 42) == TOUCH_UPDATE ||
-                 touch_action_at(720, 42) != HidNpadButton_Minus || touch_action_at(900, 42) == HidNpadButton_Y ||
+                ((touch_action_at(335, 42) == TOUCH_UPDATE) != (scene == 47) ||
+                 touch_action_at(1200, 42) != HidNpadButton_Minus ||
                  touch_action_at(MARGIN + 8, FOOTER_Y + 30) != HidNpadButton_Y ||
-                 touch_action_at(1195, 176) != TOUCH_NODE_FILTER ||
-                 touch_action_at(59, 228) != TOUCH_GAME_RAIL ||
-                 (v.count && (touch_action_at(510, 271) != TOUCH_CARD || g_rendered_games[1]!=100)))) {
+                 (v.count && touch_action_at(60, 210) != TOUCH_CARD))) {
                 fprintf(stderr,"RoomCircuit board controls not touchable in %s\n",path); failures++;
             }
             if (scene == 41) {

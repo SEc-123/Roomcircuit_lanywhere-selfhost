@@ -245,9 +245,9 @@ try {
     await suite('Game password input, display and live refresh', process.env.PYTHON || 'python3', ['-B', 'app/tests/room_password_test.py']);
     await suite('Appointment UI, language, precise time and room handoff', process.env.PYTHON || 'python3', ['-B', 'app/tests/appointments_ui_test.py']);
     const localeBinary = path.join(temp, 'ui-locale-test');
-    const localeBuilt = await suite('App language preference build', process.env.CC || 'cc',
-        ['-std=c11', '-Wall', '-Wextra', '-Werror', 'app/tests/ui_locale_test.c', '-o', localeBinary]);
-    if (localeBuilt) await suite('App language preference persistence and failure recovery', localeBinary, []);
+    const localeBuilt = await suite('System language adapter build', process.env.CC || 'cc',
+        ['-std=c11', '-Wall', '-Wextra', '-Werror', '-Iapp/tests/preview', 'app/tests/ui_locale_test.c', '-o', localeBinary]);
+    if (localeBuilt) await suite('Chinese system language and English fallback', localeBinary, []);
     await suite('Player README and game-list packaging', process.env.PYTHON || 'python3', ['-B', 'scripts/package_player_test.py']);
     await suite('Player-facing errors in English and Chinese', process.env.PYTHON || 'python3', ['-B', 'app/tests/player_errors_test.py']);
     await suite('Capture failure and retry feedback', process.env.PYTHON || 'python3', ['-B', 'app/tests/ui_failure_test.py']);

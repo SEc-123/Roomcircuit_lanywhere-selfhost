@@ -114,8 +114,8 @@ def main():
         guide = entries['README.txt'].decode('utf-8')
         assert '@CONNECTION_' not in guide and '无需输入地址或端口' in guide
         assert 'do not delete or replace the whole existing atmosphere folder' in guide
-        assert 'top-right language control' in guide
-        assert 'right stick (RS)' in guide and 'selection is remembered' in guide
+        assert 'follows the system language' in guide and '语言跟随系统' in guide
+        assert 'right stick (RS)' not in guide and '按 RS' not in guide
         assert 'Community · LANywhere' in guide and '社区 · LANywhere' in guide
         assert all(name in guide for name in examples)
         assert entries['GAMES.txt'].decode('utf-8') == game_text

@@ -3,6 +3,7 @@
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 #include "ldn.h"
+#include "../../../common/system_language.h"
 #include "../../../common/roomcircuit_paths.h"
 #include <sys/stat.h>
 #include "model.hpp"
@@ -56,34 +57,8 @@ namespace {
         return rc;
     }
 
-    bool chinesePreference(const char *path, bool *found) {
-        FILE *file = std::fopen(path, "rb");
-        *found = file != nullptr;
-        if (!file) return false;
-        char value[32];
-        size_t size = std::fread(value, 1, sizeof(value), file);
-        const bool valid = std::feof(file) && !std::ferror(file);
-        std::fclose(file);
-        if (size && value[size - 1] == '\n') --size;
-        if (size && value[size - 1] == '\r') --size;
-        return valid && std::string_view(value, size) == "language=zh";
-    }
-
-    void refreshLanguagePreference() {
-        bool chinese = false;
-        u32 selection = 2;
-        // libultrahand owns the sdmc: mount until __appExit. The renderer and
-        // sound worker also read it after overlay services have initialized.
-        if (serviceIsActive(&g_relay) &&
-            R_SUCCEEDED(lanywhereOverlayGetStorageSelection(&g_relay, &selection))) {
-            bool found = false;
-            chinese = chinesePreference(rc_storage_path_gen(selection, RC_LEGACY_PATH("language.ini"),
-                RC_V1_PATH("language.ini"), RC_CURRENT_PATH("language.ini")), &found);
-            if (!found) chinese = chinesePreference(rc_storage_path_gen(selection, RC_LEGACY_PATH("language.ini.previous"),
-                RC_V1_PATH("language.ini.previous"), RC_CURRENT_PATH("language.ini.previous")), &found);
-        }
-        g_chinese = chinese;
-        // Ultrahand's framework labels follow RoomCircuit's own preference.
+    void refreshSystemLanguage() {
+        g_chinese = roomcircuit_system_chinese();
         ult::BACK = tr("Back", "返回"); ult::OK = tr("OK", "确定");
         ult::ON = tr("On", "开启"); ult::OFF = tr("Off", "关闭");
         ult::HIDE = tr("Hide", "隐藏"); ult::CANCEL = tr("Cancel", "取消");
@@ -788,12 +763,12 @@ namespace {
     public:
         void initServices() override {
             connectServices();
-            refreshLanguagePreference();
+            refreshSystemLanguage();
         }
         void exitServices() override { closeServices(); }
         void onShow() override {
             const bool previous = g_chinese;
-            refreshLanguagePreference();
+            refreshSystemLanguage();
             if (previous != g_chinese) tsl::swapTo<MainGui>(SwapDepth{UINT32_MAX});
             refresh();
         }

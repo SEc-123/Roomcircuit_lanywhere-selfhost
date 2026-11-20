@@ -29,7 +29,6 @@ static NodeFriendResponse group;
 static char group_code[8];
 static const char *notice;
 static const char *keyboard_error;
-static bool language_save_failed;
 static NodeHostInfo current_host_info;
 static bool current_host_valid;
 static NodeDynamicEntry current_host_identity;
@@ -80,7 +79,7 @@ int main(int argc,char **argv){
   v.measurements[1].median_ms=310;v.measurements[1].jitter_ms=91;draw_room_check(&v.measurements[1],1,false,false);capture(argv[1],"weak",zh);
   draw_room_check(&v.measurements[0],0,true,false);capture(argv[1],"gateway",zh);
   CatalogGameChoice games[2]={{17,{.en="Pokémon Violet",.zh="宝可梦 紫",.kind=CatalogCommunication}},{18,{.en="Mario Kart 8 Deluxe",.zh="马力欧卡丁车8 豪华版",.kind=CatalogCommunication}}};
-  GameCatalog catalog={0};draw_filters(&catalog,games,2,0,0,NodeRegionEurope,false,true,true);capture(argv[1],"filters",zh);
+  GameCatalog catalog={0};draw_filters(&catalog,games,2,0,0,NodeRegionEurope,false,true,true,true);capture(argv[1],"filters",zh);
   group_code[0]=0;memset(&group,0,sizeof(group));
   for(unsigned i=0;i<NODE_CATALOG_COUNT;i++){
    assert(gfx_text_width(19,nodes_ui_name(i)) < 305);

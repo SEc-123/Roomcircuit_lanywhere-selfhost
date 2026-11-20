@@ -55,8 +55,7 @@ def main():
             'static bool can_change_visibility(', 'static bool can_change_provider(', 'static bool can_change_host_region(', 'static u32 next_host_region(', 'static bool can_share_game_password(',
              'static LobbyRoomId room_password_target(', 'static bool can_enter_game_password(',
             'static bool appointment_entry_available(', 'static bool room_board_available(', 'static bool lobby_guide_available(')),
-        'ROOM_BOARD_INPUT': '\n'.join(function(source, signature) for signature in (
-            'static bool room_filters_requested(', 'static unsigned room_board_games(', 'static bool room_board_input(')),
+        'ROOM_BOARD_INPUT': function(source, 'static bool room_filters_requested('),
         'BRAND': function(source, 'static void draw_brand('),
         'ROOM_WIRE': '\n'.join(function(source, signature) for signature in (
             'static Result lanywhere_create(', 'static Result lanywhere_join(')),
@@ -67,17 +66,16 @@ def main():
                        function(source, 'static void select_room('),
         'START_SCREEN': between(source, '    draw(&v);', '    View last = {0};',
                                 source.index('    bool thread_ok =', loop)),
-        'OPEN_APPOINTMENTS': between(source, '        if ((down & (room_board_available(&v) ? HidNpadButton_Minus : HidNpadButton_Left)) && appointment_entry_available(&v)) {',
+        'OPEN_APPOINTMENTS': between(source, '        if (((down & HidNpadButton_Minus) || (!room_board_available(&v) && (down & HidNpadButton_Left))) &&',
                                       '        if ((down & HidNpadButton_B) && v.appointment_game_id', loop),
         'GUIDE': between(source, '        if (guide_input(&v, down)) {', '        if (appointments_active()) {', loop) +
-                 between(source, '        if (v.provider_panel) {', '        if (room_board_input(', loop),
-        'SELECTION': between(source, '        if (room_board_input(', '#if !RELAY_PROFILE_FIXED', loop),
+                 between(source, '        if (v.provider_panel) {', '        const int shown = v.count > 0 ? v.count : 0;', loop),
+        'SELECTION': between(source, '        const int shown = v.count > 0 ? v.count : 0;', '#if !RELAY_PROFILE_FIXED', loop),
         'BUSINESS': between(source, '        if (v.external_confirm) {',
                             '        if (down & (HidNpadButton_A | HidNpadButton_X | HidNpadButton_Y | HidNpadButton_B))', loop),
         'TOUCH': function(source, 'static void add_zone(') + '\n' + function(source, 'static u64 touch_action_at('),
         'APPOINTMENTS_LINK': function(source, 'static void draw_appointments_link('),
         'NO_SERVICE': function(source, 'static void draw_no_service(') + '\n' + function(source, 'static void no_service('),
-        'LANG_CONTROL': function(source, 'static void draw_language_control('),
         'PAGE_LIMIT': re.search(r'^#define MAX_PAGE_HISTORY\s+\d+$', source, re.M).group(),
     }
     template = Path(__file__).with_name('input_routing_harness.c.in').read_text(encoding='utf-8')

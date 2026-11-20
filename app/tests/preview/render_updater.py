@@ -40,7 +40,6 @@ body='''#include <assert.h>
 #define LANYWHERE_APP_VERSION @APP_VERSION@
 #define SAMPLE_UPDATE_VERSION @FIXTURE_VERSION@
 static bool rollback_pending;
-static bool language_save_failed;
 '''+constants+'\n'+types+'\n'+function('static const char *screen_title(')+'\n'+function('static void draw_release_note(')+'\n'+function('static void draw_update(')+r'''
 int main(int argc,char **argv) {
     assert(argc==2 && gfx_init());

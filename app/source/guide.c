@@ -7,7 +7,7 @@ static const GuidePage pages_zh[] = {
     { "创建房间", {
         "大厅底部按 Y 更换节点，选好后按 A。",
         "确认大厅底部的「建房线路」已显示所选节点。",
-        "按 + 回到游戏，在「本地无线」里创建房间。"
+        "在游戏的「本地无线」中创建房间。"
     }, "也可在浮层选「建房节点」。新房间会使用所选线路。" },
     { "加入房间", {
         "在大厅按 A 选房，线路按房间来源自动切换。",
@@ -54,7 +54,7 @@ static const GuidePage pages_en[] = {
     { "Host a room", {
         "Press Y next to Hosting line. Choose a node with A.",
         "Check the selected node under Hosting line in the lobby.",
-        "Press + to return to the game and host in Local Wireless."
+        "Create a room in the game’s Local Wireless menu."
     }, "You can also choose the hosting node in the overlay." },
     { "Join a room", {
         "Select with A. The lobby uses that room's source.",
@@ -102,12 +102,6 @@ enum { PageCount = sizeof(pages_zh) / sizeof(pages_zh[0]), Margin = 56, Footer =
 static int page_index(int page) { return page < 0 ? 0 : page >= PageCount ? PageCount - 1 : page; }
 int guide_page_count(void) { return PageCount; }
 
-void guide_draw_language(bool chinese)
-{
-    gfx_round_rect(1056, 40, 168, 44, 18, RGBA(0x11, 0x11, 0x11, 0xFF));
-    gfx_button(1068, 47, "RS", chinese ? "English" : "中文");
-}
-
 void guide_draw(int page, bool chinese, bool spanish)
 {
     (void)spanish;
@@ -117,7 +111,6 @@ void guide_draw(int page, bool chinese, bool spanish)
     const u32 accent = RGBA(0xD8, 0xD8, 0xD8, 0xFF), panel = RGBA(0x11, 0x11, 0x11, 0xFF);
     gfx_clear_gradient(RGBA(0x00, 0x00, 0x00, 0xFF), RGBA(0x00, 0x00, 0x00, 0xFF));
     gfx_text(Margin, 42, 24, dim, "RoomCircuit");
-    guide_draw_language(chinese);
     char position[20];
     snprintf(position, sizeof(position), "%d / %d", page + 1, PageCount);
     gfx_text(GFX_W - Margin - gfx_text_width(24, position), 128, 24, dim, position);
@@ -140,7 +133,6 @@ void guide_draw(int page, bool chinese, bool spanish)
 u64 guide_touch_action(int x, int y, int page)
 {
     page = page_index(page);
-    if (x >= 1056 && x < 1224 && y >= 40 && y < 84) return HidNpadButton_StickR;
     if (y < Footer + 8 || y >= Footer + 64) return 0;
     if (x >= 48 && x < 268 && page > 0) return HidNpadButton_ZL;
     if (x >= 844 && x < 1054 && page + 1 < PageCount) return HidNpadButton_ZR;

@@ -16,9 +16,9 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE.parent.parent / 'source'
-FUNCTIONS = ['tr_error', 'button_mask', 'add_zone', 'draw_language_control', 'touch_action_at', 'hosting_node_label', 'storage_health_text', 'show_matching', 'external_room_expired', 'supports_reserved', 'is_self_network', 'can_enter_game_password', 'room_password_allows_launch', 'match_state_text', 'list_error_title', 'status_pill', 'seats',
+FUNCTIONS = ['tr_error', 'button_mask', 'add_zone', 'touch_action_at', 'hosting_node_label', 'storage_health_text', 'show_matching', 'external_room_expired', 'supports_reserved', 'is_self_network', 'can_enter_game_password', 'room_password_allows_launch', 'match_state_text', 'list_error_title', 'status_pill', 'seats',
              'local_game_info', 'room_catalog_match', 'game_info_has_lcid', 'room_title', 'direct_host_title', 'display_game_icon', 'room_title_note', 'provider_label', 'region_label', 'group_card', 'draw_room_password_panel', 'matching_column', 'network_offline_hint', 'list_error_hint', 'groups_column', 'can_change_visibility', 'can_change_provider', 'can_change_host_region', 'current_host_line_available', 'is_self_room_context', 'can_share_game_password', 'provider_column', 'private_column',
-             'appointment_entry_available', 'lobby_guide_available', 'side_column', 'room_board_available', 'room_board_games',
+             'appointment_entry_available', 'side_column', 'room_board_available',
              'draw_brand', 'draw_update_action', 'board_game_title', 'board_room_node', 'board_room_region', 'draw_room_board', 'draw_board_header', 'draw_password_visibility', 'draw_update_entry', 'draw_appointments_link', 'draw_board_route', 'draw', 'draw_no_service']
 
 
@@ -92,7 +92,7 @@ static GameCatalog g_catalog;
 #include "relay_config.h"
 #include "ui_text.h"
 #include "../../common/game_identity_text.h"
-static bool g_es, g_zh, g_guide_open, g_language_save_failed;
+static bool g_es, g_zh, g_guide_open;
 static int g_guide_page;
 #define TR(es,en) ui_tr((es),(en))
 enum { StateIdle, StateConnecting, StateInRoom, StateError };
@@ -101,7 +101,6 @@ enum { ListUnavailable = -3, ListConnecting = -2, ListOffline = -1 };
 static TouchZone g_zones[48];
 static int g_zone_count;
 static LobbyRoomId g_rendered_rooms[LOBBY_PAGE_SIZE];
-static u64 g_rendered_games[LOBBY_PAGE_SIZE + 1];
 static LobbyNodeRoom g_rendered_node_rows[LOBBY_PAGE_SIZE];
 static bool g_board_title_animates, g_board_title_chinese;
 static unsigned g_board_title_pane;

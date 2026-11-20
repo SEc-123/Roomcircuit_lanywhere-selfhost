@@ -1,7 +1,5 @@
 #include <cassert>
 #include <algorithm>
-#include <filesystem>
-#include <fstream>
 #include <vector>
 #define main overlay_entry_main
 #include "../source/main.cpp"
@@ -88,7 +86,8 @@ bool serviceIsActive(Service*s){return s->active!=0;}void serviceClose(Service*s
 Result smGetService(Service*s,const char*){++opens;s->active=1;return 0;}
 Result smInitialize(){return 0;}void smExit(){}
 SmServiceName smEncodeName(const char*){return {1};}TipcService*smGetServiceSessionTipc(){static Service s{1};return &s;}
-Result setInitialize(){return 0;}void setExit(){}Result setGetSystemLanguage(u64*out){*out=0;return 0;}Result setMakeLanguage(u64,SetLanguage*out){*out=SetLanguage_ENUS;return 0;}
+static SetLanguage mocked_language=SetLanguage_ENUS;
+Result setInitialize(){return 0;}void setExit(){}Result setGetSystemLanguage(u64*out){*out=mocked_language;return 0;}Result setMakeLanguage(u64 code,SetLanguage*out){*out=static_cast<SetLanguage>(code);return 0;}
 u64 armGetSystemTick(){return ticks;}u64 armGetSystemTickFreq(){return 1000;}
 }
 void reset(){g_node_task={};g_last_handled_node_task=0;enabled=1;logging=0;protocol=5;storage_selection=storage_health=0;task_start_result=0;next_task_id=0;backend_task={1,NodeHostTaskIdle,0,0,0,{}};fail_command=unknown_command=0;present=true;ignore_set=identity_missing=false;opens=sets=0;ticks=1;status={};match={};host_node={};host_node.version=1;host_node.status=NodeHostReady;host_identity=builtinNode(0);host_node.port=host_identity.port;std::strcpy(host_node.host,host_identity.host);std::strcpy(host_node.name,"Main server");active_route={};active_route.version=1;node_catalog={};node_catalog.version=1;last_node={};node_select_count=0;commands.clear();g_chinese=false;closeServices();}
@@ -396,30 +395,23 @@ static void testPasscodeGui() {
 
 static void testFrameworkLanguage() {
     reset(); storage_selection = 3;
-    const std::filesystem::path directory = "sdmc:/config/RoomCircuit/data";
-    std::filesystem::create_directories(directory);
-    const auto locale = directory / "language.ini";
-    std::filesystem::remove(locale);
-    // An Ultrahand Chinese setting must not override RoomCircuit's English default.
     ult::BACK = "返回"; ult::OK = "确定"; g_chinese = true;
     Overlay overlay; overlay.initServices();
     assert(tsl::hlp::sdCardMounted);
     assert(!g_chinese && ult::BACK == "Back" && ult::OK == "OK" && ult::ON == "On");
-    { std::ofstream file(locale); file << "language=zh\n"; }
-    // An English Ultrahand setting must not override RoomCircuit Chinese.
+    mocked_language = SetLanguage_ZHHANT;
     ult::BACK = "Back"; ult::OK = "OK";
     const unsigned swaps = tsl::swapCalls;
     overlay.onShow();
     assert(tsl::hlp::sdCardMounted);
     assert(g_chinese && ult::BACK == "返回" && ult::OK == "确定" && ult::ON == "开启");
     assert(tsl::swapCalls == swaps + 1 && tsl::nextGui);
-    { std::ofstream file(locale); file << "language=en\n"; }
+    mocked_language = SetLanguage_ENUS;
     overlay.onHide(); overlay.onShow();
     assert(tsl::hlp::sdCardMounted);
     assert(!g_chinese && ult::BACK == "Back" && ult::OK == "OK" && ult::ON == "On");
     assert(tsl::swapCalls == swaps + 2);
     overlay.exitServices(); tsl::nextGui.reset();
-    std::filesystem::remove_all("sdmc:");
 }
 
 int main(){
