@@ -36,10 +36,9 @@ static int hidGetTouchScreenStates(HidTouchScreenState *out,int n){assert(n==1);
 static bool appletMainLoop(void){return frame<frames;}
 static void padUpdate(PadState *pad){(void)pad;}
 static u64 padGetButtonsDown(PadState *pad){(void)pad;return inputs[frame++];}
-static void language_input(u64 keys){(void)keys;}
 static void svcSleepThread(uint64_t ns){(void)ns;}
 static bool ask_game_search(char query[64]){strcpy(query,"Beta");return true;}
-static void draw_filters(const GameCatalog *c,const CatalogGameChoice *choices,size_t count,int selected,uint64_t chosen,uint8_t region,bool focus,bool first,bool next){(void)c;(void)choices;(void)count;(void)selected;(void)chosen;(void)region;(void)focus;(void)first;(void)next;draws++;}
+static void draw_filters(const GameCatalog *c,const CatalogGameChoice *choices,size_t count,int selected,uint64_t chosen,uint8_t region,bool focus,bool first,bool next,bool reset){(void)c;(void)choices;(void)count;(void)selected;(void)chosen;(void)region;(void)focus;(void)first;(void)next;(void)reset;draws++;}
 ''' + '\n'.join(line for line in source.splitlines() if line.startswith('#define NODE_')) + r'''
 typedef struct {
  NodeMeasurement measurements[NODE_CATALOG_COUNT];

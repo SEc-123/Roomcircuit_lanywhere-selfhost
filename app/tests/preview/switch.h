@@ -11,6 +11,14 @@ typedef int32_t s32;
 typedef int Result;
 #define R_FAILED(r) ((r) != 0)
 #define R_SUCCEEDED(r) ((r) == 0)
+typedef enum {
+    SetLanguage_JA, SetLanguage_ENUS, SetLanguage_ES = 4, SetLanguage_ZHCN = 6,
+    SetLanguage_ZHTW = 11, SetLanguage_ZHHANS = 15, SetLanguage_ZHHANT = 16
+} SetLanguage;
+Result setInitialize(void);
+void setExit(void);
+Result setGetSystemLanguage(u64 *);
+Result setMakeLanguage(u64, SetLanguage *);
 enum { PIXEL_FORMAT_RGBA_8888 = 0, PlServiceType_User = 0 };
 typedef enum {
     PlSharedFontType_Standard, PlSharedFontType_ChineseSimplified,

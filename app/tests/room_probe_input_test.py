@@ -48,7 +48,6 @@ static void padUpdate(PadState *pad) { (void)pad; }
 static u64 padGetButtonsDown(PadState *pad) { (void)pad; const u64 keys[]={HidNpadButton_A,HidNpadButton_X,HidNpadButton_A}; return keys[frame++]; }
 static NodeView snapshot(void) { return view; }
 static bool modal_touch_start(bool *held,int *x,int *y) { (void)held;(void)x;(void)y;return false; }
-static void language_input(u64 down) { (void)down; }
 static void mutexLock(int *lock) { (void)lock; }
 static void mutexUnlock(int *lock) { (void)lock; }
 static void draw_room_check(const NodeMeasurement *m,uint32_t node,bool gateway,bool failed) { (void)m;(void)node;(void)gateway;(void)failed; }

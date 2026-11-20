@@ -4,7 +4,6 @@
 #include "node_selection_trace.h"
 #include "gfx.h"
 #include "relay_config.h"
-#include "ui_locale.h"
 #include "ui_text.h"
 #include <stdatomic.h>
 #include <stdio.h>
@@ -43,6 +42,8 @@
 #define NODE_FILTER_FIRST_X 662
 #define NODE_FILTER_NEXT_X 880
 #define NODE_BACK_X 1140
+#define NODE_REFRESH_X 816
+#define NODE_SHARED_TEST_X 1000
 
 typedef struct {
     NodeMeasurement measurements[NODE_TOTAL_CAPACITY];
@@ -78,7 +79,6 @@ static char group_code[8];
 static NodeFriendResponse group;
 static uint64_t next_friend_poll;
 static const char *notice;
-static bool language_save_failed;
 static const char *keyboard_error;
 static NodeHostInfo current_host_info;
 static bool current_host_valid;
@@ -669,14 +669,6 @@ void nodes_ui_shutdown(void)
         app_socket_release();
     initialized = socket_ready = nifm_ready = false;
 }
-static void language_input(u64 down)
-{
-    if (!(down & HidNpadButton_StickR))
-        return;
-    const bool chinese = !ui_chinese();
-    ui_set_language(chinese, false);
-    language_save_failed = !ui_locale_save(UI_LOCALE_PATH, chinese);
-}
 static bool ask_friend_code(char code[8])
 {
     keyboard_error = NULL;
@@ -803,13 +795,6 @@ static void begin_screen(const char *title)
     gfx_round_rect(54, 39, 22, 18, 5, NODE_COLOR_ACCENT);
     gfx_round_rect(59, 43, 12, 10, 3, NODE_COLOR_PANEL);
     gfx_text(90, 24, 36, NODE_COLOR_TEXT, "RoomCircuit");
-    const char *language = ui_chinese() ? "English" : "中文";
-    const int language_width = gfx_text_width(18, language) + 50;
-    gfx_round_rect(1240 - language_width, 22, language_width, 38, 8, NODE_COLOR_SELECT);
-    gfx_text(1250 - language_width, 32, 16, NODE_COLOR_ACCENT, "RS");
-    gfx_text(1275 - language_width, 31, 18, NODE_COLOR_TEXT, language);
-    if (language_save_failed)
-        gfx_text(1068, 91, 18, NODE_COLOR_WARN, ui_text("Not saved"));
     gfx_text(40, 109, 35, NODE_COLOR_TEXT, ui_text(title));
 }
 
@@ -872,7 +857,8 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
         gfx_button(1120, 114, "ZR", ui_text("Next"));
     node_panel();
     draw_regions(region, region_focus, true);
-    gfx_text_fit(379, 207, 21, NODE_COLOR_TEXT, nodes_ui_region(region), 825);
+    gfx_button(NODE_REFRESH_X, 203, "X", ui_text("Refresh"));
+    gfx_button(NODE_SHARED_TEST_X, 203, "L", ui_text("Test with friends"));
     gfx_rect(NODE_TABLE_X, 242, 879, 32, NODE_COLOR_RAIL);
     gfx_rect(NODE_TABLE_X, 274, 879, 1, NODE_COLOR_LINE);
     gfx_text(379, 249, 17, NODE_COLOR_DIM, ui_text("Node"));
@@ -901,8 +887,7 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
         gfx_text_fit(379, y + (recommended[id] ? 7 : 16), 19, enabled ? NODE_COLOR_TEXT : NODE_COLOR_DIM,
                      name, 305);
         if (recommended[id]) {
-            const char *recommendation = group_code[0] ? " (Recommended)" : " (Recommended for you)";
-            gfx_text_fit(379, y + 31, 15, NODE_COLOR_ACCENT, ui_text(recommendation), 305);
+            gfx_text_fit(379, y + 31, 15, NODE_COLOR_ACCENT, ui_text(" (Recommended)"), 305);
         }
         gfx_text_fit(704, y + 16, 18, NODE_COLOR_DIM, nodes_ui_location(node.id), 145);
         if (m->state == NodeMeasureReady && id < NODE_CATALOG_COUNT && group_code[0] && group.participants &&
@@ -918,7 +903,7 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
             strcpy(text, "—");
         }
         gfx_text_fit(864, y + 16, 18, NODE_COLOR_TEXT, text, 211);
-        const char *status = "Not measured";
+        const char *status = NULL;
         u32 color = NODE_COLOR_DIM;
         if (!copy->catalog_ok)
             status = "Unavailable";
@@ -930,10 +915,10 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
             status = "Unreachable";
             color = NODE_COLOR_WARN;
         } else if (m->state == NodeMeasureReady) {
-            status = current_row ? "Current" : available ? "Online" : "Unlisted";
+            status = current_row ? "Current" : available ? NULL : "Unlisted";
             color = current_row ? NODE_COLOR_ACCENT : NODE_COLOR_DIM;
         }
-        gfx_text_fit(1090, y + 16, 17, color, ui_text(status), 134);
+        if (status) gfx_text_fit(1090, y + 16, 17, color, ui_text(status), 134);
     }
     if (!count)
         gfx_text(379, 306, 23, NODE_COLOR_DIM, ui_text("No nodes in this region."));
@@ -970,9 +955,7 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
         snprintf(text, sizeof(text), "%s · %s", ui_text("Current"), nodes_ui_name(current));
         gfx_text_fit(40, 673, 19, NODE_COLOR_ACCENT, text, 352);
     }
-    gfx_button(430, 669, "A", ui_text("Select"));
-    gfx_button(615, 669, "X", ui_text("Refresh"));
-    gfx_button(845, 669, "L", ui_text("Test with friends"));
+    if (count) gfx_button(430, 669, "A", ui_text("Select"));
     gfx_button(NODE_BACK_X, 669, "B", ui_text("Back"));
     gfx_end();
 }
@@ -990,8 +973,6 @@ static u64 picker_touch(const uint32_t rendered[NODE_ROWS], uint32_t *touched, u
         return 0;
     *held = true;
     const int x = touch.touches[0].x, y = touch.touches[0].y;
-    if (x >= 1056 && y >= 15 && y < 76)
-        return HidNpadButton_StickR;
     if (y >= 105 && y < 151) {
         if (x >= 1000 && x < 1120 && prev)
             return HidNpadButton_ZL;
@@ -1000,6 +981,8 @@ static u64 picker_touch(const uint32_t rendered[NODE_ROWS], uint32_t *touched, u
     }
     if (region_header_touched(x, y))
         return HidNpadButton_R;
+    if (y >= NODE_PANEL_Y && y < NODE_REGION_Y - 2 && x >= NODE_REFRESH_X - 8 && x < NODE_PANEL_X + NODE_PANEL_W)
+        return x < NODE_SHARED_TEST_X - 8 ? HidNpadButton_X : HidNpadButton_L;
     if (x >= 40 && x < NODE_TABLE_X && y >= NODE_REGION_Y &&
         y < NODE_REGION_Y + NODE_REGION_COUNT * NODE_REGION_HEIGHT) {
         *touched_region = region_for_row((unsigned)(y - NODE_REGION_Y) / NODE_REGION_HEIGHT);
@@ -1016,10 +999,6 @@ static u64 picker_touch(const uint32_t rendered[NODE_ROWS], uint32_t *touched, u
     if (y >= NODE_FOOTER_Y) {
         if (x >= 430 && x < 615)
             return HidNpadButton_A;
-        if (x >= 615 && x < 845)
-            return HidNpadButton_X;
-        if (x >= 845 && x < NODE_BACK_X)
-            return HidNpadButton_L;
         if (x >= NODE_BACK_X)
             return HidNpadButton_B;
     }
@@ -1072,9 +1051,7 @@ static void friend_panel(PadState *pad)
         u64 down = padGetButtonsDown(pad);
         int touch_x, touch_y;
         if (modal_touch_start(&touch_held, &touch_x, &touch_y)) {
-            if (touch_x >= 1056 && touch_y >= 15 && touch_y < 76)
-                down |= HidNpadButton_StickR;
-            else if (touch_y >= 650) {
+            if (touch_y >= 650) {
                 if (touch_x < 300)
                     down |= HidNpadButton_A;
                 else if (touch_x < 590)
@@ -1089,7 +1066,6 @@ static void friend_panel(PadState *pad)
         maintain_probes(&probe_loop, (1u << NODE_CATALOG_COUNT) - 1);
         if (collect_friend())
             dirty = true;
-        language_input(down);
         if (down & HidNpadButton_B)
             break;
         if ((down & HidNpadButton_A) && !group_code[0]) {
@@ -1191,7 +1167,6 @@ bool nodes_ui_pick(PadState *pad, Service *service, uint32_t current, uint32_t *
         uint32_t touched = NODE_ID_INVALID;
         uint8_t touched_region = NODE_NO_REGION_TOUCHED;
         down |= picker_touch(rendered, &touched, &touched_region, &touch_held, rendered_prev, rendered_next);
-        language_input(down);
         if (down & HidNpadButton_B) {
             cancel_probes();
             return false;
@@ -1356,7 +1331,7 @@ static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gat
         gfx_button(56, 670, "A", ui_text("Continue"));
     if (room_probe_can_retry(m, probe_start_failed))
         gfx_button(420, 670, "X", ui_text("Refresh"));
-    gfx_button(980, 670, "B", ui_text("Back"));
+    gfx_button(980, 670, "B", ui_text("Cancel"));
     gfx_end();
 }
 static void finish_room_probe(uint32_t node_id)
@@ -1396,16 +1371,13 @@ bool nodes_ui_check_room(PadState *pad, uint32_t node_id, bool gateway, const No
         const NodeView copy = snapshot();
         int touch_x, touch_y;
         if (modal_touch_start(&touch_held, &touch_x, &touch_y)) {
-            if (touch_x >= 1056 && touch_y >= 15 && touch_y < 76)
-                down |= HidNpadButton_StickR;
-            else if (touch_y >= 650) {
+            if (touch_y >= 650) {
                 if (room_probe_can_retry(&copy.measurements[node_id], copy.probe_start_failed) && touch_x >= 340 && touch_x < 760)
                     down |= HidNpadButton_X;
                 else
                     down |= touch_x < 600 ? HidNpadButton_A : HidNpadButton_B;
             }
         }
-        language_input(down);
         const NodeMeasurement *m = &copy.measurements[node_id];
         if (down & HidNpadButton_B) {
             finish_room_probe(node_id);
@@ -1451,14 +1423,14 @@ static bool ask_game_search(char query[64])
 }
 static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *choices, size_t count,
                          int selected, uint64_t chosen, uint8_t chosen_region, bool region_focus,
-                         bool first_page_available, bool next_page_available)
+                         bool first_page_available, bool next_page_available, bool reset_game_available)
 {
     begin_screen("Filter rooms");
     node_panel();
     draw_regions(chosen_region, region_focus, false);
     gfx_text(379, 207, 21, NODE_COLOR_TEXT, ui_text("Game"));
     gfx_button(NODE_FILTER_SEARCH_X, 203, "X", ui_text("Search game"));
-    gfx_button(NODE_FILTER_ALL_X, 203, "Y", ui_text("All games"));
+    if (reset_game_available) gfx_button(NODE_FILTER_ALL_X, 203, "Y", ui_text("All games"));
     gfx_rect(NODE_TABLE_X, 241, 879, 1, NODE_COLOR_LINE);
     const CatalogMatch selected_title = game_catalog_identify(catalog, 0, chosen);
     const char *active = (chosen && selected_title.kind) ? game_catalog_name(&selected_title, ui_chinese())
@@ -1474,8 +1446,6 @@ static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *ch
         gfx_rect(NODE_TABLE_X, y + NODE_FILTER_ROW_HEIGHT - 1, 879, 1, NODE_COLOR_LINE);
         const char *name = i < 0 ? active : game_catalog_name(&choices[i].title, ui_chinese());
         gfx_text_fit(379, y + 14, 21, NODE_COLOR_TEXT, name, i < 0 ? 650 : 830);
-        if (i < 0)
-            gfx_text_fit(1090, y + 16, 17, NODE_COLOR_DIM, ui_text("Current"), 134);
     }
     if (keyboard_error)
         gfx_text_fit(40, 618, 20, NODE_COLOR_WARN, ui_text(keyboard_error), 1200);
@@ -1485,7 +1455,7 @@ static void draw_filters(const GameCatalog *catalog, const CatalogGameChoice *ch
         gfx_button(NODE_FILTER_FIRST_X, 669, "ZL", ui_text("First page"));
     if (next_page_available)
         gfx_button(NODE_FILTER_NEXT_X, 669, "ZR", ui_text("Next"));
-    gfx_button(NODE_BACK_X, 669, "B", ui_text("Back"));
+    gfx_button(NODE_BACK_X, 669, "B", ui_text("Cancel"));
     gfx_end();
 }
 bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_id, uint8_t *region)
@@ -1504,13 +1474,12 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
         u64 down = padGetButtonsDown(pad);
         int touch_x, touch_y;
         if (modal_touch_start(&touch_held, &touch_x, &touch_y)) {
-            if (touch_x >= 1056 && touch_y >= 15 && touch_y < 76)
-                down |= HidNpadButton_StickR;
-            else if (region_header_touched(touch_x, touch_y))
+            if (region_header_touched(touch_x, touch_y))
                 down |= HidNpadButton_R;
             else if (touch_y >= NODE_PANEL_Y && touch_y < NODE_REGION_Y - 2 &&
                      touch_x >= NODE_FILTER_SEARCH_X - 8 && touch_x < NODE_PANEL_X + NODE_PANEL_W)
-                down |= touch_x < NODE_FILTER_ALL_X - 8 ? HidNpadButton_X : HidNpadButton_Y;
+                down |= touch_x < NODE_FILTER_ALL_X - 8 ? HidNpadButton_X :
+                    (chosen || query[0]) ? HidNpadButton_Y : 0;
             else if (touch_x >= NODE_PANEL_X && touch_x < NODE_TABLE_X && touch_y >= NODE_REGION_Y &&
                      touch_y < NODE_REGION_Y + NODE_REGION_COUNT * NODE_REGION_HEIGHT) {
                 chosen_region = region_for_row((unsigned)(touch_y - NODE_REGION_Y) / NODE_REGION_HEIGHT);
@@ -1534,7 +1503,6 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
                     down |= HidNpadButton_ZL;
             }
         }
-        language_input(down);
         if (down & HidNpadButton_B)
             return false;
         if (down & HidNpadButton_AnyLeft)
@@ -1600,7 +1568,7 @@ bool nodes_ui_filters(PadState *pad, const GameCatalog *catalog, uint64_t *game_
         }
         if (dirty || down) {
             draw_filters(catalog, choices, count, selected, chosen, chosen_region, region_focus,
-                         offset != 0, next != SIZE_MAX);
+                         offset != 0, next != SIZE_MAX, chosen || query[0]);
             dirty = false;
         }
         svcSleepThread(33000000ULL);

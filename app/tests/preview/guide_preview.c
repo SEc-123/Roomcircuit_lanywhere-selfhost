@@ -51,7 +51,7 @@ int main(int argc, char **argv)
         assert(guide_touch_action(900, 680, p) == (p + 1 < pages ? HidNpadButton_ZR : 0));
         assert(guide_touch_action(1120, 680, p) == HidNpadButton_B);
         assert(guide_touch_action(1120, 600, p) == 0);
-        assert(guide_touch_action(1120, 62, p) == HidNpadButton_StickR);
+        assert(guide_touch_action(1120, 62, p) == 0);
         assert(guide_touch_action(1055, 62, p) == 0);
         assert(guide_touch_action(1224, 62, p) == 0);
         assert(guide_touch_action(1120, 84, p) == 0);

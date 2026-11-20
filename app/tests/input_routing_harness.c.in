@@ -23,7 +23,6 @@ const char *nodes_ui_provider(uint32_t id) { return id == 13 ? "custom-13" : Lan
 #define TOUCH_UPDATE (1ULL << 59)
 #define TOUCH_CARD (1ULL << 62)
 #define TOUCH_NETWORK_CHOICE (1ULL << 61)
-#define TOUCH_GAME_RAIL (1ULL << 54)
 #define TOUCH_NODE_FILTER (1ULL << 55)
 /* SOURCE_PAGE_LIMIT */
 /* SOURCE_STATUS */
@@ -36,7 +35,6 @@ static Calls calls;
 static int g_lanywhere;
 static int g_list_lock;
 static bool g_nodes_directory;
-static u64 g_node_game_filter, g_touched_game;
 static void mutexLock(int *p){(void)p;}
 static void mutexUnlock(int *p){(void)p;}
 static const char *room_password_edit(int *service, const char room[8], bool supports_hidden, RoomPasswordEdit *edit)
@@ -53,7 +51,7 @@ static const char *room_password_unlock(int *service, RoomPasswordView *view)
     calls.unlock_password++;
     return "Room unlocked.";
 }
-static bool g_guide_open, g_zh, g_es, g_language_save_failed;
+static bool g_guide_open, g_zh, g_es;
 static atomic_bool g_inventory_running;
 static int g_guide_page;
 static LobbyRoomId g_touched_room;
@@ -99,7 +97,6 @@ static void start_screen(View v)
 {
 /* SOURCE_START_SCREEN */
 }
-static void switch_language(void) { g_zh = !g_zh; calls.language++; }
 static void cancel_match(View *v) { calls.cancel++; v->match.mode = LobbyManual; v->pinned = (LobbyRoomId){0}; }
 static void start_quick(View *v) { calls.quick++; v->match.mode = LobbyQuick; }
 static bool open_selected_game(View *v) { (void)v; calls.launch++; return launch_ok; }
@@ -124,11 +121,6 @@ static void restart_group_query(u32 offset, u32 snapshot, bool available, const 
 }
 /* SOURCE_FIND_APPOINTMENT_ROOMS */
 static void restart_group_list(u32 offset, u32 snapshot, bool available) { (void)offset; (void)available; requested_snapshot=snapshot; calls.page++; }
-static const char *room_title(const LobbyGroup *group,char *buffer,size_t size)
-{
-    snprintf(buffer,size,"Game %llu",(unsigned long long)group->game_id);
-    return buffer;
-}
 /* SOURCE_ROOM_BOARD_INPUT */
 static void restart_group_list_on_network(u32 offset, bool available, const char *provider) { (void)offset; (void)available; (void)provider; calls.page++; }
 static Result leave_result;
@@ -204,8 +196,6 @@ static void gfx_end(void) {}
 static void gfx_clear_gradient(u32 a,u32 b) {(void)a;(void)b;}
 static void gfx_text(int x,int y,int size,u32 color,const char *s) {(void)x;(void)y;(void)size;(void)color;(void)s;}
 static void gfx_text_fit(int x,int y,int size,u32 color,const char *s,int max) {(void)x;(void)y;(void)size;(void)color;(void)s;(void)max;}
-static void guide_draw_language(bool chinese) {(void)chinese;}
-/* SOURCE_LANG_CONTROL */
 static void gfx_round_rect(int x,int y,int w,int h,int r,u32 color) {(void)x;(void)y;(void)w;(void)h;(void)r;(void)color;}
 static void gfx_rect(int x,int y,int w,int h,u32 color) {(void)x;(void)y;(void)w;(void)h;(void)color;}
 static int gfx_button(int x,int y,const char *key,const char *label) {(void)x;(void)y;(void)key;(void)label;return 120;}
@@ -213,12 +203,12 @@ static int gfx_button(int x,int y,const char *key,const char *label) {(void)x;(v
 /* SOURCE_APPOINTMENTS_LINK */
 static bool appletMainLoop(void) { return applet_ticks-- > 0; }
 static void padUpdate(PadState *pad) {(void)pad;}
-static u64 padGetButtonsDown(PadState *pad) {(void)pad;return test_update?HidNpadButton_StickL:0;}
+static u64 padGetButtonsDown(PadState *pad) {(void)pad;return test_update?HidNpadButton_StickL:HidNpadButton_Plus;}
 static u64 touch_button(void) {return test_update?0:touch_action_at(1130,680);}
 /* SOURCE_NO_SERVICE */
 
 static View lobby(void) {
-    memset(&calls,0,sizeof(calls)); g_guide_open=false;g_guide_page=0;appointment_screen=appointment_list=false;g_zh=false;g_language_save_failed=false;atomic_store(&g_inventory_running,false);accept_code=true;save_ok=true;launch_ok=true;node_reachable=true;
+    memset(&calls,0,sizeof(calls)); g_guide_open=false;g_guide_page=0;appointment_screen=appointment_list=false;g_zh=false;atomic_store(&g_inventory_running,false);accept_code=true;save_ok=true;launch_ok=true;node_reachable=true;
     View v={0};v.sel=-1;v.discovery=LobbyDiscoveryLegacy;route_result=0;leave_result=0;v.config_state=RelayConfigReady;v.config.public_groups=true;v.match_available=true;v.status_valid=true;v.capabilities=LOBBY_CAP_RESERVED_MATCH;v.next_page=LOBBY_PAGE_END;
     strcpy(v.config.provider,"self");
     return v;
@@ -241,7 +231,7 @@ int main(void) {
     v=lobby();strcpy(v.config.provider,"lanywhere-public");start_screen(v);
     assert(!appointment_screen&&!g_guide_open&&calls.draw==1&&calls.appointment_open==0);checked();
     g_zone_count=0;draw_appointments_link(&v);
-    assert(g_zone_count==1&&touch_action_at(SIDE_X+10,105)==HidNpadButton_Left);checked();
+    assert(g_zone_count==1&&touch_action_at(SIDE_X+10,105)==HidNpadButton_Minus);checked();
     step(&v,touch_action_at(SIDE_X+10,105));assert(appointment_screen&&calls.appointment_open==1);checked();
     assert(!strcmp(v.config.provider,"lanywhere-public"));checked();
     appointment_screen=false;
@@ -479,48 +469,18 @@ int main(void) {
     v=lobby();g_guide_open=true;g_guide_page=4;step(&v,HidNpadButton_ZR);assert(g_guide_page==4);checked();
     v=lobby();v.private_panel=true;g_guide_open=true;step(&v,HidNpadButton_ZR);assert(g_guide_page==1&&v.private_panel&&effects()==0);checked();
     v=lobby();g_guide_open=true;applet_ticks=2;PadState pad={0};no_service(&pad,false);
-    assert(!g_guide_open&&calls.sleep==0&&touch_action_at(1130,680)==HidNpadButton_Plus);checked();
+    assert(!g_guide_open&&calls.sleep==0&&touch_action_at(1130,680)==0);checked();
     v=lobby();g_guide_open=true;applet_ticks=2;no_service(&pad,true);assert(!g_guide_open&&calls.sleep==0);checked();
-    assert(touch_action_at(1140,60)==HidNpadButton_StickR);checked();
+    assert(touch_action_at(1140,60)==0);checked();
     test_update=true;update_calls=0;applet_ticks=2;no_service(&pad,false);assert(update_calls==1);checked();
     update_calls=0;applet_ticks=2;no_service(&pad,true);assert(update_calls==1);checked();test_update=false;
-    for(unsigned state=0;state<4;state++){
-        v=lobby();
-        if(state==0)g_guide_open=true;
-        if(state==1){v.private_panel=true;v.private_room=true;v.st.state=StateInRoom;}
-        if(state==2){v.match.mode=LobbyExact;v.match.state=MatchAssigned;}
-        if(state==3){v.st.state=StateConnecting;}
-        const View original=v;const bool was_guide=g_guide_open;
-        assert(step(&v,HidNpadButton_StickR|HidNpadButton_A)==1);
-        assert(calls.language==1&&g_zh&&effects()==0&&g_guide_open==was_guide);
-        assert(v.private_room==original.private_room&&v.private_panel==original.private_panel&&v.match.mode==original.match.mode&&v.st.state==original.st.state);checked();
-        step(&v,HidNpadButton_StickR);assert(calls.language==2&&!g_zh&&effects()==0);checked();
-    }
-    v=lobby();
-    const int before_minus=effects();
-    step(&v,HidNpadButton_Minus);
-    assert(effects()==before_minus&&!v.message[0]);checked();
-    // The unified board uses real raw game IDs; duplicate or anonymous rows
-    // never introduce extra filters. Opening appointments cannot launch a room.
+    v=lobby();step(&v,HidNpadButton_StickR);
+    assert(!g_zh && !calls.language && !effects());checked();
+    v=lobby();step(&v,HidNpadButton_Minus);
+    assert(calls.appointment_open==1 && !effects());checked();
     v=lobby();v.node_directory=true;v.discovery=LobbyDiscoveryUnified;choose(&v);
-    v.count=3;
-    v.groups[1]=v.groups[0];
-    v.groups[2].game_id=UINT64_MAX;
-    u64 game_choices[LOBBY_PAGE_SIZE+1];
-    assert(room_board_games(&v,game_choices)==2&&game_choices[0]==0&&game_choices[1]==1);checked();
-    step(&v,HidNpadButton_Left);assert(v.game_rail_focused&&!appointment_screen);checked();
-    step(&v,HidNpadButton_AnyDown);assert(v.game_focus_id==1);checked();
-    step(&v,HidNpadButton_A);
-    assert(!v.game_rail_focused&&v.game_filter==1&&g_node_game_filter==1&&v.sel==-1&&
-           v.count==ListConnecting&&!v.selection.code[0]&&calls.page==1&&!effects());checked();
-    assert(room_board_games(&v,game_choices)==2&&game_choices[1]==1);checked();
-    step(&v,HidNpadButton_Left);step(&v,HidNpadButton_Right);
-    assert(!v.game_rail_focused&&!g_guide_open);checked();
-    g_touched_game=7;
-    step(&v,TOUCH_GAME_RAIL|1);assert(v.game_filter==1&&calls.page==1);checked();
-    g_touched_game=0;
-    step(&v,TOUCH_GAME_RAIL);assert(!v.game_filter&&!g_node_game_filter&&calls.page==2);checked();
-    step(&v,HidNpadButton_Minus);assert(calls.appointment_open==1&&!effects());checked();
+    step(&v,HidNpadButton_Right);
+    assert(g_guide_open && !effects());checked();
     v=lobby();v.node_directory=true;
     const u64 filter_chord=HidNpadButton_ZL|HidNpadButton_ZR;
     assert(room_filters_requested(&v,HidNpadButton_ZL,filter_chord)&&

@@ -34,19 +34,14 @@
 
 #define TOUCH_UPDATE (1ULL << 59)
 #define TOUCH_NODE_FILTER (1ULL << 55)
-#define TOUCH_GAME_RAIL (1ULL << 54)
 
 #define MIN_REFRESH_MS   1250
 #define STATUS_POLL_MS    250
 #define ROOM_NOTICE_MS   6000
 #define MAX_PAGE_HISTORY 1024
 
-// Player UI starts in English; an explicit choice is stored separately from relay settings.
-
 static bool g_es;
 static bool g_zh;
-static bool g_language_save_failed;
-#define UI_LANGUAGE_PATH rc_storage_path_gen(roomcircuit_storage_generation(), RC_LEGACY_PATH("language.ini"), RC_V1_PATH("language.ini"), RC_CURRENT_PATH("language.ini"))
 static bool g_guide_open;
 static int g_guide_page;
 #define TR(es, en) ui_tr((es), (en))
@@ -54,8 +49,8 @@ static int g_guide_page;
 static void detect_language(void)
 {
     g_es = false;
-    g_zh = ui_locale_load(UI_LANGUAGE_PATH);
-    ui_set_language(g_zh, false);
+    ui_locale_initialize();
+    g_zh = ui_chinese();
 }
 
 // Los errores del sysmodule llegan en español: traducción de los conocidos.
@@ -537,17 +532,6 @@ static void clear_game_cache(void)
     g_game_count = g_game_replace = 0;
 }
 
-static void switch_language(void)
-{
-    g_zh = !g_zh;
-    g_es = false;
-    ui_set_language(g_zh, false);
-    const bool available = roomcircuit_storage_available();
-    const bool directory_ready = available && (mkdir(RELAY_CONFIG_DIR, 0777) == 0 || errno == EEXIST);
-    g_language_save_failed = !directory_ready || !ui_locale_save(UI_LANGUAGE_PATH, g_zh);
-    clear_game_cache();
-}
-
 // --- lista de grupos en un hilo (la consulta al servidor tarda) ---
 
 static Mutex g_list_lock;
@@ -735,8 +719,6 @@ static TouchZone g_zones[48];
 #define TOUCH_CARD  (1ULL << 62)  // tocar la tarjeta del grupo n devuelve TOUCH_CARD | n
 #define TOUCH_NETWORK_CHOICE (1ULL << 61)
 static LobbyRoomId g_rendered_rooms[LOBBY_PAGE_SIZE];
-static u64 g_rendered_games[LOBBY_PAGE_SIZE + 1];
-static u64 g_touched_game;
 static LobbyRoomId g_touched_room;
 static LobbyNodeRoom g_rendered_node_rows[LOBBY_PAGE_SIZE];
 static bool g_board_title_animates, g_board_title_chinese;
@@ -766,14 +748,6 @@ static void add_zone(int x, int y, int w, int h, u64 button)
 {
     if (g_zone_count < (int)(sizeof(g_zones) / sizeof(g_zones[0])))
         g_zones[g_zone_count++] = (TouchZone){ x, y, w, h, button };
-}
-
-static void draw_language_control(void)
-{
-    guide_draw_language(g_zh);
-    add_zone(1056, 40, 168, 44, HidNpadButton_StickR);
-    if (g_language_save_failed)
-        gfx_text_fit(1056, 91, 18, C_WARN, g_zh ? "未保存" : "Not saved", 168);
 }
 
 static u64 touch_action_at(int x, int y)
@@ -807,8 +781,6 @@ static u64 touch_button(void)
                 g_touched_room = g_rendered_rooms[pressed_action & 0xFF];
                 g_touched_node = g_rendered_node_rows[pressed_action & 0xFF];
             }
-            if (pressed_action & TOUCH_GAME_RAIL)
-                g_touched_game = g_rendered_games[pressed_action & 0xFF];
             if (pressed_action & (APPOINTMENT_TOUCH_ROW | APPOINTMENT_TOUCH_JOIN))
                 appointments_capture_touch(pressed_action);
         }
@@ -832,9 +804,7 @@ typedef struct {
     NodeHostInfo host_info;
     bool host_info_valid;
     u32 storage_health;
-    uint64_t game_filter, game_focus_id;
-    bool game_rail_focused;
-    char game_filter_name[128];
+    uint64_t game_filter;
     uint8_t region_filter;
     LobbySource sources[LOBBY_PAGE_SIZE];
     enum LobbyDiscovery discovery;
@@ -1562,91 +1532,6 @@ static bool room_filters_requested(const View *v, u64 down, u64 held)
         ((down & TOUCH_NODE_FILTER) || ((held & shortcut) == shortcut && (down & shortcut)));
 }
 
-/* Rail choices refer to the exact raw game IDs accepted by the directory. */
-static unsigned room_board_games(const View *v, u64 choices[LOBBY_PAGE_SIZE + 1])
-{
-    unsigned count = 1;
-    choices[0] = 0;
-    if (v->game_filter) choices[count++] = v->game_filter;
-    for (int i = 0; i < v->count && i < LOBBY_PAGE_SIZE && count <= LOBBY_PAGE_SIZE; ++i) {
-        const u64 game = v->groups[i].game_id;
-        if (!game || game == UINT64_MAX) continue;
-        bool present = false;
-        for (unsigned j = 1; j < count; ++j) {
-            if (choices[j] == game) { present = true; break; }
-        }
-        if (!present) choices[count++] = game;
-    }
-    return count;
-}
-
-static bool room_board_input(View *v, u64 down, bool worker_available)
-{
-    if (!room_board_available(v)) {
-        v->game_rail_focused = false;
-        return false;
-    }
-    u64 choices[LOBBY_PAGE_SIZE + 1];
-    const unsigned count = room_board_games(v, choices);
-    unsigned focused = 0;
-    for (unsigned i = 1; i < count; ++i)
-        if (choices[i] == v->game_focus_id) focused = i;
-
-    bool activate = false;
-    if (down & TOUCH_GAME_RAIL) {
-        for (unsigned i = 0; i < count; ++i) {
-            if (choices[i] == g_touched_game) {
-                focused = i;
-                activate = true;
-                break;
-            }
-        }
-        if (!activate) return true;
-    } else if (!v->game_rail_focused && (down & HidNpadButton_AnyLeft)) {
-        v->game_rail_focused = true;
-        v->game_focus_id = v->game_filter;
-        return true;
-    } else if (!v->game_rail_focused) {
-        return false;
-    } else if (down & (HidNpadButton_AnyRight | HidNpadButton_B)) {
-        v->game_rail_focused = false;
-        return true;
-    } else if (down & HidNpadButton_AnyUp) {
-        if (focused) --focused;
-    } else if (down & HidNpadButton_AnyDown) {
-        if (focused + 1 < count) ++focused;
-    } else if (down & HidNpadButton_A) {
-        activate = true;
-    } else {
-        return false;
-    }
-
-    v->game_focus_id = choices[focused];
-    if (activate) {
-        v->game_rail_focused = false;
-        if (v->game_filter == choices[focused]) return true;
-        v->game_filter = choices[focused];
-        v->game_filter_name[0] = 0;
-        for (int i = 0; v->game_filter && i < v->count && i < LOBBY_PAGE_SIZE; ++i) {
-            if (v->groups[i].game_id != v->game_filter) continue;
-            char fallback[128];
-            snprintf(v->game_filter_name, sizeof(v->game_filter_name), "%s",
-                room_title(&v->groups[i], fallback, sizeof(fallback)));
-            break;
-        }
-        mutexLock(&g_list_lock);
-        g_node_game_filter = v->game_filter;
-        mutexUnlock(&g_list_lock);
-        v->page_index = 0;
-        v->next_page = LOBBY_PAGE_END;
-        v->selection = (LobbyRoomId){0};
-        v->sel = -1;
-        v->count = worker_available ? ListConnecting : ListUnavailable;
-        restart_group_list(0, 0, worker_available);
-    }
-    return true;
-}
-
 static bool lobby_guide_available(const View *v)
 {
     return !v->provider_panel && !v->private_panel && !v->private_room &&
@@ -1657,8 +1542,7 @@ static bool guide_input(const View *v, u64 down)
 {
     const bool in_appointments = appointments_active();
     const bool shortcut = (down & HidNpadButton_Right) &&
-        (in_appointments ? appointments_list_active() :
-         lobby_guide_available(v) && !(room_board_available(v) && v->game_rail_focused));
+        (in_appointments ? appointments_list_active() : lobby_guide_available(v));
 #if RELAY_PROFILE_FIXED
     const bool legacy_shortcut = !in_appointments && !v->provider_panel && (down & HidNpadButton_R);
 #else
@@ -1843,7 +1727,6 @@ static const char *board_game_title(const View *v, u64 game, char *buffer, size_
     }
     const char *name = game_catalog_name(&match, g_zh);
     if (name) return name;
-    if (game == v->game_filter && v->game_filter_name[0]) return v->game_filter_name;
     snprintf(buffer, size, TR("ID del juego %016lX", "Game ID %016lX"), (unsigned long)game);
     return buffer;
 }
@@ -1867,29 +1750,20 @@ static const char *board_room_region(const View *v, int index)
 
 static void draw_room_board(const View *v)
 {
-    enum { X = 40, Y = 151, RIGHT = 1240, RAIL = 368, BOTTOM = 604, HEAD = 51, ROW = 58 };
+    enum { X = 40, Y = 151, RIGHT = 1240, BOTTOM = 564, HEAD = 41, ROW = 62 };
     const bool filtered = v->game_filter != 0;
-    const CatalogMatch filter = game_catalog_identify(&g_catalog, 0, v->game_filter);
-    const bool single_game = filtered && filter.kind != CatalogShared;
-    const bool has_focused_room = v->sel >= 0 && v->sel < v->count && v->sel < LOBBY_PAGE_SIZE;
-    const unsigned name_pane = v->game_rail_focused ? 1 : single_game ? 2 : has_focused_room ? 3 : 0;
-    const u64 name_id = name_pane == 1 ? v->game_focus_id :
-                        name_pane == 2 ? v->game_filter : name_pane == 3 ? v->groups[v->sel].game_id : 0;
+    const bool selected_room = v->sel >= 0 && v->sel < v->count && v->sel < LOBBY_PAGE_SIZE;
+    const unsigned pane = filtered ? 1 : selected_room ? 2 : 0;
+    const u64 title_id = filtered ? v->game_filter : selected_room ? v->groups[v->sel].game_id : 0;
     const u64 stamp = now_ms();
-    if (name_id != g_board_title_id || name_pane != g_board_title_pane || g_zh != g_board_title_chinese) {
-        g_board_title_id = name_id;
-        g_board_title_pane = name_pane;
+    if (title_id != g_board_title_id || pane != g_board_title_pane || g_zh != g_board_title_chinese) {
+        g_board_title_id = title_id;
+        g_board_title_pane = pane;
         g_board_title_chinese = g_zh;
         g_board_title_started = stamp;
     }
     const u64 title_elapsed = stamp - g_board_title_started;
-    const char *rooms_title = ui_text("Public rooms");
-    gfx_text(X, 96, 35, C_TEXT, rooms_title);
-    if (v->status_valid && supports_reserved(v) && v->st.state != StateInRoom && v->st.state != StateConnecting) {
-        const int match_x = X + gfx_text_width(35, rooms_title) + 24;
-        const int width = gfx_button(match_x, 100, "L", TR("Buscar partida", "Quick match"));
-        add_zone(match_x - 8, 92, width + 16, 51, HidNpadButton_L);
-    }
+
     int page_right = RIGHT - 18;
     if (v->next_page != LOBBY_PAGE_END) {
         const char *next = ui_text("Next");
@@ -1905,14 +1779,8 @@ static void draw_room_board(const View *v)
         const int x = page_right - width;
         gfx_button(x, 100, "ZL", prev);
         add_zone(x - 8, 92, width + 16, 51, HidNpadButton_ZL);
+        page_right = x - 24;
     }
-
-    gfx_round_rect(X, Y, RIGHT - X, BOTTOM - Y, 12, C_LINE);
-    gfx_round_rect(X + 1, Y + 1, RIGHT - X - 2, BOTTOM - Y - 2, 11, C_PANEL);
-    gfx_rect(X + 1, Y + 14, RAIL - X - 1, BOTTOM - Y - 28, C_CARD);
-    gfx_rect(RAIL, Y + 1, 1, BOTTOM - Y - 2, C_LINE);
-    gfx_rect(X + 1, Y + HEAD, RIGHT - X - 2, 1, C_LINE);
-    gfx_text(X + 18, Y + 13, 22, C_TEXT, ui_text("Games"));
     char filter_label[96];
     const char *filter_action = ui_text("Filter rooms");
     if (v->region_filter != 255) {
@@ -1920,113 +1788,84 @@ static void draw_room_board(const View *v)
         filter_action = filter_label;
     }
     const int filter_width = gfx_button_width("ZL+ZR", filter_action);
-    const int filter_x = RIGHT - 18 - filter_width;
-    gfx_button(filter_x, Y + 11, "ZL+ZR", filter_action);
-    add_zone(filter_x - 8, Y + 1, filter_width + 16, HEAD - 1, TOUCH_NODE_FILTER);
+    const int filter_x = page_right - filter_width;
+    gfx_button(filter_x, 100, "ZL+ZR", filter_action);
+    add_zone(filter_x - 8, 92, filter_width + 16, 51, TOUCH_NODE_FILTER);
+
     char buffer[160];
-    const char *heading = board_game_title(v, v->game_filter, buffer, sizeof(buffer));
-    const int heading_width = filter_x - (RAIL + 40);
-    if (name_pane == 2)
-        g_board_title_animates |= gfx_text_marquee(RAIL + 20, Y + 10, 28, C_TEXT, heading, heading_width, title_elapsed);
+    const char *heading = filtered ? board_game_title(v, v->game_filter, buffer, sizeof(buffer)) : ui_text("Public rooms");
+    const bool quick = v->status_valid && supports_reserved(v) &&
+        v->st.state != StateInRoom && v->st.state != StateConnecting;
+    const char *quick_label = TR("Buscar partida", "Quick match");
+    const int quick_width = quick ? gfx_button_width("L", quick_label) + 24 : 0;
+    const int heading_width = filter_x - X - quick_width - 24;
+    const int heading_y = 96;
+    if (filtered)
+        g_board_title_animates |= gfx_text_marquee(X, heading_y, 31, C_TEXT, heading, heading_width, title_elapsed);
     else
-        gfx_text_fit(RAIL + 20, Y + 10, 28, C_TEXT, heading, heading_width);
-    u64 choices[LOBBY_PAGE_SIZE + 1];
-    const unsigned count = room_board_games(v, choices);
-    unsigned focused_index = 0;
-    for (unsigned i = 1; i < count; ++i)
-        if (choices[i] == v->game_focus_id) focused_index = i;
-    for (unsigned i = 0; i < count; ++i) {
-        const u64 game = choices[i];
-        const bool current = game == v->game_filter;
-        const bool focused = v->game_rail_focused && i == focused_index;
-        const int y = Y + HEAD + 10 + 53 * (int)i;
-        if (current || focused)
-            gfx_round_rect(X + 7, y, RAIL - X - 15, 49, 7, focused ? C_ACCENT : C_LINE);
-        if (focused) gfx_round_rect(X + 7, y + 7, 3, 35, 1, C_OK);
-        const GameInfo *info = NULL;
-        for (int j = 0; game && j < v->count && j < LOBBY_PAGE_SIZE; ++j) {
-            if (v->groups[j].game_id != game) continue;
-            info = display_game_icon(&v->groups[j]);
-            break;
-        }
-        if (info && info->icon.px) {
-            gfx_image(&info->icon, X + 17, y + 8, 32, 32);
-        } else {
-            gfx_round_rect(X + 17, y + 8, 32, 32, 6, C_ACCENT);
-            gfx_rect(X + 26, y + 19, 14, 10, C_OK);
-            gfx_rect(X + 29, y + 22, 8, 4, C_ACCENT);
-        }
-        const char *game_name = board_game_title(v, game, buffer, sizeof(buffer));
-        if (focused)
-            g_board_title_animates |= gfx_text_marquee(X + 62, y + 13, 20, C_TEXT, game_name, RAIL - X - 77, title_elapsed);
-        else
-            gfx_text_fit(X + 62, y + 13, 20, current ? C_OK : C_TEXT, game_name, RAIL - X - 77);
-        g_rendered_games[i] = game;
-        add_zone(X + 6, y, RAIL - X - 10, 51, TOUCH_GAME_RAIL | i);
+        gfx_text_fit(X, heading_y, 31, C_TEXT, heading, heading_width);
+    if (quick) {
+        const int title_width = gfx_text_width(31, heading);
+        const int match_x = X + (title_width < heading_width ? title_width : heading_width) + 24;
+        const int width = gfx_button(match_x, 100, "L", quick_label);
+        add_zone(match_x - 8, 92, width + 16, 51, HidNpadButton_L);
     }
-    const int table_x = RAIL + 20;
-    const int col_second = 727, col_access = 980, col_players = 1135;
-    int y = Y + HEAD + 1;
-    gfx_rect(RAIL + 1, y, RIGHT - RAIL - 2, 39, C_CARD);
-    gfx_text(table_x, y + 9, 18, C_DIM, ui_text(single_game ? "Node" : "Game"));
-    gfx_text(col_second, y + 9, 18, C_DIM, ui_text(single_game ? "Region" : "Node"));
-    gfx_text(col_access, y + 9, 18, C_DIM, ui_text("Password"));
-    gfx_text(col_players, y + 9, 18, C_DIM, ui_text("Players"));
-    y += 40;
+
+    gfx_round_rect(X, Y, RIGHT - X, BOTTOM - Y, 12, C_LINE);
+    gfx_round_rect(X + 1, Y + 1, RIGHT - X - 2, BOTTOM - Y - 2, 11, C_PANEL);
+    const int title_x = X + 20, col_node = 704, col_access = 971, col_players = 1135;
+    gfx_text(title_x, Y + 12, 18, C_DIM, ui_text("Game"));
+    gfx_text(col_node, Y + 12, 18, C_DIM, ui_text("Node"));
+    gfx_text(col_access, Y + 12, 18, C_DIM, ui_text("Password"));
+    gfx_text(col_players, Y + 12, 18, C_DIM, ui_text("Players"));
+    gfx_rect(X + 1, Y + HEAD - 1, RIGHT - X - 2, 1, C_LINE);
+    int y = Y + HEAD;
     if (v->count <= 0) {
         const char *state = v->count == ListConnecting ? TR("Conectando…", "Connecting…") :
             v->count == ListUnavailable ? TR("Lista no disponible", "List unavailable") :
             v->count < 0 ? list_error_title(v->list_status) : ui_text("No open groups yet");
-        gfx_text_fit(table_x, y + 27, 25, v->count < 0 ? C_WARN : C_TEXT, state, RIGHT - table_x - 18);
-        const char *detail = v->count == ListOffline ? list_error_hint(v->list_status, NULL) :
-            v->count == 0 && !filtered && v->region_filter == 255 ?
-                TR("Abre el juego > inalámbrico local > crear grupo.", "Game > Local Wireless > Create room.") : NULL;
-        if (detail) gfx_text_fit(table_x, y + 68, 20, C_DIM, detail, RIGHT - table_x - 18);
+        gfx_text_fit(title_x, y + 27, 25, v->count < 0 ? C_WARN : C_TEXT, state, RIGHT - title_x - 18);
+        if (v->count == ListOffline)
+            gfx_text_fit(title_x, y + 68, 20, C_DIM, list_error_hint(v->list_status, NULL), RIGHT - title_x - 18);
         return;
     }
     for (int i = 0; i < v->count && i < LOBBY_PAGE_SIZE; ++i, y += ROW) {
         const LobbyGroup *g = &v->groups[i];
         const bool own = owns_direct_room(v, &v->node_rows[i]);
         const bool selected = v->sel == i;
-        const bool focused = selected && !v->game_rail_focused;
+        const bool full = lobby_room_full(g);
         if (selected) {
-            gfx_rect(RAIL + 1, y, RIGHT - RAIL - 2, ROW, C_ACCENT);
-            if (focused) {
-                gfx_rect(RAIL + 1, y, RIGHT - RAIL - 2, 2, C_OK);
-                gfx_rect(RAIL + 1, y + ROW - 2, RIGHT - RAIL - 2, 2, C_OK);
-                gfx_rect(RAIL + 1, y, 3, ROW, C_OK);
-            }
+            gfx_rect(X + 1, y, RIGHT - X - 2, ROW, C_ACCENT);
+            gfx_rect(X + 1, y, 3, ROW, C_OK);
         } else {
-            gfx_rect(RAIL + 1, y + ROW - 1, RIGHT - RAIL - 2, 1, C_LINE);
+            gfx_rect(X + 1, y + ROW - 1, RIGHT - X - 2, 1, C_LINE);
         }
-        const char *own_title = own && !single_game ? direct_host_title(v) : NULL;
-        const char *title = single_game ? board_room_node(v, i) : own_title ? own_title : room_title(g, buffer, sizeof(buffer));
-        const int title_y = y + (own ? 7 : 17);
-        if (focused && !single_game)
-            g_board_title_animates |= gfx_text_marquee(table_x, title_y, 23, C_TEXT, title, col_second - table_x - 16, title_elapsed);
+
+        const GameInfo *info = display_game_icon(g);
+        const int game_x = title_x + (info && info->icon.px ? 46 : 0);
+        if (info && info->icon.px) gfx_image(&info->icon, title_x, y + 13, 36, 36);
+        const char *title = own ? direct_host_title(v) : NULL;
+        if (!title) title = room_title(g, buffer, sizeof(buffer));
+        if (selected)
+            g_board_title_animates |= gfx_text_marquee(game_x, y + 19, 23, C_TEXT, title, col_node - game_x - 16, title_elapsed);
         else
-            gfx_text_fit(table_x, title_y, 23, C_TEXT, title, col_second - table_x - 16);
-        if (own) gfx_text_fit(table_x, y + 33, 17, C_OK, ui_text("My room"), col_second - table_x - 16);
-        const char *second = single_game ? board_room_region(v, i) : board_room_node(v, i);
-        gfx_text_fit(col_second, y + (single_game ? 17 : 7), 20, C_DIM, second, col_access - col_second - 14);
-        if (!single_game)
-            gfx_text_fit(col_second, y + 33, 16, C_DIM, board_room_region(v, i), col_access - col_second - 14);
+            gfx_text_fit(game_x, y + 19, 23, C_TEXT, title, col_node - game_x - 16);
+
+        char node[120];
+        snprintf(node, sizeof(node), "%s · %s", board_room_node(v, i), board_room_region(v, i));
+        gfx_text_fit(col_node, y + 21, 20, C_DIM, node, col_access - col_node - 14);
         const char *access = g->room_access == RoomAccessHidden ? ui_text("Required") :
             g->room_access == RoomAccessShared ? ui_text("Shared") :
-            (v->node_rows[i].flags == NodeRoomDirect && v->node_rows[i].node_id >= 2) ? ui_text("In game") : "—";
-        gfx_text_fit(col_access, y + 18, 19, g->room_access == RoomAccessHidden ? C_WARN : C_DIM,
-                     access, col_players - col_access - 18);
-        char number[20];
-        snprintf(number, sizeof(number), "%u / %u", g->players, g->max_players);
-        const int tx = RIGHT - 18 - gfx_text_width(21, number);
-        gfx_text(tx, y + (lobby_room_full(g) ? 8 : 17), 21, C_TEXT, number);
-        if (lobby_room_full(g)) {
-            const char *full = ui_text("Full");
-            gfx_text(RIGHT - 18 - gfx_text_width(16, full), y + 34, 16, C_WARN, full);
-        }
+            (v->node_rows[i].flags == NodeRoomDirect && v->node_rows[i].node_id >= 2) ? ui_text("In game") : NULL;
+        if (access) gfx_text_fit(col_access, y + 21, 19, g->room_access == RoomAccessHidden ? C_WARN : C_DIM,
+                                 access, col_players - col_access - 18);
+        char players[20];
+        snprintf(players, sizeof(players), "%u / %u", g->players, g->max_players);
+        const int player_x = RIGHT - 18 - gfx_text_width(21, players);
+        gfx_text(player_x, y + 21, 21, full ? C_WARN : C_TEXT, players);
         g_rendered_rooms[i] = lobby_room_id_on(g, v->sources[i]);
         g_rendered_node_rows[i] = v->node_rows[i];
-        add_zone(RAIL + 1, y, RIGHT - RAIL - 2, ROW, TOUCH_CARD | (u64)i);
+        add_zone(X + 1, y, RIGHT - X - 2, ROW, TOUCH_CARD | (u64)i);
     }
 }
 
@@ -2035,22 +1874,18 @@ static void draw_board_header(const View *v)
     gfx_rect(0, 0, GFX_W, 83, C_PANEL);
     gfx_rect(0, 82, GFX_W, 1, C_LINE);
     draw_brand();
-    const char *rooms = ui_text("Lobby");
-    gfx_text(535, 30, 22, C_OK, rooms);
-    gfx_rect(535, 80, gfx_text_width(22, rooms), 2, C_OK);
-    const int width = gfx_button(639, 26, "-", ui_text("Appointments"));
-    add_zone(633, 12, width + 12, 61, HidNpadButton_Minus);
-    draw_update_action(310, 22, !can_change_provider(v));
-    gfx_button(1068, 26, "RS", g_zh ? "English" : "中文");
-    add_zone(1056, 12, 168, 61, HidNpadButton_StickR);
-    if (g_language_save_failed)
-        gfx_text_fit(1068, 58, 16, C_WARN, g_zh ? "未保存" : "Not saved", 168);
+    const char *appointments = ui_text("Appointments");
+    const int width = gfx_button_width("-", appointments);
+    const int x = GFX_W - MARGIN - width;
+    gfx_button(x, 26, "-", appointments);
+    add_zone(x - 8, 12, width + 16, 61, HidNpadButton_Minus);
+    if (update_ui_available())
+        draw_update_action(310, 22, !can_change_provider(v));
 }
 
 static void draw_password_visibility(void)
 {
     draw_brand();
-    draw_language_control();
     gfx_round_rect(MARGIN, 160, LIST_W, 340, 18, C_PANEL);
     gfx_text(MARGIN + 28, 185, 28, C_TEXT, ui_text("Who can see the password?"));
     const int x = MARGIN + 28;
@@ -2070,8 +1905,8 @@ static void draw_update_entry(bool shortcut)
 static void draw_appointments_link(const View *v)
 {
     if (!appointment_entry_available(v)) return;
-    const int width = gfx_button(SIDE_X, 92, "←", ui_text("Appointments"));
-    add_zone(SIDE_X - 8, 85, width + 16, 43, HidNpadButton_Left);
+    const int width = gfx_button(SIDE_X, 92, "-", ui_text("Appointments"));
+    add_zone(SIDE_X - 8, 85, width + 16, 43, HidNpadButton_Minus);
 }
 
 static void draw_board_route(const View *v, int right_actions)
@@ -2112,15 +1947,13 @@ static void draw(const View *v)
 
     if (g_guide_open) {
         guide_draw(g_guide_page, g_zh, g_es);
-        if (g_language_save_failed) gfx_text_fit(1056, 91, 18, C_WARN, g_zh ? "未保存" : "Not saved", 168);
         save_capture_if_requested();
         gfx_end();
         return;
     }
     if (appointments_active()) {
         appointments_draw(&g_catalog, add_zone);
-        draw_update_action(310, 22, true);
-        draw_language_control();
+        if (update_ui_available()) draw_update_action(310, 22, true);
         save_capture_if_requested();
         gfx_end();
         return;
@@ -2144,7 +1977,6 @@ static void draw(const View *v)
         else groups_column(v);
         if (!v->provider_panel && !has_pinned_direct_room(v)) side_column(v);
         draw_update_entry(!can_change_provider(v));
-        draw_language_control();
     }
     if (v->room_notice_visible)
         gfx_text_fit(MARGIN, FOOTER_Y - 36, 21, v->st.state == StateConnecting ? C_WARN : C_ERR,
@@ -2183,21 +2015,11 @@ static void draw(const View *v)
         buttons[n] = "B"; labels[n++] = TR("Salir de la sala", "Leave room");
     } else if (v->private_panel) {
         buttons[n] = "B"; labels[n++] = TR("Volver", "Back");
-    } else if (board && v->game_rail_focused) {
-        buttons[n] = "A"; labels[n++] = ui_text("Filter by game");
-        buttons[n] = "→"; labels[n++] = ui_text("Rooms");
-    } else if (v->sel >= 0) {
+    } else if (v->sel >= 0 && v->sel < v->count && v->sel < LOBBY_PAGE_SIZE &&
+               !lobby_room_full(&v->groups[v->sel]) && !owns_direct_room(v, &v->node_rows[v->sel])) {
         buttons[n] = "A"; labels[n++] = TR("Elegir sala", "Select room");
-        buttons[n] = "B"; labels[n++] = TR("Volver", "Back");
     } else if (v->appointment_game_id) {
         buttons[n] = "B"; labels[n++] = ui_text("Appointments");
-    }
-    if (board && !v->game_rail_focused) {
-        buttons[n] = "←"; labels[n++] = ui_text("Games");
-    }
-    buttons[n] = "+"; labels[n++] = TR("Volver al juego", "Back to game");
-    if (lobby_guide_available(v) && !(board && v->game_rail_focused)) {
-        buttons[n] = "→"; labels[n++] = ui_text("View guide");
     }
     if (!board && !v->provider_panel && can_change_provider(v)) {
         const char *network = provider_label(lobby_provider_index(v->config.provider));
@@ -2543,10 +2365,7 @@ static void draw_no_service(bool incompatible)
     gfx_text(MARGIN + 28, 254, 22, C_DIM, TR("y reinicia la consola.", "and restart the console."));
     gfx_rect(0, FOOTER_Y, GFX_W, 1, C_LINE);
     g_zone_count = 0;
-    int w = gfx_button(GFX_W - MARGIN - 120, FOOTER_Y + 20, "+", TR("Salir", "Exit"));
-    add_zone(GFX_W - MARGIN - 130, FOOTER_Y + 8, w + 20, 56, HidNpadButton_Plus);
     draw_update_entry(true);
-    draw_language_control();
     gfx_end();
 }
 
@@ -2559,14 +2378,9 @@ static void no_service(PadState *pad, bool incompatible)
         if (down & HidNpadButton_Plus) break;
         if (down & (HidNpadButton_StickL | TOUCH_UPDATE)) {
             if (update_ui_open(pad, NULL, NULL)) break;
-            g_zh = ui_chinese();
             draw_no_service(incompatible);
         }
         if (update_ui_changed()) draw_no_service(incompatible);
-        if (down & HidNpadButton_StickR) {
-            switch_language();
-            draw_no_service(incompatible);
-        }
         svcSleepThread(33000000ULL);
     }
 }
@@ -2607,8 +2421,7 @@ int main(int argc, char **argv)
     hidInitializeTouchScreen();
     roomcircuit_storage_init();
     select_module_storage();
-    if (roomcircuit_storage_available()) detect_language();
-    else ui_set_language(false, false);
+    detect_language();
     (void)game_catalog_open(&g_catalog, game_catalog_bin, game_catalog_bin_size);
     if (!gfx_init())
         return 1;
@@ -2698,7 +2511,6 @@ int main(int argc, char **argv)
             !v.password_edit.active && (appointments_active() || !can_change_provider(&v));
         if ((down & TOUCH_UPDATE) || update_shortcut) {
             if (update_ui_open(&pad, update_install_ready, NULL)) break;
-            g_zh = ui_chinese();
             down = 0;
             dirty = true;
             next_status = 0;
@@ -2710,14 +2522,6 @@ int main(int argc, char **argv)
                 draw_busy(TR("Leyendo nombres de juegos…", "Reading game titles…"));
             break;
         }
-        if (down & HidNpadButton_StickR) {
-            switch_language();
-            v.message[0] = '\0';
-            draw(&v);
-            dirty = false;
-            continue;
-        }
-
         u64 now = now_ms();
         const bool has_focus = appletGetFocusState() == AppletFocusState_InFocus;
         if (has_focus && (!had_focus || now - last_loop > 5000)) {
@@ -2847,14 +2651,14 @@ int main(int argc, char **argv)
             if(nodes_ui_filters(&pad,&g_catalog,&v.game_filter,&v.region_filter)){
                 mutexLock(&g_list_lock);g_node_game_filter=v.game_filter;g_node_region=v.region_filter;g_node_mask=nodes_ui_region_mask(v.region_filter);mutexUnlock(&g_list_lock);
                 v.page_index=0;v.sel=-1;v.selection=(LobbyRoomId){0};
-                v.game_rail_focused = false; v.game_filter_name[0] = 0;
                 v.count = thread_ok ? ListConnecting : ListUnavailable;
                 v.next_page = LOBBY_PAGE_END;
                 restart_group_list(0,0,thread_ok);
             }
             g_zh=ui_chinese();dirty=true;down=0;
         }
-        if ((down & (room_board_available(&v) ? HidNpadButton_Minus : HidNpadButton_Left)) && appointment_entry_available(&v)) {
+        if (((down & HidNpadButton_Minus) || (!room_board_available(&v) && (down & HidNpadButton_Left))) &&
+            appointment_entry_available(&v)) {
             appointments_open(thread_ok, false);
             draw(&v);
             last_draw = now;
@@ -2936,14 +2740,6 @@ int main(int argc, char **argv)
             dirty = false;
             continue;
         }
-        if (room_board_input(&v, card >= 0 ? down & ~(HidNpadButton_A | HidNpadButton_AnyLeft |
-            HidNpadButton_AnyRight | HidNpadButton_AnyUp | HidNpadButton_AnyDown) : down, thread_ok)) {
-            draw(&v);
-            last_draw = now;
-            dirty = false;
-            continue;
-        }
-        if (card >= 0) v.game_rail_focused = false;
         const int shown = v.count > 0 ? v.count : 0;
         const bool can_pick = v.status_valid && v.config_state == RelayConfigReady && shown > 0 && !v.private_panel && !v.private_room && !v.external_confirm &&
                               (!supports_reserved(&v) || v.match_available) && !show_matching(&v) &&
@@ -3024,7 +2820,6 @@ int main(int argc, char **argv)
                     v.host_node=selected;v.host_region=selected?RelayRegionCommunity:RelayRegionDefault;v.message[0]=0;
                     mutexLock(&g_list_lock);g_nodes_directory=true;mutexUnlock(&g_list_lock);
                     v.page_index=0;v.sel=-1;v.selection=(LobbyRoomId){0};
-                v.game_rail_focused = false; v.game_filter_name[0] = 0;
                 v.count = thread_ok ? ListConnecting : ListUnavailable;
                 v.next_page = LOBBY_PAGE_END;
                 restart_group_list(0,0,thread_ok);

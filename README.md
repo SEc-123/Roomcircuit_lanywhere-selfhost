@@ -36,7 +36,7 @@ You need a Switch running Atmosphère, an internet connection, and a game with a
 ### Host a room
 
 1. Press **Y** next to **Hosting line** at the bottom of the lobby. Choose a node and press **A**. In the picker, press **R** to filter by region, **X** to retest, or **L** to test with friends.
-2. Press **+** to return to the game and create a room in **Local Wireless**.
+2. Create a room in **Local Wireless** from the game.
 3. Set the room password in the game, then reopen RoomCircuit. Press **Y** next to **My room** and choose **Share in lobby** or **Keep password hidden**.
 
 You can also choose the hosting node from the RoomCircuit overlay in Ultrahand. Leave the current local-wireless session before switching nodes. The overlay follows Ultrahand's theme, side and sound settings. It needs Ultrahand and its loader; the Album app works separately.

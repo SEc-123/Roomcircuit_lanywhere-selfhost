@@ -2,7 +2,6 @@
 #include "update_core.h"
 #include "update_network.h"
 #include "app_socket.h"
-#include "ui_locale.h"
 #include "ui_text.h"
 #include "gfx.h"
 #include "relay_config.h"
@@ -45,7 +44,6 @@ static Mutex lock;
 static UpdateView state;
 static Thread worker;
 static bool thread_created, socket_ready, canonical_path, initialized;
-static bool language_save_failed;
 static atomic_bool rollback_pending, must_exit;
 static atomic_bool worker_done, cancel_requested;
 static bool (*installation_allowed)(void *);
@@ -367,7 +365,6 @@ static u64 modal_touch(void)
     if (held) return 0;
     held = true;
     const int x = touch.touches[0].x, y = touch.touches[0].y;
-    if (x >= 1056 && y >= 40 && y < 84) return HidNpadButton_StickR;
     if (y >= 650 && x < 600) return HidNpadButton_A;
     if (y >= 650 && x >= 800) return HidNpadButton_B;
     return 0;
@@ -430,8 +427,6 @@ static void draw_update(const UpdateView *view)
     gfx_begin();
     gfx_clear_gradient(BackgroundTop, BackgroundBottom);
     gfx_text(56, 40, 36, Text, "RoomCircuit");
-    gfx_button(1068, 47, "RS", ui_chinese() ? "English" : "中文");
-    if (language_save_failed) gfx_text(1068, 92, 18, Error, ui_text("Not saved"));
     gfx_text(56, 142, 34, Text, ui_text(screen_title(view->screen)));
     char version[96];
     if (view->screen == UpdateOffered) {
@@ -466,9 +461,9 @@ static void draw_update(const UpdateView *view)
     else if (view->screen == UpdateCurrent) gfx_button(56, 670, "A", ui_text(view->manifest.version[0] ? "Repair installation" : "Check updates"));
     else if (view->screen == UpdateRestart && rollback_pending) gfx_button(56, 670, "A", ui_text("Repair installation"));
     else if (view->screen == UpdateFailed) gfx_button(56, 670, "A", ui_text("Try again"));
-    if (view->screen != UpdateInstalling)
-        gfx_button(960, 670, "B", ui_text(view->screen == UpdateOffered ? "Later" : view->screen == UpdateDownloading ? "Cancel" :
-            view->screen == UpdateRestart || view->screen == UpdateRecoveryBlocked ? "Exit" : "Back"));
+    if (view->screen != UpdateInstalling && view->screen != UpdateRestart && view->screen != UpdateRecoveryBlocked)
+        gfx_button(960, 670, "B", ui_text(view->screen == UpdateOffered ? "Later" :
+            view->screen == UpdateDownloading ? "Cancel" : "Back"));
     gfx_end();
 }
 
@@ -487,15 +482,6 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
         padUpdate(pad);
         const u64 down = padGetButtonsDown(pad) | modal_touch();
         UpdateView view = snapshot();
-        if (down & HidNpadButton_StickR) {
-            const bool chinese = !ui_chinese();
-            ui_set_language(chinese, false);
-            if (roomcircuit_storage_available()) {
-                (void)mkdir(RELAY_CONFIG_DIR, 0777);
-                language_save_failed = !ui_locale_save(UI_LOCALE_PATH, chinese);
-            } else language_save_failed = true;
-            dirty = true;
-        }
         if ((down & (HidNpadButton_B | HidNpadButton_Plus)) && view.screen != UpdateInstalling) {
             if (view.screen == UpdateDownloading || view.screen == UpdateChecking) {
                 mutexLock(&lock);
