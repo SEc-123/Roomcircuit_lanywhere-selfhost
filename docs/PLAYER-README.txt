@@ -54,7 +54,9 @@ region 是可选的地区筛选标签，可填 unknown、asia、europe、america
 
 保存后重新打开节点页。选中节点按 X 测试，按 A 选择。两名玩家使用未收录节点时，双方都需配置并选择相同的 host 和 port，再在游戏内搜索本地无线房间。只有管理员将节点登记到 RoomCircuit 共享目录后，该节点的房间才会出现在统一大厅。
 
-自己运营新节点才需要额外服务器。可使用公网可达的 VPS 或主机，安装兼容 LAN Play 的服务端软件，并开放对应 UDP 端口。RoomCircuit 不会代为安装或启动这个服务端。若在家中运行，还需要路由器和网络允许外部 UDP 连接。
+自己运营新节点才需要额外服务器。可使用公网可达的 VPS 和 Docker。兼容的标准服务端是 https://github.com/spacemeowx2/switch-lan-play ，RoomCircuit 已实现它使用的 LAN Play 协议。上游 Docker 示例：
+docker run -d -p 11451:11451/udp -p 11451:11451/tcp spacemeowx2/switch-lan-play
+在 VPS 和云防火墙开放 UDP 11451；TCP 11451 只用于可选状态监控。再把 VPS 公网 IP 或域名和端口 11451 填入 nodes.ini。上游也提供 Node.js 安装及自定义端口说明。RoomCircuit 已包含 Switch 客户端，不需要运行上游的桌面 lan-play 客户端。没有专用服务器硬件要求；家用主机还需网络支持公网入站 UDP 和路由器端口转发。RoomCircuit 不会替你安装或启动这个服务端。
 
 此文件只配置 Atmosphère 上的 RoomCircuit。Android、桌面模拟器和其他移动端需按各自客户端设置，且需兼容的客户端构建；见 Crossplay preview。
 
@@ -121,7 +123,9 @@ These example hostnames are placeholders and cannot be used to connect. Up to se
 
 Save the file and reopen Nodes. Select an entry and press X to test it, then press A to choose it. For a node that is not in RoomCircuit's shared directory, both players must configure and select the same host and port, then search in the game's Local Wireless mode. Only an administrator-registered node can publish its rooms in the unified lobby.
 
-You need a separate server only to operate a new node. Use an internet-reachable VPS or host, install LAN Play-compatible server software, and allow its UDP port through the host firewall and network. RoomCircuit does not install or start that server. A home-hosted server also needs a public inbound route and correct router/firewall settings.
+You need a separate server only to operate a new node. The standard compatible server is [spacemeowx2/switch-lan-play](https://github.com/spacemeowx2/switch-lan-play#server). RoomCircuit implements its LAN Play protocol. On an internet-reachable VPS with Docker, the upstream example is:
+docker run -d -p 11451:11451/udp -p 11451:11451/tcp spacemeowx2/switch-lan-play
+Allow inbound UDP 11451 in the VPS and cloud firewall. TCP 11451 is only for the optional status monitor. Put the VPS's public IPv4 or hostname and port 11451 in nodes.ini. The upstream README also covers Node.js installation and custom ports. RoomCircuit includes the Switch client, so you do not need the upstream desktop lan-play client. No special physical hardware is required; a home server needs a public inbound route and router/firewall rules. RoomCircuit does not install or launch the server for you.
 
 This file configures RoomCircuit on an Atmosphère Switch only. Android, desktop emulator and other mobile clients use their own network settings and need a compatible client build. See the Crossplay preview for the currently documented client-specific setup.
 

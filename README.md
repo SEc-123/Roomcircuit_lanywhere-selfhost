@@ -80,7 +80,13 @@ A custom node that is not published in RoomCircuit's shared directory is local t
 
 #### Running your own node
 
-You only need a server if you want to operate a new node. Use a public VPS or another internet-reachable host, install LAN Play-compatible server software, and allow its UDP listening port through the host firewall and network. No special physical server is required. A home computer also needs a public inbound route and the correct router/firewall configuration. RoomCircuit does not install or launch this server for you.
+You only need a server if you want to operate a new node. The standard LAN Play server is available in [spacemeowx2/switch-lan-play](https://github.com/spacemeowx2/switch-lan-play#server). RoomCircuit implements its LAN Play wire protocol. For the server, use a public VPS or another internet-reachable host with Docker, then run the upstream project's example:
+
+```sh
+docker run -d -p 11451:11451/udp -p 11451:11451/tcp spacemeowx2/switch-lan-play
+```
+
+Allow inbound UDP **11451** in the VPS firewall and any cloud firewall. TCP 11451 is the optional status monitor. Put the VPS's public IPv4 or hostname and port **11451** in `nodes.ini`. The upstream project also documents a Node.js server install and custom ports. RoomCircuit supplies the Switch client; you do not need to run the upstream desktop `lan-play` client for this setup. No special physical hardware is required, but a home server needs a public inbound route and router/firewall configuration. RoomCircuit does not install or launch the server for you.
 
 `nodes.ini` configures the Switch RoomCircuit client only. Android, desktop and other mobile clients use their own network settings and may require a compatible client build. See the [crossplay preview](docs/CROSSPLAY.md) for the client-specific setup currently documented; adding a Switch node entry does not configure those clients.
 
