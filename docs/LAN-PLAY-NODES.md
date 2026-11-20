@@ -11,7 +11,7 @@ If you already have a compatible LAN Play server or its operator gave you an end
 
 ## 1. Start the LAN Play server
 
-Use a Linux x86-64 VPS or host with inbound UDP connectivity for the supplied Docker setups. Both methods use the same verified Switch LAN Play image. Keep the relay in its default mode with login disabled. Choose one deployment method for this node. [Upstream server documentation](https://github.com/spacemeowx2/switch-lan-play#server) · [Docker image platforms](https://hub.docker.com/r/spacemeowx2/switch-lan-play/tags)
+Use a Linux x86-64 VPS or host with inbound UDP connectivity for the supplied Docker setups. Both methods run the upstream Switch LAN Play relay. Use the default relay mode with login disabled. Choose one deployment method for this node. [Upstream server documentation](https://github.com/spacemeowx2/switch-lan-play#server) · [Docker image platforms](https://hub.docker.com/r/spacemeowx2/switch-lan-play/tags)
 
 ### Python installer
 
@@ -74,8 +74,6 @@ The file configures the RoomCircuit Switch client. Emulator and mobile clients u
 1. Open RoomCircuit from **Album** and press **Y** in the lobby to open **Nodes**. Find the display name you set. Press **X** to refresh measurements, wait for the node to respond, then select it with **A**. The lobby's **Hosting line** should show the selected node.
 2. On the host's Switch, press **+** to close RoomCircuit, then return to the game and create an open room in **Local Wireless**. Use the same game and update on both consoles.
 3. A friend on another network adds and selects the same hostname and UDP port, then searches for the room in the game's **Local Wireless** menu. Confirm they can join and play. If the node test fails, verify the public IPv4 address, port and firewall before retrying from the Switch.
-
-The verification started the relay using both Docker Compose and the Python installer on Linux, read its status and checked the generated Switch configuration. With RoomCircuit 0.9.2's native transport and the supplied image, protocol test clients hosted and joined in both directions, exchanged UDP and TCP gameplay data, and joined the exact room returned by the main relay's shared directory. Use the Switch steps above to verify your own endpoint and game. [Deployment and compatibility run](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/actions/runs/44778884954)
 
 ## 4. Request a public listing
 
