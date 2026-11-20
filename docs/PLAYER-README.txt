@@ -31,41 +31,8 @@ RoomCircuit
 • 兼容范围。标准和 fork 协议不能混房；首个被游戏接受的访客确定协议，重建房间可更换。建议同版 RoomCircuit、同版游戏。节点可达不代表每款游戏已实测，详见项目的节点说明与验证记录。
 
 自定义 LAN Play 节点（Switch）
-LAN Play 节点是可从公网访问的服务端，为异地玩家转发本地无线游戏数据。使用 RoomCircuit 预置节点不需要额外电脑、服务器软件或服务器硬件；使用别人运营的节点，也只需对方提供地址和端口。
-RoomCircuit「主服务器」不是 LAN Play 节点，不要把 config.ini 中的主服务器地址填进 nodes.ini。
-
-在 SD 卡的 config/RoomCircuit/nodes.ini 添加节点。每个 [node] 区块代表一个地址，可以重复多个：
-[node]
-name=Amsterdam
-host=eu-lanplay.example.net
-port=11451
-region=europe
-
-[node]
-name=备用节点
-host=backup.example.net
-port=11451
-region=unknown
-
-[node] 开始一条节点记录，添加第二条时再次写 [node]。
-name、host、port 为必填：name 是节点列表名称，如 Amsterdam；host 是运营者提供的公网 IPv4 或域名，如 eu-lanplay.example.net；port 是服务器 UDP 监听端口，请使用运营者给出的值（11451 仅为示例）。
-region 是可选的地区筛选标签，可填 unknown、asia、europe、americas、oceania 或 africa。它只用于分类，不会改变线路或保证延迟。省略时按 unknown 处理。
-上面的域名均为示例，不能直接连接。最多可配置 7 个本机节点。
-
-保存后重新打开节点页。选中节点按 X 测试，按 A 选择。两名玩家使用未收录节点时，双方都需配置并选择相同的 host 和 port，再在游戏内搜索本地无线房间。只有管理员将节点登记到 RoomCircuit 共享目录后，该节点的房间才会出现在统一大厅。
-
-自己运营新节点才需要额外服务器。标准服务端是 https://github.com/spacemeowx2/switch-lan-play ，RoomCircuit 已实现它使用的 LAN Play 协议。
-Debian/Ubuntu VPS 一键部署：下载 tools/setup_lanplay_node.py，然后运行：
-curl -fsSLO https://raw.githubusercontent.com/SEc-123/Roomcircuit_lanywhere-selfhost/main/tools/setup_lanplay_node.py
-sudo python3 setup_lanplay_node.py
-脚本会安装 Docker（如需要）、启动服务、询问节点公网地址、名称和地区，并输出及保存 nodes.ini 配置。将配置复制到每台 Switch 的 config/RoomCircuit/nodes.ini。若 UFW 已启用，脚本会放行 UDP 11451；云厂商防火墙仍需手动开放该端口。
-在 VPS 运行 sudo python3 setup_lanplay_node.py --status 可查看连接客户端数量。状态接口只返回数量，且仅限 VPS 本机访问。
-已安装 Docker Compose 时，也可使用 https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/deploy/lanplay-node/compose.yaml 并运行 docker compose up -d。在 VPS 上运行 curl http://127.0.0.1:11451/info 可查看连接客户端数。选择脚本或 Compose 其中一种部署方式。
-RoomCircuit 的节点配置不支持账号密码，因此能访问 UDP 端口的设备都可以使用该节点。RoomCircuit 已包含 Switch 客户端，无需在电脑上运行上游 lan-play 客户端。家用主机还需公网入站线路和路由器端口配置。
-
-此文件只配置 Atmosphère 上的 RoomCircuit。Android、桌面模拟器和其他移动端需按各自客户端设置，且需兼容的客户端构建；见 Crossplay preview。
-
-若升级时新旧 nodes.ini 都有修改且内容不一致，请备份两份，将需要的节点保留在 config/RoomCircuit/nodes.ini，移走旧文件后重新打开节点页。
+自建、配置及申请公开收录请参照同一份指南。
+https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/LAN-PLAY-NODES.md
 
 约局与双人配对
 • 在大厅按 − 或点「约局」安排游戏。约局页按 A 参加或退出、L 发起、Y 准备、X 找房，按 B 回大厅。
@@ -105,41 +72,8 @@ Host or join
 • Compatibility. Standard and fork clients cannot mix in one room. The first accepted guest fixes the protocol until the host recreates the room. Use matching RoomCircuit and game versions. Node reachability does not prove every game works; see Nodes and compatibility and Validation.
 
 Custom LAN Play nodes (Switch)
-A LAN Play node is an internet-reachable service that relays Local Wireless game traffic between players. RoomCircuit's built-in nodes need no extra computer, server software or server hardware. To use an existing community node, get its address and port from its operator.
-RoomCircuit's Main server is not a LAN Play node. Do not copy its address from config.ini into nodes.ini.
-
-Add entries to config/RoomCircuit/nodes.ini on the SD card. Each [node] block is one endpoint; repeat the block for another node:
-[node]
-name=Amsterdam
-host=eu-lanplay.example.net
-port=11451
-region=europe
-
-[node]
-name=Backup
-host=backup.example.net
-port=11451
-region=unknown
-
-[node] starts an entry. Repeat it for each endpoint.
-name, host and port are required. name labels the entry, such as Amsterdam. host is the operator's public IPv4 address or hostname. port is the server's UDP listening port. 11451 is an example; use the port the operator provides.
-region is an optional list filter label: unknown, asia, europe, americas, oceania or africa. It only categorizes the entry; it does not change routing or promise lower latency. If omitted, it is unknown.
-These example hostnames are placeholders and cannot be used to connect. Up to seven local nodes are supported.
-
-Save the file and reopen Nodes. Select an entry and press X to test it, then press A to choose it. For a node that is not in RoomCircuit's shared directory, both players must configure and select the same host and port, then search in the game's Local Wireless mode. Only an administrator-registered node can publish its rooms in the unified lobby.
-
-You need a separate server only to operate a new node. The standard compatible server is [spacemeowx2/switch-lan-play](https://github.com/spacemeowx2/switch-lan-play#server). RoomCircuit implements its LAN Play protocol.
-One-click setup on a Debian or Ubuntu VPS. Download tools/setup_lanplay_node.py, then run:
-curl -fsSLO https://raw.githubusercontent.com/SEc-123/Roomcircuit_lanywhere-selfhost/main/tools/setup_lanplay_node.py
-sudo python3 setup_lanplay_node.py
-The script installs Docker if needed, starts the server, prompts for the public node address, name and region, and prints and saves a nodes.ini entry. Copy that entry to config/RoomCircuit/nodes.ini on each Switch. If UFW is active, it allows inbound UDP 11451. Open UDP 11451 in the VPS provider's cloud firewall too.
-Run sudo python3 setup_lanplay_node.py --status on the VPS to see the connected-client count. The monitor returns a count only and is bound to localhost.
-If Docker Compose is already installed, you can use https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/deploy/lanplay-node/compose.yaml and run docker compose up -d in its folder. On the VPS, run curl http://127.0.0.1:11451/info to see connected clients. Choose the Python installer or Compose for this node.
-RoomCircuit node settings have no username or password fields, so any device that can reach the UDP port can use the node. RoomCircuit includes the Switch client, so you do not need the upstream desktop lan-play client. A home server needs a public inbound route and router/firewall rules.
-
-This file configures RoomCircuit on an Atmosphère Switch only. Android, desktop emulator and other mobile clients use their own network settings and need a compatible client build. See the Crossplay preview for the currently documented client-specific setup.
-
-If both old and new nodes.ini files changed differently, back up both, keep the intended entries in config/RoomCircuit/nodes.ini, move the old file aside and reopen Nodes.
+Use the LAN Play node guide to deploy, configure or request a public listing.
+https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/LAN-PLAY-NODES.md
 
 Appointments and pairing
 • Press − or tap Appointments in the lobby to schedule a game. Press A to join or leave, L to create, Y for Ready, X to find rooms or B to return.

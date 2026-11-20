@@ -40,64 +40,10 @@ If the game uses link codes instead of a room list, choose the same node, enter 
 
 ### LAN Play nodes
 
-A LAN Play node is a public service that relays Local Wireless traffic between players over the internet. Its hostname and port identify an existing service. A `nodes.ini` entry does not create or install a server.
+<a name="running-your-own-node"></a>
+<a name="one-click-self-host-setup"></a>
 
-**Using RoomCircuit's built-in nodes needs no extra computer, server software or server hardware.** Install RoomCircuit on the Switch, connect it to the internet, and select a node in **Nodes**. To use another operator's node, ask that operator for its public hostname or IPv4 address, UDP port and region.
-
-The RoomCircuit **Main server** is not a LAN Play node. Do not copy the Main server address from `config.ini` into `nodes.ini`.
-
-#### Add a node on Switch
-
-On the SD card, create or edit `config/RoomCircuit/nodes.ini`. Add one `[node]` block for each endpoint. This example uses reserved example hostnames and will not connect until you replace them with real values:
-
-```ini
-[node]
-name=Amsterdam
-host=eu-lanplay.example.net
-port=11451
-region=europe
-
-[node]
-name=North America test
-host=us-lanplay.example.net
-port=11451
-region=americas
-```
-
-| Entry | What it controls | Example |
-| --- | --- | --- |
-| `[node]` | Starts one node entry. Repeat it for every endpoint. | A second block starts another node. |
-| `name` | Required. The label shown in the node list. It can describe the operator or location. | `name=Amsterdam` |
-| `host` | Required. The server's public IPv4 address or DNS hostname, supplied by its operator. | `host=eu-lanplay.example.net` |
-| `port` | Required. The node's UDP listening port. Use the exact port supplied by the operator. | `port=11451` |
-| `region` | Optional region label used by the list filter. It does not move the server or guarantee lower latency. Omit it to use `unknown`. | `region=europe` |
-
-Allowed regions are `unknown`, `asia`, `europe`, `americas`, `oceania` and `africa`. Up to seven local nodes are supported.
-
-After saving the file, reopen **Nodes**. Select the endpoint and press **X** to test it. Choose it with **A**, check **Hosting line** in the lobby, then return to the game and create or search for a room in **Local Wireless**.
-
-A custom node that is not published in RoomCircuit's shared directory is local to each player. For that node, everyone must configure and select the same host and port, then find the room from the game's Local Wireless search. To show its rooms in the shared lobby, the node operator must ask a RoomCircuit administrator to register that endpoint. See the [administrator setup](deploy/CUSTOM-NODES.md).
-
-#### One-click self-host setup
-
-The standard LAN Play server is [spacemeowx2/switch-lan-play](https://github.com/spacemeowx2/switch-lan-play#server). RoomCircuit implements its LAN Play wire protocol. On a Debian or Ubuntu VPS, download the [RoomCircuit setup script](tools/setup_lanplay_node.py) and run:
-
-```sh
-curl -fsSLO https://raw.githubusercontent.com/SEc-123/Roomcircuit_lanywhere-selfhost/main/tools/setup_lanplay_node.py
-sudo python3 setup_lanplay_node.py
-```
-
-The script installs Docker if needed, starts the server, asks for the public node address, display name and region, then prints and saves a `nodes.ini` entry. Copy that entry into `config/RoomCircuit/nodes.ini` on each Switch. It adds an inbound UDP rule if UFW is already active. Open UDP **11451** in the VPS provider's cloud firewall too.
-
-If Docker Compose is already installed, you can instead use [compose.yaml](deploy/lanplay-node/compose.yaml) and run `docker compose up -d` in its folder. On the VPS, `curl http://127.0.0.1:11451/info` shows the connected-client count. Choose either the Python installer or Compose for this node.
-
-To see how many LAN Play clients are connected, SSH into the VPS and run `sudo python3 setup_lanplay_node.py --status`. This monitor reports a count only and is bound to localhost. The server has no per-user authentication in the RoomCircuit node settings, so anyone who can reach the UDP port can use it.
-
-RoomCircuit supplies the Switch client; players do not need the upstream desktop `lan-play` client. No special physical hardware is required. A home server needs a public inbound route and router/firewall configuration. The script does not change cloud-provider firewall settings.
-
-`nodes.ini` configures the Switch RoomCircuit client only. Android, desktop and other mobile clients use their own network settings and may require a compatible client build. See the [crossplay preview](docs/CROSSPLAY.md) for the client-specific setup currently documented; adding a Switch node entry does not configure those clients.
-
-If the old and new `nodes.ini` files changed differently during an upgrade, back up both, keep the intended entries in `config/RoomCircuit/nodes.ini`, move the old file aside, and reopen **Nodes**.
+To run a LAN Play node and offer it as a shared hosting option, follow the [LAN Play node guide](docs/LAN-PLAY-NODES.md).
 
 ### Schedule a session
 
