@@ -17,7 +17,7 @@ RoomCircuit
 若降级后提示旧设置已变更，请备份并对比 switch/RoomCircuit/data/ 和 config/RoomCircuit/data/，再决定保留哪些数据。
 
 在线更新
-标题旁显示当前版本。有新版时，顶部高亮提示。按 LS 可手动检查更新。关闭游戏后安装，完成后重启虚拟系统。
+点「更新」查看当前版本、新版本和更新内容。关闭游戏后按 A 安装，完成后重启虚拟系统。
 安装中断时，从自制软件菜单打开 RoomCircuit Recovery。
 
 建房与加入
@@ -30,16 +30,9 @@ RoomCircuit
 • 密码与提醒。在游戏内设密码。自己的房间显示「我的房间」后，可在大厅分享或隐藏游戏密码。第三方直连时仍在游戏里验密码。约局提醒使用主服务器。
 • 兼容范围。标准和 fork 协议不能混房；首个被游戏接受的访客确定协议，重建房间可更换。建议同版 RoomCircuit、同版游戏。节点可达不代表每款游戏已实测，详见项目的节点说明与验证记录。
 
-自定义节点
-在 config/RoomCircuit/nodes.ini 中按下面格式添加节点，保存后重新打开节点页：
-[node]
-name=Russia
-host=lanplay.example.org
-port=11451
-region=europe
-name、host、port 为必填。地址为示例，请替换为服务器运营者提供的公网域名或 IPv4 和 UDP 端口。最多 7 个本机节点；region 可省略，或填写 unknown、asia、europe、americas、oceania、africa。
-管理员收录的节点及房间会出现在统一大厅。本机未收录节点需双方都配置相同地址并选择，再到游戏内搜索。
-新旧 nodes.ini 同时修改且内容不一致时，请先备份两份，再将需要的内容保留在 config/RoomCircuit/nodes.ini，移走旧版文件并重新打开节点页。
+自定义 LAN Play 节点（Switch）
+自建、配置及申请公开收录请参照同一份指南。
+https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/LAN-PLAY-NODES.md
 
 约局与双人配对
 • 在大厅按 − 或点「约局」安排游戏。约局页按 A 参加或退出、L 发起、Y 准备、X 找房，按 B 回大厅。
@@ -65,7 +58,7 @@ If the module cannot load after migration, keep and back up the old settings fol
 If older settings changed after a downgrade, back up and compare switch/RoomCircuit/data/ and config/RoomCircuit/data/ before choosing which data to keep.
 
 Online updates
-The title shows the installed version. The update button lights up when a new version is available. Press LS to check manually. Close the game before installing, then restart Atmosphère.
+Open Update to see both versions and what's new. Close the game and press A to install, then restart Atmosphère.
 If installation is interrupted, open RoomCircuit Recovery from the Homebrew Menu.
 
 Host or join
@@ -78,16 +71,9 @@ Host or join
 • Passwords and alerts. Set the password in the game. Once your room appears as My room, you can share or hide its password in the lobby. Games check passwords on direct nodes. Appointment alerts use Main server.
 • Compatibility. Standard and fork clients cannot mix in one room. The first accepted guest fixes the protocol until the host recreates the room. Use matching RoomCircuit and game versions. Node reachability does not prove every game works; see Nodes and compatibility and Validation.
 
-Custom nodes
-Add entries to config/RoomCircuit/nodes.ini. Reopen Nodes to load changes:
-[node]
-name=Russia
-host=lanplay.example.org
-port=11451
-region=europe
-`name`, `host` and `port` are required. Replace the example with the operator’s public hostname or IPv4 and UDP port. Up to seven local nodes are supported. Region is optional: unknown, asia, europe, americas, oceania or africa.
-Administrator-published nodes and rooms appear in the shared lobby. For unregistered local nodes, both players configure and select the same endpoint, then search in the game.
-If both old and new nodes.ini files changed differently, back up both, keep the intended content in config/RoomCircuit/nodes.ini, move the old file aside and reopen Nodes.
+Custom LAN Play nodes (Switch)
+Use the LAN Play node guide to deploy, configure or request a public listing.
+https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/LAN-PLAY-NODES.md
 
 Appointments and pairing
 • Press − or tap Appointments in the lobby to schedule a game. Press A to join or leave, L to create, Y for Ready, X to find rooms or B to return.

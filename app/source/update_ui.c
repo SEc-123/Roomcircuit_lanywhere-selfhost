@@ -387,6 +387,44 @@ static const char *screen_title(UpdateScreen screen)
     }
 }
 
+static void draw_release_note(const UpdateManifest *manifest)
+{
+    const char *preferred = ui_chinese() ? manifest->notes_zh : manifest->notes_en;
+    const char *fallback = ui_chinese() ? manifest->notes_en : manifest->notes_zh;
+    preferred += strspn(preferred, " \n");
+    fallback += strspn(fallback, " \n");
+    const char *note = *preferred ? preferred : *fallback ? fallback : ui_text("No release notes provided.");
+    char lines[sizeof(manifest->notes_en)];
+    snprintf(lines, sizeof(lines), "%s", note);
+    for (char *p = lines; *p; p++)
+        if (*p == '\n') *p = ' ';
+
+    enum { Left = 56, Top = 356, Width = 1168, FontSize = 27, LineHeight = 34, LineCount = 4 };
+    const char *remainder = lines;
+    for (int row = 0; row < LineCount && *remainder; row++) {
+        const int y = Top + row * LineHeight;
+        if (gfx_text_width(FontSize, remainder) <= Width || row == LineCount - 1) {
+            gfx_text_fit(Left, y, FontSize, Text, remainder, Width);
+            break;
+        }
+        char line[sizeof(lines)];
+        size_t length = strlen(remainder);
+        memcpy(line, remainder, length + 1);
+        do {
+            do { length--; } while (length && ((unsigned char)line[length] & 0xC0) == 0x80);
+            line[length] = '\0';
+        } while (gfx_text_width(FontSize, line) > Width);
+        const char *space = strrchr(line, ' ');
+        if (remainder[length] != ' ' && space && (size_t)(space - line) >= length / 2) {
+            length = (size_t)(space - line);
+            line[length] = '\0';
+        }
+        gfx_text(Left, y, FontSize, Text, line);
+        remainder += length;
+        remainder += strspn(remainder, " ");
+    }
+}
+
 static void draw_update(const UpdateView *view)
 {
     gfx_begin();
@@ -396,15 +434,22 @@ static void draw_update(const UpdateView *view)
     if (language_save_failed) gfx_text(1068, 92, 18, Error, ui_text("Not saved"));
     gfx_text(56, 142, 34, Text, ui_text(screen_title(view->screen)));
     char version[96];
-    snprintf(version, sizeof(version), "%s %s", ui_text("Installed"), LANYWHERE_APP_VERSION);
-    gfx_text(56, 204, 24, Dim, version);
-    if (view->manifest.version[0] && strcmp(view->manifest.version, LANYWHERE_APP_VERSION) != 0) {
-        snprintf(version, sizeof(version), "%s %s", ui_text("Available"), view->manifest.version);
-        gfx_text(56, 244, 24, Dim, version);
-    }
     if (view->screen == UpdateOffered) {
-        gfx_text_fit(56, 314, 25, Text, ui_chinese() ? view->manifest.notes_zh : view->manifest.notes_en, 1168);
-        gfx_text(56, 410, 23, Dim, ui_text("Close the game before installing."));
+        gfx_text(56, 204, 23, Dim, ui_text("Current version"));
+        gfx_text(56, 238, 38, Text, LANYWHERE_APP_VERSION);
+        gfx_text(614, 204, 23, Dim, ui_text("New version"));
+        gfx_text(614, 238, 38, Text, view->manifest.version);
+        gfx_rect(56, 299, 1168, 1, RGBA(0x36, 0x36, 0x36, 0xFF));
+        gfx_text(56, 324, 23, Dim, ui_text("What's new"));
+        draw_release_note(&view->manifest);
+        gfx_text(56, 527, 23, Dim, ui_text("Close the game before installing."));
+    } else {
+        snprintf(version, sizeof(version), "%s  %s", ui_text("Current version"), LANYWHERE_APP_VERSION);
+        gfx_text(56, 204, 24, Dim, version);
+        if (view->manifest.version[0] && strcmp(view->manifest.version, LANYWHERE_APP_VERSION) != 0) {
+            snprintf(version, sizeof(version), "%s  %s", ui_text("New version"), view->manifest.version);
+            gfx_text(56, 244, 24, Dim, version);
+        }
     }
     if (view->screen == UpdateDownloading || view->screen == UpdateInstalling) {
         const unsigned percentage = view->total ? (unsigned)((uint64_t)view->completed * 100 / view->total) : 0;
@@ -415,14 +460,14 @@ static void draw_update(const UpdateView *view)
         if (view->screen == UpdateInstalling) gfx_text(56, 440, 23, Dim, ui_text("Keep the console on until installation finishes."));
     }
     if (view->screen == UpdateRestart) gfx_text(56, 330, 26, Text, ui_text("Exit and restart into your virtual system."));
-    if (view->error) gfx_text_fit(56, 500, 23, Error, ui_text(view->error), 1168);
+    if (view->error) gfx_text_fit(56, view->screen == UpdateOffered ? 569 : 500, 23, Error, ui_text(view->error), 1168);
     gfx_rect(0, 648, 1280, 1, RGBA(0x36, 0x36, 0x36, 0xFF));
     if (view->screen == UpdateOffered) gfx_button(56, 670, "A", ui_text("Download and install"));
     else if (view->screen == UpdateCurrent) gfx_button(56, 670, "A", ui_text(view->manifest.version[0] ? "Repair installation" : "Check updates"));
     else if (view->screen == UpdateRestart && rollback_pending) gfx_button(56, 670, "A", ui_text("Repair installation"));
     else if (view->screen == UpdateFailed) gfx_button(56, 670, "A", ui_text("Try again"));
     if (view->screen != UpdateInstalling)
-        gfx_button(960, 670, "B", ui_text(view->screen == UpdateDownloading ? "Cancel" :
+        gfx_button(960, 670, "B", ui_text(view->screen == UpdateOffered ? "Later" : view->screen == UpdateDownloading ? "Cancel" :
             view->screen == UpdateRestart || view->screen == UpdateRecoveryBlocked ? "Exit" : "Back"));
     gfx_end();
 }
@@ -436,6 +481,7 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
     if (!thread_created && (initial == UpdateCurrent || initial == UpdateFailed || initial == UpdateChecking))
         start_worker(false);
     bool dirty = true;
+    bool offer_shown = false;
     while (appletMainLoop()) {
         collect_worker();
         padUpdate(pad);
@@ -470,7 +516,7 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
                 } else set_state(UpdateRecoveryBlocked, "Update recovery needs the complete SD package.");
             } else if (view.screen == UpdateFailed || (view.screen == UpdateCurrent && !view.manifest.version[0])) {
                 start_worker(false);
-            } else if (view.screen == UpdateOffered || view.screen == UpdateCurrent) {
+            } else if (view.screen == UpdateCurrent || (view.screen == UpdateOffered && offer_shown)) {
                 start_worker(true);
             }
             dirty = true;
@@ -478,6 +524,7 @@ bool update_ui_open(PadState *pad, bool (*can_install)(void *), void *context)
         if (dirty || update_ui_changed()) {
             const UpdateView current = snapshot();
             draw_update(&current);
+            offer_shown = current.screen == UpdateOffered;
             dirty = false;
         }
         svcSleepThread(33000000ULL);
