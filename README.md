@@ -78,15 +78,20 @@ After saving the file, reopen **Nodes**. Select the endpoint and press **X** to 
 
 A custom node that is not published in RoomCircuit's shared directory is local to each player. For that node, everyone must configure and select the same host and port, then find the room from the game's Local Wireless search. To show its rooms in the shared lobby, the node operator must ask a RoomCircuit administrator to register that endpoint. See the [administrator setup](deploy/CUSTOM-NODES.md).
 
-#### Running your own node
+#### One-click self-host setup
 
-You only need a server if you want to operate a new node. The standard LAN Play server is available in [spacemeowx2/switch-lan-play](https://github.com/spacemeowx2/switch-lan-play#server). RoomCircuit implements its LAN Play wire protocol. For the server, use a public VPS or another internet-reachable host with Docker, then run the upstream project's example:
+The standard LAN Play server is [spacemeowx2/switch-lan-play](https://github.com/spacemeowx2/switch-lan-play#server). RoomCircuit implements its LAN Play wire protocol. On a Debian or Ubuntu VPS, download the [RoomCircuit setup script](tools/setup_lanplay_node.py) and run:
 
 ```sh
-docker run -d -p 11451:11451/udp -p 11451:11451/tcp spacemeowx2/switch-lan-play
+curl -fsSLO https://raw.githubusercontent.com/SEc-123/Roomcircuit_lanywhere-selfhost/main/tools/setup_lanplay_node.py
+sudo python3 setup_lanplay_node.py
 ```
 
-Allow inbound UDP **11451** in the VPS firewall and any cloud firewall. TCP 11451 is the optional status monitor. Put the VPS's public IPv4 or hostname and port **11451** in `nodes.ini`. The upstream project also documents a Node.js server install and custom ports. RoomCircuit supplies the Switch client; you do not need to run the upstream desktop `lan-play` client for this setup. No special physical hardware is required, but a home server needs a public inbound route and router/firewall configuration. RoomCircuit does not install or launch the server for you.
+The script installs Docker if needed, starts the server, asks for the public node address, display name and region, then prints and saves a `nodes.ini` entry. Copy that entry into `config/RoomCircuit/nodes.ini` on each Switch. It adds an inbound UDP rule if UFW is already active. Open UDP **11451** in the VPS provider's cloud firewall too.
+
+To see how many LAN Play clients are connected, SSH into the VPS and run `sudo python3 setup_lanplay_node.py --status`. This monitor reports a count only and is bound to localhost. The server has no per-user authentication in the RoomCircuit node settings, so anyone who can reach the UDP port can use it.
+
+RoomCircuit supplies the Switch client; players do not need the upstream desktop `lan-play` client. No special physical hardware is required. A home server needs a public inbound route and router/firewall configuration. The script does not change cloud-provider firewall settings.
 
 `nodes.ini` configures the Switch RoomCircuit client only. Android, desktop and other mobile clients use their own network settings and may require a compatible client build. See the [crossplay preview](docs/CROSSPLAY.md) for the client-specific setup currently documented; adding a Switch node entry does not configure those clients.
 

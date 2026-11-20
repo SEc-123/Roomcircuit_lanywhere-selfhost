@@ -54,9 +54,13 @@ region 是可选的地区筛选标签，可填 unknown、asia、europe、america
 
 保存后重新打开节点页。选中节点按 X 测试，按 A 选择。两名玩家使用未收录节点时，双方都需配置并选择相同的 host 和 port，再在游戏内搜索本地无线房间。只有管理员将节点登记到 RoomCircuit 共享目录后，该节点的房间才会出现在统一大厅。
 
-自己运营新节点才需要额外服务器。可使用公网可达的 VPS 和 Docker。兼容的标准服务端是 https://github.com/spacemeowx2/switch-lan-play ，RoomCircuit 已实现它使用的 LAN Play 协议。上游 Docker 示例：
-docker run -d -p 11451:11451/udp -p 11451:11451/tcp spacemeowx2/switch-lan-play
-在 VPS 和云防火墙开放 UDP 11451；TCP 11451 只用于可选状态监控。再把 VPS 公网 IP 或域名和端口 11451 填入 nodes.ini。上游也提供 Node.js 安装及自定义端口说明。RoomCircuit 已包含 Switch 客户端，不需要运行上游的桌面 lan-play 客户端。没有专用服务器硬件要求；家用主机还需网络支持公网入站 UDP 和路由器端口转发。RoomCircuit 不会替你安装或启动这个服务端。
+自己运营新节点才需要额外服务器。标准服务端是 https://github.com/spacemeowx2/switch-lan-play ，RoomCircuit 已实现它使用的 LAN Play 协议。
+Debian/Ubuntu VPS 一键部署：下载 tools/setup_lanplay_node.py，然后运行：
+curl -fsSLO https://raw.githubusercontent.com/SEc-123/Roomcircuit_lanywhere-selfhost/main/tools/setup_lanplay_node.py
+sudo python3 setup_lanplay_node.py
+脚本会安装 Docker（如需要）、启动服务、询问节点公网地址、名称和地区，并输出及保存 nodes.ini 配置。将配置复制到每台 Switch 的 config/RoomCircuit/nodes.ini。若 UFW 已启用，脚本会放行 UDP 11451；云厂商防火墙仍需手动开放该端口。
+在 VPS 运行 sudo python3 setup_lanplay_node.py --status 可查看连接客户端数量。状态接口只返回数量，且仅限 VPS 本机访问。
+RoomCircuit 的节点配置不支持账号密码，因此能访问 UDP 端口的设备都可以使用该节点。RoomCircuit 已包含 Switch 客户端，无需在电脑上运行上游 lan-play 客户端。家用主机还需公网入站线路和路由器端口配置。
 
 此文件只配置 Atmosphère 上的 RoomCircuit。Android、桌面模拟器和其他移动端需按各自客户端设置，且需兼容的客户端构建；见 Crossplay preview。
 
@@ -123,9 +127,13 @@ These example hostnames are placeholders and cannot be used to connect. Up to se
 
 Save the file and reopen Nodes. Select an entry and press X to test it, then press A to choose it. For a node that is not in RoomCircuit's shared directory, both players must configure and select the same host and port, then search in the game's Local Wireless mode. Only an administrator-registered node can publish its rooms in the unified lobby.
 
-You need a separate server only to operate a new node. The standard compatible server is [spacemeowx2/switch-lan-play](https://github.com/spacemeowx2/switch-lan-play#server). RoomCircuit implements its LAN Play protocol. On an internet-reachable VPS with Docker, the upstream example is:
-docker run -d -p 11451:11451/udp -p 11451:11451/tcp spacemeowx2/switch-lan-play
-Allow inbound UDP 11451 in the VPS and cloud firewall. TCP 11451 is only for the optional status monitor. Put the VPS's public IPv4 or hostname and port 11451 in nodes.ini. The upstream README also covers Node.js installation and custom ports. RoomCircuit includes the Switch client, so you do not need the upstream desktop lan-play client. No special physical hardware is required; a home server needs a public inbound route and router/firewall rules. RoomCircuit does not install or launch the server for you.
+You need a separate server only to operate a new node. The standard compatible server is [spacemeowx2/switch-lan-play](https://github.com/spacemeowx2/switch-lan-play#server). RoomCircuit implements its LAN Play protocol.
+One-click setup on a Debian or Ubuntu VPS. Download tools/setup_lanplay_node.py, then run:
+curl -fsSLO https://raw.githubusercontent.com/SEc-123/Roomcircuit_lanywhere-selfhost/main/tools/setup_lanplay_node.py
+sudo python3 setup_lanplay_node.py
+The script installs Docker if needed, starts the server, prompts for the public node address, name and region, and prints and saves a nodes.ini entry. Copy that entry to config/RoomCircuit/nodes.ini on each Switch. If UFW is active, it allows inbound UDP 11451. Open UDP 11451 in the VPS provider's cloud firewall too.
+Run sudo python3 setup_lanplay_node.py --status on the VPS to see the connected-client count. The monitor returns a count only and is bound to localhost.
+RoomCircuit node settings have no username or password fields, so any device that can reach the UDP port can use the node. RoomCircuit includes the Switch client, so you do not need the upstream desktop lan-play client. A home server needs a public inbound route and router/firewall rules.
 
 This file configures RoomCircuit on an Atmosphère Switch only. Android, desktop emulator and other mobile clients use their own network settings and need a compatible client build. See the Crossplay preview for the currently documented client-specific setup.
 
