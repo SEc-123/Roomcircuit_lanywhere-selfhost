@@ -257,16 +257,18 @@ namespace {
         };
         RoomPasscodeChange m_change{};
         size_t m_length{}, m_group{}, m_character{};
-        bool m_hidden = true;
+        bool m_choosing_visibility{};
         tsl::elm::CategoryHeader *m_visibility{};
         tsl::elm::ListItem *m_code_first{}, *m_code_second{}, *m_picker{}, *m_feedback{};
+        tsl::elm::ListItem *m_first_action{}, *m_second_action{}, *m_third_action{};
         const char *m_message = "";
 
         static size_t cycle(size_t index, int step, size_t count) {
             return (static_cast<int>(index + count) + step) % count;
         }
 
-        void submit(bool clear) {
+        void submit(RoomAccessMode mode) {
+            const bool clear = mode == RoomAccessNone;
             if (!clear && !m_length) {
                 m_message = tr("Enter the game password.", "请输入游戏密码。");
                 return;
@@ -280,7 +282,7 @@ namespace {
             RoomAccessChange request{};
             std::memcpy(request.change.room, m_change.room, sizeof(request.change.room));
             if (!clear) std::memcpy(request.change.passcode, m_change.passcode, m_length);
-            request.hidden = !clear && m_hidden;
+            request.hidden = mode == RoomAccessHidden;
             u32 status = RoomPasscodeUnavailable;
             if (R_FAILED(lanywhereOverlaySetRoomAccess(&g_relay, &request, &status)))
                 status = RoomPasscodeUnavailable;
@@ -288,8 +290,9 @@ namespace {
                 case RoomPasscodeOk:
                     std::memset(m_change.passcode, 0, sizeof(m_change.passcode));
                     m_length = 0;
+                    m_choosing_visibility = false;
                     if (clear) m_message = tr("Password cleared.", "密码已清除。");
-                    else if (m_hidden) m_message = tr("Password hidden.", "密码已隐藏。");
+                    else if (request.hidden) m_message = tr("Password hidden.", "密码已隐藏。");
                     else m_message = tr("Password shared in lobby.", "密码已公开到大厅。");
                     g_notice = m_message;
                     g_notice_until = armGetSystemTick() + 5 * armGetSystemTickFreq();
@@ -307,9 +310,8 @@ namespace {
             const auto segment = [&](size_t start, size_t count) {
                 return count ? "[" + std::string(m_change.passcode + start, count) + "]" : "—";
             };
-            m_visibility->setText(m_hidden ?
-                tr("Hidden · Guests enter password", "隐藏 · 访客需输入密码") :
-                tr("Shared · Visible in the lobby", "公开 · 大厅所有人可见"));
+            m_visibility->setText(m_choosing_visibility ?
+                tr("Save password", "保存密码") : tr("Enter the game password", "输入游戏密码"));
             m_code_first->setText(segment(0, first));
             m_code_second->setText(segment(first, m_length - first));
             const char current = Characters[m_group][m_character];
@@ -317,7 +319,13 @@ namespace {
                 tr("Digits", "数字"), tr("Uppercase", "大写"), tr("Lowercase", "小写"), tr("Symbols", "符号")
             };
             const std::string character = current == ' ' ? tr("Space", "空格") : std::string(1, current);
-            m_picker->setValue(character + "  ·  " + group_names[m_group]);
+            m_picker->setText(m_choosing_visibility ? tr("A  Share in lobby", "A  公开到大厅") : tr("Character", "字符"));
+            m_picker->setValue(m_choosing_visibility ? "" : character + "  ·  " + group_names[m_group]);
+            m_first_action->setText(m_choosing_visibility ? tr("X  Keep password hidden", "X  隐藏密码") :
+                tr("←/→ Choose   A Add", "←/→ 选择   A 添加"));
+            m_second_action->setText(m_choosing_visibility ? tr("B  Back to editing", "B  返回编辑") :
+                tr("L/R Group   Y Delete", "L/R 字符组   Y 删除"));
+            m_third_action->setText(m_choosing_visibility ? "" : tr("+ Save   − Clear", "+ 保存   − 清除"));
             m_feedback->setText(m_message);
         }
 
@@ -334,9 +342,9 @@ namespace {
             list->addItem(m_code_first = new tsl::elm::ListItem(""));
             list->addItem(m_code_second = new tsl::elm::ListItem(""));
             list->addItem(m_picker = new tsl::elm::ListItem(tr("Character", "字符")));
-            list->addItem(new tsl::elm::ListItem(tr("←/→ Choose   A Add", "←/→ 选择   A 添加")));
-            list->addItem(new tsl::elm::ListItem(tr("L/R Group   Y Delete", "L/R 字符组   Y 删除")));
-            list->addItem(new tsl::elm::ListItem(tr("X Mode   + Save   − Clear", "X 模式   + 保存   − 清除")));
+            list->addItem(m_first_action = new tsl::elm::ListItem(""));
+            list->addItem(m_second_action = new tsl::elm::ListItem(""));
+            list->addItem(m_third_action = new tsl::elm::ListItem(""));
             list->addItem(m_feedback = new tsl::elm::ListItem(""));
             frame->setContent(list);
             redraw();
@@ -344,14 +352,23 @@ namespace {
         }
 
         bool handleInput(u64 down, u64, const HidTouchState &, HidAnalogStickState, HidAnalogStickState) override {
-            if (!down || (down & HidNpadButton_B)) return false;
+            if (!down) return false;
+            if (m_choosing_visibility) {
+                m_message = "";
+                const u64 choice = down & (HidNpadButton_A | HidNpadButton_X);
+                if (down & HidNpadButton_B) m_choosing_visibility = false;
+                else if (choice == HidNpadButton_A) submit(RoomAccessShared);
+                else if (choice == HidNpadButton_X) submit(RoomAccessHidden);
+                redraw();
+                return true;
+            }
+            if (down & HidNpadButton_B) return false;
             m_message = "";
             if (down & HidNpadButton_Plus) {
-                submit(false);
+                if (m_length) m_choosing_visibility = true;
+                else m_message = tr("Enter the game password.", "请输入游戏密码。");
             } else if (down & HidNpadButton_Minus) {
-                submit(true);
-            } else if (down & HidNpadButton_X) {
-                m_hidden = !m_hidden;
+                submit(RoomAccessNone);
             } else if (down & HidNpadButton_Y) {
                 if (m_length) m_change.passcode[--m_length] = '\0';
             } else if (down & HidNpadButton_A) {
@@ -454,6 +471,22 @@ namespace {
         tsl::elm::ListItem *m_feedback{};
         bool m_waiting = false, m_catalog_valid = false;
 
+        const char *nodeLocation(const NodeDynamicEntry &node) const {
+            if (node.id < NODE_CATALOG_COUNT) {
+                const auto &built = LanywhereNodes[node.id];
+                if (!std::strcmp(built.country, "CN") ||
+                    !std::strncmp(built.provider, "lanplay-cn-", sizeof("lanplay-cn-") - 1))
+                    return tr("China", "中国");
+            }
+            const auto label_index = node_region_label_index(node.id);
+            if (label_index < NODE_DYNAMIC_CAPACITY) {
+                const char *label = m_catalog.region_labels[label_index];
+                if (*label && std::memchr(label, 0, NODE_REGION_LABEL_BYTES))
+                    return !std::strcmp(label, "China") ? tr("China", "中国") : label;
+            }
+            return nodeRegion(node.region);
+        }
+
         bool catalogContains(const NodeDynamicEntry &node) const {
             if (node.id < NODE_CATALOG_COUNT) return true;
             if (!m_catalog_valid) return false;
@@ -468,7 +501,7 @@ namespace {
                 const auto &row = m_rows[i];
                 const bool available = (row.node.flags & 1) && catalogContains(row.node);
                 const char *value = !available ? tr("Unavailable", "不可用") :
-                    sameHostNode(row.node) ? tr("Current", "当前") : nodeRegion(row.node.region);
+                    sameHostNode(row.node) ? tr("Current", "当前") : nodeLocation(row.node);
                 row.item->setValue(value, !available);
             }
         }
@@ -532,7 +565,7 @@ namespace {
             auto *item = new tsl::elm::ListItem(name);
             m_rows[index] = {item, node};
             const bool current = sameHostNode(node);
-            item->setValue(current ? tr("Current", "当前") : nodeRegion(node.region), !(node.flags & 1));
+            item->setValue(current ? tr("Current", "当前") : nodeLocation(node), !(node.flags & 1));
             item->setClickListener([this, index](u64 keys) {
                 if (!(keys & HidNpadButton_A)) return false;
                 select(m_rows[index].node);

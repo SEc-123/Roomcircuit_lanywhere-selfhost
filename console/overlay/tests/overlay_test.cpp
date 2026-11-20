@@ -321,7 +321,7 @@ static void testPasscodeGui() {
     auto &editor = tsl::nextGui;
     assert(editor && share_count == 0);
     std::unique_ptr<tsl::elm::Element> edit_ui(editor->createUI());
-    assert(findItem(edit_ui.get(), "Hidden · Guests enter password"));
+    assert(findItem(edit_ui.get(), "Enter the game password"));
     const auto press = [&](u64 key) {
         assert(editor->handleInput(key, 0, {}, {}, {}));
     };
@@ -339,17 +339,21 @@ static void testPasscodeGui() {
     press(HidNpadButton_AnyRight);
     press(HidNpadButton_A); // !
     assert(findItem(edit_ui.get(), "[00Aa!]"));
-    press(HidNpadButton_X);
-    assert(findItem(edit_ui.get(), "Shared · Visible in the lobby") && share_count == 0);
     press(HidNpadButton_Plus);
+    assert(share_count == 0 && findItem(edit_ui.get(), "A  Share in lobby") &&
+           findItem(edit_ui.get(), "X  Keep password hidden"));
+    press(HidNpadButton_A | HidNpadButton_X);
+    assert(share_count == 0);
+    press(HidNpadButton_B);
+    assert(share_count == 0 && findItem(edit_ui.get(), "[00Aa!]"));
+    press(HidNpadButton_Plus);
+    press(HidNpadButton_A);
     assert(share_count == 1);
     assert(std::memcmp(last_access.change.room, "ABC123", 6) == 0);
     assert(std::strcmp(last_access.change.passcode, "00Aa!") == 0);
     assert(last_access.hidden == 0 && last_access.reserved == 0);
     assert(findItem(edit_ui.get(), "Password shared in lobby."));
     assert(!findItem(edit_ui.get(), "[00Aa!]"));
-    press(HidNpadButton_X);
-    assert(findItem(edit_ui.get(), "Hidden · Guests enter password") && share_count == 1);
     press(HidNpadButton_Minus);
     assert(share_count == 2 && last_access.change.passcode[0] == 0 && last_access.hidden == 0);
 
@@ -359,24 +363,28 @@ static void testPasscodeGui() {
     assert(findItem(edit_ui.get(), "Maximum 24 characters."));
     share_status = RoomPasscodeBusy;
     press(HidNpadButton_Plus);
+    assert(share_count == 2);
+    press(HidNpadButton_X);
     assert(share_count == 3 && last_access.hidden == 1 &&
            findItem(edit_ui.get(), "Try again in a moment."));
     for (char c : last_access.change.passcode) assert(c == '0');
     share_status = RoomPasscodeOk;
-    press(HidNpadButton_Plus);
+    press(HidNpadButton_X);
     assert(share_count == 4 && last_access.hidden == 1 && findItem(edit_ui.get(), "Password hidden."));
 
     fail_command = ROOM_ACCESS_IPC_SET;
     press(HidNpadButton_A);
     press(HidNpadButton_Plus);
+    press(HidNpadButton_A);
     assert(share_count == 4 && findItem(edit_ui.get(), "Could not save password."));
     assert(std::find(commands.begin(), commands.end(), ROOM_PASSCODE_IPC_SET) == commands.end());
     fail_command = 0;
 
     std::memcpy(status.code, "ABC124", 6);
     std::memcpy(passcode_host.room, "ABC124", 6);
-    press(HidNpadButton_Minus);
+    press(HidNpadButton_A);
     assert(share_count == 4 && findItem(edit_ui.get(), "Room closed or changed."));
+    press(HidNpadButton_B);
     assert(!editor->handleInput(HidNpadButton_B, 0, {}, {}, {}));
     edit_ui.reset();
     editor.reset();
