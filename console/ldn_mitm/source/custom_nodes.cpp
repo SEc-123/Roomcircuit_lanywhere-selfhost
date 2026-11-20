@@ -7,6 +7,7 @@
 #include <iterator>
 #include <memory>
 #include <cstring>
+#include <strings.h>
 
 namespace ams::mitm::custom_nodes {
 namespace {
@@ -98,19 +99,21 @@ bool ParseShared(const void *data, size_t size, const uint8_t legacy_hash[32], N
     if (!data || !legacy_hash || !out || size < 40) return false;
     const auto *bytes = static_cast<const uint8_t *>(data);
     const unsigned count = bytes[32];
-    if (std::memcmp(bytes, legacy_hash, 32) || count > NODE_SHARED_CAPACITY - 13u ||
-        !IsZeros(bytes + 33, 3) || size != 40 + count * sizeof(NodeDynamicEntry)) return false;
+    const bool with_regions = bytes[33] == NODE_REGION_LABEL_VERSION;
+    const size_t row_bytes = sizeof(NodeDynamicEntry) + (with_regions ? NODE_REGION_LABEL_BYTES : 0);
+    if (std::memcmp(bytes, legacy_hash, 32) || count > NODE_SHARED_CAPACITY - NODE_DYNAMIC_FIRST ||
+        (!with_regions && bytes[33]) || !IsZeros(bytes + 34, 2) || size != 40 + count * row_bytes) return false;
     NodeDynamicCatalog candidate{};
     candidate.version = 1;
     candidate.available = Read32(bytes + 36);
     if (candidate.available & ~((1u << NODE_SHARED_CAPACITY) - 1)) return false;
     uint32_t seen = 0;
     for (unsigned i = 0; i < count; ++i) {
-        const auto *raw = bytes + 40 + i * sizeof(NodeDynamicEntry);
+        const auto *raw = bytes + 40 + i * row_bytes;
         NodeDynamicEntry node{};
         node.id = Read32(raw); node.protocol = raw[4]; node.region = raw[5];
         node.port = Read16(raw + 8); node.flags = Read16(raw + 10);
-        if (node.id < 13 || node.id >= NODE_SHARED_CAPACITY || node.protocol != 2 ||
+        if (node.id < NODE_DYNAMIC_FIRST || node.id >= NODE_SHARED_CAPACITY || node.protocol != 2 ||
             node.region > 5 || node.flags > 1 || !node.port || !IsZeros(raw + 6, 2) ||
             !PaddedString(reinterpret_cast<const char *>(raw + 12), 128) ||
             !PaddedString(reinterpret_cast<const char *>(raw + 140), 48)) return false;
@@ -123,6 +126,11 @@ bool ParseShared(const void *data, size_t size, const uint8_t legacy_hash[32], N
         const bool public_ip = PublicIpv4(ip);
         if ((available && !public_ip) || (!available && !IsZeros(ip, 4))) return false;
         if (!ValidName(node.name, sizeof(node.name)) || !Add(candidate, node)) return false;
+        if (with_regions) {
+            const char *label = reinterpret_cast<const char *>(raw + sizeof(NodeDynamicEntry));
+            if (!PaddedString(label, NODE_REGION_LABEL_BYTES) || (*label && !ValidName(label, NODE_REGION_LABEL_BYTES))) return false;
+            std::memcpy(candidate.region_labels[node_region_label_index(node.id)], label, NODE_REGION_LABEL_BYTES);
+        }
         if (node.flags & 1) seen |= 1u << node.id;
     }
     if (candidate.available & ~seen) return false;
@@ -132,7 +140,7 @@ bool ParseShared(const void *data, size_t size, const uint8_t legacy_hash[32], N
 }
 
 bool ParseLocal(const char *text, size_t size, const NodeDynamicCatalog &shared, NodeDynamicCatalog *out) {
-    if (!out || (!text && size) || size > MaxConfig || shared.count > NODE_SHARED_CAPACITY - 13u) return false;
+    if (!out || (!text && size) || size > MaxConfig || shared.count > NODE_SHARED_CAPACITY - NODE_DYNAMIC_FIRST) return false;
     if (size && std::memchr(text, 0, size)) return false;
     struct Scratch { char input[MaxConfig + 1]; NodeDynamicCatalog result; };
     std::unique_ptr<Scratch, decltype(&std::free)> scratch(static_cast<Scratch *>(std::calloc(1, sizeof(Scratch))), &std::free);
@@ -142,6 +150,7 @@ bool ParseLocal(const char *text, size_t size, const NodeDynamicCatalog &shared,
     scratch->result = shared;
     auto &result = scratch->result;
     NodeDynamicEntry current{};
+    char label[NODE_REGION_LABEL_BYTES]{};
     bool section = false, have_name = false, have_host = false, have_port = false, have_region = false;
     unsigned local_count = 0;
     auto finish = [&]() {
@@ -156,6 +165,7 @@ bool ParseLocal(const char *text, size_t size, const NodeDynamicCatalog &shared,
         if (local_count >= NODE_LOCAL_CAPACITY) return false;
         current.id = NODE_LOCAL_BASE + local_count++;
         current.protocol = 2; current.flags = 1;
+        std::memcpy(result.region_labels[node_region_label_index(current.id)], label, sizeof(label));
         return Add(result, current);
     };
     char *line = scratch->input;
@@ -167,6 +177,7 @@ bool ParseLocal(const char *text, size_t size, const NodeDynamicCatalog &shared,
         if (!std::strcmp(item, "[node]")) {
             if (!finish()) return false;
             current = {}; section = true;
+            std::memset(label, 0, sizeof(label));
             have_name = have_host = have_port = have_region = false;
             continue;
         }
@@ -192,9 +203,17 @@ bool ParseLocal(const char *text, size_t size, const NodeDynamicCatalog &shared,
         } else if (!std::strcmp(key, "region")) {
             if (have_region) return false;
             static const char *const regions[] = {"unknown", "asia", "europe", "americas", "oceania", "africa"};
-            const auto it = std::find_if(std::begin(regions), std::end(regions), [&](const char *s) { return !std::strcmp(s, value); });
-            if (it == std::end(regions)) return false;
-            current.region = static_cast<uint8_t>(it - std::begin(regions)); have_region = true;
+            const auto it = std::find_if(std::begin(regions), std::end(regions), [&](const char *s) { return !strcasecmp(s, value); });
+            if (it != std::end(regions)) current.region = static_cast<uint8_t>(it - std::begin(regions));
+            else if (!strcasecmp(value, "China") || !strcasecmp(value, "CN") ||
+                     !std::strcmp(value, "中国") || !std::strcmp(value, "中國")) {
+                current.region = 1;
+                std::strcpy(label, "China");
+            } else if (*value) {
+                if (!ValidName(value, std::min(std::strlen(value) + 1, sizeof(label)))) return false;
+                std::strcpy(label, value);
+            }
+            have_region = true;
         } else return false;
     }
     if (!finish()) return false;

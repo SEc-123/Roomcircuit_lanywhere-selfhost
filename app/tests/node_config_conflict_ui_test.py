@@ -25,6 +25,7 @@ typedef int Result;typedef int Service;
 typedef struct {bool changed, local_config_invalid;} NodeView;
 static NodeView view;static int view_lock;static unsigned dynamic_generation;
 static NodeDynamicEntry dynamic_nodes[NODE_TOTAL_CAPACITY];static bool dynamic_present[NODE_TOTAL_CAPACITY];
+static char dynamic_regions[NODE_DYNAMIC_CAPACITY][NODE_REGION_LABEL_BYTES];
 static unsigned dynamic_enabled,dynamic_available;static NodeDynamicCatalog supplied;
 static void mutexLock(int*x){(void)x;}static void mutexUnlock(int*x){(void)x;}
 static int dispatch(Service*s,unsigned command,NodeDynamicCatalog*out){(void)s;assert(command==NODE_GET_CATALOG_IPC);*out=supplied;return 0;}

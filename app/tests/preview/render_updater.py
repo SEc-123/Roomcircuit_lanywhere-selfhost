@@ -41,7 +41,7 @@ body='''#include <assert.h>
 #define SAMPLE_UPDATE_VERSION @FIXTURE_VERSION@
 static bool rollback_pending;
 static bool language_save_failed;
-'''+constants+'\n'+types+'\n'+function('static const char *screen_title(')+'\n'+function('static void draw_update(')+r'''
+'''+constants+'\n'+types+'\n'+function('static const char *screen_title(')+'\n'+function('static void draw_release_note(')+'\n'+function('static void draw_update(')+r'''
 int main(int argc,char **argv) {
     assert(argc==2 && gfx_init());
     unsigned captures=0;
@@ -50,8 +50,8 @@ int main(int argc,char **argv) {
         for(int screen=0;screen<=UpdateRecoveryBlocked;screen++) {
             UpdateView view={.screen=screen,.completed=37,.total=100};
             strcpy(view.manifest.version, screen == UpdateCurrent ? LANYWHERE_APP_VERSION : SAMPLE_UPDATE_VERSION);
-            strcpy(view.manifest.notes_en,"Improves room recovery and update reliability.");
-            strcpy(view.manifest.notes_zh,"优化房间恢复和更新稳定性。");
+            strcpy(view.manifest.notes_en,"See both versions and what's new before installing an update.");
+            strcpy(view.manifest.notes_zh,"在线更新前可查看当前版本、目标版本和更新内容。");
             if(screen==UpdateFailed)view.error="Update server is unavailable. Try again.";
             if(screen==UpdateRecoveryBlocked)view.error="Update recovery needs the complete SD package.";
             draw_update(&view);

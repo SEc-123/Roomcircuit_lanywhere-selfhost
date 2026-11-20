@@ -48,10 +48,11 @@ namespace ams::mitm::lanywhere {
     }
 
     Result LanywhereService::GetDynamicNodeCatalog(const sf::OutBuffer &out) {
-        if (out.GetSize() != sizeof(NodeDynamicCatalog)) return ResultRelayFailed();
+        if (out.GetSize() != sizeof(NodeDynamicCatalog) &&
+            out.GetSize() != offsetof(NodeDynamicCatalog, region_labels)) return ResultRelayFailed();
         NodeDynamicCatalog catalog{};
         if (!lanywhere::GetDynamicNodeCatalog(&catalog)) return ResultRelayFailed();
-        std::memcpy(out.GetPointer(), &catalog, sizeof(catalog));
+        std::memcpy(out.GetPointer(), &catalog, out.GetSize());
         R_SUCCEED();
     }
 

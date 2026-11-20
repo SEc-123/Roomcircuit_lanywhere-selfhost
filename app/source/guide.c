@@ -40,10 +40,10 @@ static const GuidePage pages_zh[] = {
         "建房者选定节点后，照常回游戏建房。"
     }, "公开房可直接单人测速建房。好友测速自愿使用。" },
     { "在线更新", {
-        "顶部高亮表示有新版。按 LS 随时检查更新。",
-        "关闭游戏，确认下载并安装。设置和约局会保留。",
+        "打开「更新」，查看当前版本、新版本和更新内容。",
+        "关闭游戏后，按 A 下载并安装。",
         "更新完成后，退出并重启进入虚拟系统。"
-    }, "也可以按 LS 检查更新。安装时请保持开机。" },
+    }, "安装时请保持开机。" },
     { "自定义节点", {
         "在 config/RoomCircuit/nodes.ini 添加节点。",
         "保存文件后重新打开节点列表。",
@@ -87,10 +87,10 @@ static const GuidePage pages_en[] = {
         "The host selects a node, then creates the room in-game."
     }, "Public hosting uses your own test. Shared testing is optional." },
     { "Online update", {
-        "A highlighted update button means a new version is available.",
-        "Close the game, then confirm Download and install.",
+        "Open Update to see both versions and what's new.",
+        "Close the game and press A to download and install.",
         "When finished, exit and restart into your virtual system."
-    }, "You can check manually with LS. Keep the console on while installing." },
+    }, "Keep the console on while installing." },
     { "Custom nodes", {
         "Add nodes to config/RoomCircuit/nodes.ini.",
         "Save the file and reopen the node list.",

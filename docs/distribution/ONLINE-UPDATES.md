@@ -1,6 +1,6 @@
 # Online updates
 
-Open RoomCircuit and select **Update** when a new version appears. Close the game before installing. Keep the app open until installation completes, then restart Atmosphère. Follow any further restart prompt and open **RoomCircuit** from the new `switch/RoomCircuit/` location. The update includes the app, background module, overlay and bundled help; settings, custom nodes and appointments are not replaced.
+Select **Update** in RoomCircuit to see the current version, new version and what's changed. To install, close the game and press **A**. Keep RoomCircuit open until it finishes, then restart Atmosphère. Follow any further restart prompt and open **RoomCircuit** from `switch/RoomCircuit/`. Settings, custom nodes and appointments are preserved.
 
 For a first or manual install, extract the SD ZIP on a computer and merge `atmosphere/`, `switch/` and `config/` if present into the card root. The update screen is available even when the background module is missing or incompatible. If installation is interrupted, open **RoomCircuit Recovery** from the Homebrew Menu and follow its status before restarting.
 
@@ -26,7 +26,7 @@ The preset managed build uses this update feed and the official signing steps ab
 
 ## 中文
 
-打开 RoomCircuit，出现新版时点「更新」。安装前关闭游戏，完成后重启 Atmosphère；如仍有重启提示，按提示操作，然后从新的 `switch/RoomCircuit/` 入口打开。更新不会覆盖设置、自定义节点和约局。
+点 RoomCircuit 的「更新」，查看当前版本、新版本和更新内容。关闭游戏后按 **A** 安装，完成后重启 Atmosphère。如仍有重启提示，按提示操作，再从 `switch/RoomCircuit/` 打开 RoomCircuit。设置、自定义节点和约局会保留。
 
 首次或手动安装时，在电脑解压 SD 包，把 `atmosphere/`、`switch/` 和存在的 `config/` 合并到卡根目录。后台缺失或版本不匹配时仍可打开更新入口。安装意外中断时，从自制软件菜单打开「RoomCircuit Recovery」处理，再按提示重启。
 

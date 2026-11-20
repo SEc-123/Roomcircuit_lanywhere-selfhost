@@ -15,6 +15,7 @@ const char *nodes_ui_provider(uint32_t id);
 uint8_t nodes_ui_region_for(uint32_t id);
 bool nodes_ui_valid(uint32_t id);
 const char *nodes_ui_region(uint8_t region);
+const char *nodes_ui_location(uint32_t id);
 const char *nodes_ui_country(const char *country);
 uint32_t nodes_ui_region_mask(uint8_t region);
 bool nodes_ui_supported(Service *service, uint32_t *selected);

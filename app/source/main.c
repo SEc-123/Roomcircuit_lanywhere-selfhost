@@ -1257,10 +1257,10 @@ static void group_card(int x, int y, int w, const LobbyGroup *g, const char *sou
         const char *label = shared_custom ? nodes_ui_name(custom) :
             strcmp(source, REGION_PROVIDER_COMMUNITY) == 0 ? region_label(RelayRegionCommunity) :
             strcmp(source, REGION_PROVIDER_EU) == 0 ? region_label(RelayRegionEurope) : provider_label(lobby_provider_index(source));
-        const char *region = shared_custom ? nodes_ui_region(nodes_ui_region_for(custom)) : NULL;
+        const char *region = shared_custom ? nodes_ui_location(custom) : NULL;
         for (unsigned id = 0; id < NODE_CATALOG_COUNT; id++) {
             if (strcmp(source, LanywhereNodes[id].provider) == 0) {
-                region = nodes_ui_region(LanywhereNodes[id].region);
+                region = nodes_ui_location(id);
                 break;
             }
         }
@@ -1855,10 +1855,7 @@ static const char *board_room_region(const View *v, int index)
 {
     if (strcmp(v->sources[index], REGION_PROVIDER_EU) == 0)
         return ui_text("Europe");
-    const uint32_t id = v->node_rows[index].node_id;
-    if (id >= NODE_CATALOG_COUNT) return nodes_ui_region(nodes_ui_region_for(id));
-    const LanywhereNode *node = &LanywhereNodes[id];
-    return node->country[0] ? nodes_ui_country(node->country) : nodes_ui_region(node->region);
+    return nodes_ui_location(v->node_rows[index].node_id);
 }
 
 static void draw_room_board(const View *v)

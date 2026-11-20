@@ -15,7 +15,7 @@ source=here.parents[1]/'source'
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',type=Path,required=True);args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
 spec=importlib.util.spec_from_file_location('routes',here.parent/'input_routing_test.py');routes=importlib.util.module_from_spec(spec);spec.loader.exec_module(routes)
 text=(source/'nodes_ui.c').read_text()
-functions=['const char *nodes_ui_name(','const char *nodes_ui_region(','const char *nodes_ui_country(','static bool node_matches_current(','static void rank_nodes(','static void measurement_label(','static uint8_t region_for_row(','static void begin_screen(','static void node_footer(','static void node_panel(','static void draw_regions(','static void node_location(','static void draw_picker(','static void draw_friend_panel(','static bool room_probe_can_retry(','static void draw_room_check(','static void draw_filters(']
+functions=['const char *nodes_ui_name(','static bool builtin_china(','static void custom_region_label(','uint8_t nodes_ui_region_for(','const char *nodes_ui_region(','const char *nodes_ui_country(','const char *nodes_ui_location(','static bool node_matches_current(','static void rank_nodes(','static void measurement_label(','static uint8_t region_for_row(','static void begin_screen(','static void node_footer(','static void node_panel(','static void draw_regions(','static void draw_picker(','static void draw_friend_panel(','static bool room_probe_can_retry(','static void draw_room_check(','static void draw_filters(']
 code='''#include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -36,8 +36,17 @@ static NodeDynamicEntry current_host_identity;
 static bool current_host_identity_valid;
 static NodeDynamicEntry picker_rendered_nodes[NODE_TOTAL_CAPACITY];
 static bool picker_rendered_valid[NODE_TOTAL_CAPACITY];
+static bool initialized = true, include_custom;
+static char dynamic_regions[NODE_DYNAMIC_CAPACITY][NODE_REGION_LABEL_BYTES] = {"São Paulo"};
+static int view_lock;
+static void mutexLock(int *lock) { (void)lock; }
+static void mutexUnlock(int *lock) { (void)lock; }
 static uint32_t node_id(uint32_t slot) { return slot < NODE_SHARED_CAPACITY ? slot : NODE_LOCAL_BASE + slot - NODE_SHARED_CAPACITY; }
 static bool node_copy(uint32_t id, NodeDynamicEntry *node) {
+ if (id == NODE_DYNAMIC_FIRST && include_custom) {
+  *node = (NodeDynamicEntry){.id=id,.protocol=NodeProtocolLanPlay,.port=11451,.flags=1,.name="Custom"};
+  return true;
+ }
  if (id >= NODE_CATALOG_COUNT) return false;
  const LanywhereNode *builtin = &LanywhereNodes[id];
  *node = (NodeDynamicEntry){.id=id,.protocol=builtin->protocol,.region=builtin->region,.port=builtin->port,.flags=1};
@@ -45,8 +54,7 @@ static bool node_copy(uint32_t id, NodeDynamicEntry *node) {
  snprintf(node->host,sizeof(node->host),"%s",builtin->host);
  return true;
 }
-static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT; }
-static uint8_t nodes_ui_region_for(uint32_t id) { return id < NODE_CATALOG_COUNT ? LanywhereNodes[id].region : NodeRegionUnknown; }
+static bool nodes_ui_valid(uint32_t id) { return id < NODE_CATALOG_COUNT || (include_custom && id == NODE_DYNAMIC_FIRST); }
 '''+ '\n'.join(routes.function(text,x) for x in functions)+r'''
 static void capture(const char *dir,const char *kind,int zh){char path[4096];snprintf(path,sizeof(path),"%s/nodes-%s-%s.png",dir,zh?"zh":"en",kind);assert(gfx_save_png(path));}
 int main(int argc,char **argv){
@@ -59,6 +67,10 @@ int main(int argc,char **argv){
   rank_nodes(&v,NodeRegionEurope,order,&count,recommended);draw_picker(&v,NodeRegionEurope,order,count,0,0,false,recommended);capture(argv[1],"europe",zh);
   rank_nodes(&v,NODE_ALL_REGIONS,order,&count,recommended);assert(count==13);draw_picker(&v,NODE_ALL_REGIONS,order,count,12,0,false,recommended);capture(argv[1],"last-page",zh);
   rank_nodes(&v,NodeRegionOceania,order,&count,recommended);draw_picker(&v,NodeRegionOceania,order,count,0,0,false,recommended);capture(argv[1],"empty",zh);
+  rank_nodes(&v,NODE_REGION_CHINA,order,&count,recommended);assert(count==5);draw_picker(&v,NODE_REGION_CHINA,order,count,0,0,true,recommended);capture(argv[1],"china",zh);
+  include_custom=true;v.enabled|=1u<<NODE_DYNAMIC_FIRST;v.available|=1u<<NODE_DYNAMIC_FIRST;
+  v.measurements[NODE_DYNAMIC_FIRST]=(NodeMeasurement){.node_id=NODE_DYNAMIC_FIRST,.state=NodeMeasureReady,.sent=5,.received=5,.median_ms=34};
+  rank_nodes(&v,NODE_REGION_CUSTOM,order,&count,recommended);assert(count==1);draw_picker(&v,NODE_REGION_CUSTOM,order,count,0,0,false,recommended);capture(argv[1],"custom",zh);include_custom=false;
   strcpy(group_code,"ABC234");group.participants=group.reported_participants=2;
   for(unsigned i=0;i<NODE_CATALOG_COUNT;i++)group.nodes[i]=(NodeFriendSummary){.node_id=i,.measured_members=2,.reachable_members=2,.minimum_sent=5,.minimum_received=5,.worst_median_ms=(uint32_t)(80+i*8),.worst_jitter_ms=12};
   rank_nodes(&v,NodeRegionEurope,order,&count,recommended);draw_picker(&v,NodeRegionEurope,order,count,0,0,false,recommended);capture(argv[1],"shared",zh);
@@ -70,13 +82,12 @@ int main(int argc,char **argv){
   group_code[0]=0;memset(&group,0,sizeof(group));
   for(unsigned i=0;i<NODE_CATALOG_COUNT;i++){
    assert(gfx_text_width(19,nodes_ui_name(i)) < 305);
-   char location[96];node_location(&LanywhereNodes[i],location);
-   assert(gfx_text_width(18,location) < 145);
+   assert(gfx_text_width(18,nodes_ui_location(i)) < 145);
   }
   assert(gfx_text_width(15,ui_text(" (Recommended for you)")) < 305);
   assert(gfx_text_width(17,ui_text("Unlisted")) < 134);
  }
- gfx_exit();puts("Nodes: 18 bilingual previews from actual drawing functions");
+ gfx_exit();puts("Nodes: 22 bilingual previews from actual drawing functions");
 }
 '''
 flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','freetype2','libpng'],text=True))

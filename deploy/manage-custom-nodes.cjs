@@ -23,8 +23,8 @@ function main() {
     if (op === 'list' && args.length === 0) return console.log(JSON.stringify(config, null, 2));
     if (op === 'add' && args.length === 5) {
         const [id, host, port, region, name] = args;
-        if (!/^\d+$/.test(id) || !/^\d+$/.test(port) || !/^\d+$/.test(region)) throw Error(usage);
-        const node = {id: Number(id), host, port: Number(port), region: Number(region), name, enabled: true};
+        if (!/^\d+$/.test(id) || !/^\d+$/.test(port)) throw Error(usage);
+        const node = {id: Number(id), host, port: Number(port), ...registry.parseRegion(region), name, enabled: true};
         const existing = config.nodes.find(value => value.id === node.id);
         if (existing && (existing.host !== host || existing.port !== node.port)) throw Error('Slot belongs to another endpoint');
         if (existing) Object.assign(existing, node); else config.nodes.push(node);

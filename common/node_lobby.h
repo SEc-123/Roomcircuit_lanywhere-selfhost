@@ -6,11 +6,16 @@
 
 #define NODE_LOBBY_CAPABILITY 32768u
 #define NODE_DYNAMIC_CAPABILITY 262144u
+#define NODE_REGION_LABEL_CAPABILITY 524288u
 #define NODE_SHARED_CAPACITY 24u
 #define NODE_LOCAL_BASE 0x80000000u
 #define NODE_LOCAL_CAPACITY 7u
 #define NODE_LOCAL_CONFIG_INVALID (1u << 31)
 #define NODE_TOTAL_CAPACITY (NODE_SHARED_CAPACITY + NODE_LOCAL_CAPACITY)
+#define NODE_DYNAMIC_FIRST 13u
+#define NODE_DYNAMIC_CAPACITY (NODE_TOTAL_CAPACITY - NODE_DYNAMIC_FIRST)
+#define NODE_REGION_LABEL_BYTES 32u
+#define NODE_REGION_LABEL_VERSION 2u
 #define NODE_DYNAMIC_CATALOG_REQUEST 0x38u
 #define NODE_DYNAMIC_CATALOG_RESPONSE 0xb8u
 #define NODE_DYNAMIC_LOBBY_REQUEST 0x39u
@@ -84,8 +89,16 @@ typedef struct {
 
 typedef struct {
     uint32_t version, count, enabled, available;
-    NodeDynamicEntry nodes[NODE_SHARED_CAPACITY - 13u + NODE_LOCAL_CAPACITY];
+    NodeDynamicEntry nodes[NODE_DYNAMIC_CAPACITY];
+    char region_labels[NODE_DYNAMIC_CAPACITY][NODE_REGION_LABEL_BYTES];
 } NodeDynamicCatalog;
+
+static inline uint32_t node_region_label_index(uint32_t id) {
+    if (id >= NODE_DYNAMIC_FIRST && id < NODE_SHARED_CAPACITY) return id - NODE_DYNAMIC_FIRST;
+    if (id >= NODE_LOCAL_BASE && id - NODE_LOCAL_BASE < NODE_LOCAL_CAPACITY)
+        return NODE_SHARED_CAPACITY - NODE_DYNAMIC_FIRST + id - NODE_LOCAL_BASE;
+    return NODE_DYNAMIC_CAPACITY;
+}
 
 
 typedef struct {
@@ -172,7 +185,8 @@ NODE_STATIC_ASSERT(sizeof(NodeActiveRouteInfo) == 160, "active route IPC layout"
 NODE_STATIC_ASSERT(sizeof(NodeHostInfo) == 160, "node host IPC layout");
 NODE_STATIC_ASSERT(sizeof(NodeDynamicEntry) == 192, "dynamic node wire layout");
 NODE_STATIC_ASSERT(sizeof(NodeHostTaskStatus) == 216, "host task IPC layout");
-NODE_STATIC_ASSERT(sizeof(NodeDynamicCatalog) == 3472, "dynamic node catalog IPC layout");
+NODE_STATIC_ASSERT(offsetof(NodeDynamicCatalog, region_labels) == 3472, "legacy catalog IPC layout");
+NODE_STATIC_ASSERT(sizeof(NodeDynamicCatalog) == 4048, "dynamic node catalog IPC layout");
 NODE_STATIC_ASSERT(sizeof(NodeRoomLocator) == 64, "node locator layout");
 NODE_STATIC_ASSERT(sizeof(NodeRoomWire) == NODE_LOBBY_ROW_SIZE, "node room row layout");
 NODE_STATIC_ASSERT(sizeof(NodeRoomsRequest) == 24, "node request IPC layout");

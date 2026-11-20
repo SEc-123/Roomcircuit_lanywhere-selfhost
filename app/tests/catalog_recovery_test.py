@@ -66,14 +66,19 @@ int main(int argc, char **argv)
     assert(game_catalog_open(&g_catalog,data,size));
     assert(g_catalog.title_count > 1000);
     CatalogGameChoice choices[6]; size_t next;
-    size_t found=0,search_offset=0;
-    bool have_sword=false;
-    do {
-        found=game_catalog_choices(&g_catalog,"sWoRd",search_offset,choices,6,&next);
-        for(size_t i=0;i<found;i++) if(choices[i].game_id==UINT64_C(0x0100ABF008968000)) have_sword=true;
-        search_offset=next;
-    } while(search_offset!=SIZE_MAX);
-    assert(have_sword);
+    size_t found=0;
+    const char *queries[] = {"sWoRd", "Pokémon Sword", "Pokemon Sword", "ＰＯＫＥＭＯＮ Sword",
+                             "Pokémon", "宝可梦剑", "宝可梦 Sword", "寶可夢"};
+    for (unsigned q=0;q<sizeof(queries)/sizeof(*queries);q++) {
+        size_t search_offset=0;
+        bool have_sword=false;
+        do {
+            found=game_catalog_choices(&g_catalog,queries[q],search_offset,choices,6,&next);
+            for(size_t i=0;i<found;i++) if(choices[i].game_id==UINT64_C(0x0100ABF008968000)) have_sword=true;
+            search_offset=next;
+        } while(search_offset!=SIZE_MAX);
+        assert(have_sword);
+    }
     assert(game_catalog_choices(&g_catalog,"宝可梦",0,choices,6,&next)>0);
     assert(game_catalog_choices(&g_catalog,"no-such-game-000xyz",0,choices,6,&next)==0 && next==SIZE_MAX);
     size_t offset=0,total=0;u64 previous=0;

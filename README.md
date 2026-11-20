@@ -1,13 +1,25 @@
 # RoomCircuit (formerly LANywhere Self-host)
 
-RoomCircuit brings compatible Nintendo Switch games online through their built-in **Local Wireless** mode. Host in the game as you would with someone nearby, and players on other networks can find and join your room.
+RoomCircuit brings **Local Wireless multiplayer** for compatible Nintendo Switch games online. Its main client runs on **Atmosphère**. Players can find rooms across different servers, choose a faster route, and schedule a game before anyone needs to open a room.
 
 [Download the latest release](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest) · [Install](#install) · [Play](#play) · [Update](#update)
+
+## Supported clients
+
+| Platform | Client |
+| --- | --- |
+| Nintendo Switch | RoomCircuit on Atmosphère |
+| Desktop | Eden, compatible Yuzu builds, and supported Ryujinx-family builds such as Ryubing and Kenji-NX |
+| Android | Eden and supported Kenji-NX builds |
+| iPhone | NX Pocket and patched MeloNX with the LAN Play gateway setup |
+| Mac | NX Pocket with the LAN Play gateway setup |
+
+Emulator crossplay is a preview. Use the same compatible game and update on each device, and follow the [crossplay setup](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/CROSSPLAY.md) for your client.
 
 ## What you can do
 
 - **Browse and join rooms.** See public rooms across available nodes and filter by game or region.
-- **Choose where to host.** Test built-in, administrator-published and locally configured LAN Play nodes. Compare the 13 built-in nodes with friends using a shared test code.
+- **Choose where to host.** Measure latency to available nodes, or compare routes with friends before you host. Use the **China** filter to find Chinese nodes.
 - **Manage room passwords.** Share your in-game password in the lobby or keep it private.
 - **Schedule a session.** Agree on a time with other players so nobody has to leave a game room open while waiting. Players can mark themselves ready and find the room when it opens.
 
@@ -20,8 +32,6 @@ You need a Switch running Atmosphère, an internet connection, and a game with a
 3. Safely eject the SD card and restart Atmosphère. Open **RoomCircuit** from **Album** or its overlay. The app is in `switch/RoomCircuit/`, the overlay in `switch/.overlays/`, and settings in `config/RoomCircuit/`.
 
 ## Play
-
-For emulator and mobile interoperability, see the [crossplay preview](docs/CROSSPLAY.md).
 
 ### Host a room
 
@@ -49,9 +59,9 @@ To run a LAN Play node and offer it as a shared hosting option, follow the [LAN 
 
 Open **Appointments** with **−** from the lobby. Press **L** to create a session and **A** to join or leave one. From 30 minutes before the start, press **Y** to mark yourself ready. Press **X** to find rooms near the start time. Game-time room alerts require **Main server** and Ultrahand with API notifications enabled.
 
-On a phone or computer, open the relay’s [shared appointments panel](docs/WEB-APPOINTMENTS.md) to schedule, share, get ready and find open rooms with Switch players.
+On a phone or computer, use the [shared appointments panel](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/WEB-APPOINTMENTS.md) to schedule games with Switch players.
 
-Supported emulator development builds can open the same appointments inside the app. See [native emulator integrations](docs/NATIVE-INTEGRATIONS.md).
+Supported emulator builds can open the same appointments inside the app. See [native emulator integrations](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/NATIVE-INTEGRATIONS.md).
 
 Press **→** from the room list to open the in-app guide. See [node routing and game compatibility](docs/REGIONS.md) for details.
 
@@ -62,8 +72,8 @@ Press **→** from the room list to open the in-app guide. See [node routing and
 **v0.8.8** is the recommended starting version for in-app updates with the standard RoomCircuit build. The installed version appears beside the app name.
 
 1. Open RoomCircuit and press **LS** (click the left stick) to check for updates. **Update available** is highlighted when a newer version is detected.
-2. Close any running game from **HOME** before installing the update.
-3. Select **Download and install**. Keep the Switch on until **Restart required** appears, then restart into Atmosphère.
+2. Open **Update available** to review both versions and what's changed.
+3. Close the game, select **Download and install**, then restart Atmosphère when prompted.
 
 ### Manual update (any version)
 

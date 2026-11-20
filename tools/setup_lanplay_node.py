@@ -19,7 +19,6 @@ CONTAINER = "roomcircuit-lanplay-node"
 MANAGED_LABEL = "org.roomcircuit.managed-by"
 MANAGED_VALUE = "roomcircuit-lanplay-node-setup"
 DEFAULT_PORT = 11451
-REGIONS = ("unknown", "asia", "europe", "americas", "oceania", "africa")
 
 
 def run(command, check=True, capture=False):
@@ -183,13 +182,9 @@ def install_node(args):
 
     host = normalize_host(prompt_value(args.host, "Public IPv4 or hostname for this node"))
     name = validate_name(prompt_value(args.name, "Display name", "My LAN Play node"))
-    region = prompt_value(
-        args.region,
-        "Region: unknown, asia, europe, americas, oceania or africa",
-        "unknown",
-    ).lower()
-    if region not in REGIONS:
-        raise RuntimeError("--region must be one of: {}.".format(", ".join(REGIONS)))
+    region = prompt_value(args.region, "Region label, for example China or Amsterdam", "unknown").strip()
+    if len(region.encode("utf-8")) > 31 or any(ord(c) < 32 or ord(c) == 127 for c in region):
+        raise RuntimeError("Use a region label of at most 31 UTF-8 bytes on one line.")
 
     ensure_docker()
     if inspect_existing_container():
@@ -251,7 +246,7 @@ def main():
     parser.add_argument("--host", help="public IPv4 or DNS hostname to place in nodes.ini")
     parser.add_argument("--name", help="display name in the RoomCircuit node list")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="public UDP port (default: 11451)")
-    parser.add_argument("--region", choices=REGIONS, help="node-list region label (default: unknown)")
+    parser.add_argument("--region", help="region label (default: unknown, custom labels require RoomCircuit v0.9.3)")
     parser.add_argument("--status", action="store_true", help="show the local connected-client count")
     args = parser.parse_args()
 

@@ -10,7 +10,21 @@ const base = require('./node-catalog');
 const FIRST = 13, LAST = 23, MAX_CONFIG_BYTES = 16384;
 const CATALOG_REQUEST = 0x38, CATALOG_RESPONSE = 0xb8;
 const LOBBY_REQUEST = 0x39, LOBBY_RESPONSE = 0xb9;
-const CAPABILITY = 0x40000, ROW_BYTES = 192;
+const CAPABILITY = 0x40000, REGION_CAPABILITY = 0x80000, ROW_BYTES = 192, REGION_BYTES = 32, REGION_VERSION = 2;
+const geographicGroups = ['unknown', 'asia', 'europe', 'americas', 'oceania', 'africa'];
+
+function parseRegion(value) {
+    if (typeof value !== 'string') throw new Error('Invalid node region');
+    const label = value.trim();
+    if (Buffer.byteLength(label, 'utf8') >= REGION_BYTES || /[\x00-\x1f\x7f]/.test(value) ||
+        Buffer.from(label, 'utf8').toString('utf8') !== label)
+        throw new Error('Node region must be 31 UTF-8 bytes or fewer');
+    if (/^[0-5]$/.test(label)) return { region: Number(label), regionLabel: '' };
+    const known = geographicGroups.indexOf(label.toLowerCase());
+    if (known >= 0) return { region: known, regionLabel: '' };
+    if (['china', 'cn', '中国', '中國'].includes(label.toLowerCase())) return { region: 1, regionLabel: 'China' };
+    return { region: 0, regionLabel: label };
+}
 
 function publicIPv4(address) {
     if (!net.isIPv4(address)) return false;
@@ -44,8 +58,10 @@ function validate(doc) {
         const endpoint = `${node.host}:${node.port}`;
         if (endpoints.has(endpoint)) throw new Error('Duplicate custom node endpoint');
         ids.add(node.id); endpoints.add(endpoint);
+        const location = parseRegion(node.regionLabel ?? '');
         return Object.freeze({ id: node.id, provider: `custom-${node.id}`, protocol: 2,
-            host: node.host, port: node.port, region: node.region, country: '',
+            host: node.host, port: node.port, region: location.regionLabel === 'China' ? 1 : node.region, country: '',
+            regionLabel: location.regionLabel,
             name_en: node.name, name_zh: node.name, enabled: node.enabled });
     }).sort((a, b) => a.id - b.id);
 }
@@ -88,21 +104,23 @@ function load(filename, stateDir) {
     return entries;
 }
 
-function response(entries, sources) {
+function response(entries, sources, withRegions = false) {
     const header = Buffer.alloc(40); base.hash.copy(header); header[32] = entries.length;
+    if (withRegions) header[33] = REGION_VERSION;
     const availableMask = entries.reduce((mask, node) => node.enabled &&
         publicIPv4(sources.get(node.provider)?.upstreamAddress) ? mask | (1 << node.id) : mask, 0);
     header.writeUInt32LE(availableMask >>> 0, 36);
     const rows = entries.map(node => {
-        const row = Buffer.alloc(ROW_BYTES);
+        const row = Buffer.alloc(ROW_BYTES + (withRegions ? REGION_BYTES : 0));
         row.writeUInt32LE(node.id); row[4] = 2; row[5] = node.region;
         row.writeUInt16LE(node.port, 8); row.writeUInt16LE(node.enabled ? 1 : 0, 10);
         row.write(node.host, 12, 127, 'ascii'); row.write(node.name_en, 140, 47, 'utf8');
         const address = sources.get(node.provider)?.upstreamAddress;
         if (node.enabled && publicIPv4(address)) Buffer.from(address.split('.').map(Number)).copy(row, 188);
+        if (withRegions) row.write(node.regionLabel, ROW_BYTES, REGION_BYTES - 1, 'utf8');
         return row;
     });
     return Buffer.concat([header, ...rows]);
 }
-module.exports = { FIRST, LAST, CAPABILITY, CATALOG_REQUEST, CATALOG_RESPONSE,
-    LOBBY_REQUEST, LOBBY_RESPONSE, validate, load, response, publicIPv4 };
+module.exports = { FIRST, LAST, CAPABILITY, REGION_CAPABILITY, REGION_VERSION, CATALOG_REQUEST, CATALOG_RESPONSE,
+    LOBBY_REQUEST, LOBBY_RESPONSE, validate, load, response, publicIPv4, parseRegion };

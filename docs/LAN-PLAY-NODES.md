@@ -43,7 +43,7 @@ region=europe
 - `name` is the label shown in **Nodes**.
 - `host` is the node's public IPv4 address or hostname.
 - `port` is the relay's UDP port.
-- `region` is optional. Use `asia`, `europe`, `americas`, `oceania`, `africa` or `unknown`.
+- `region` is optional. Enter a short location such as `China` or `Amsterdam`. Use RoomCircuit **v0.9.3 or later** for custom region labels.
 
 ## 3. Play with friends
 
@@ -53,7 +53,7 @@ region=europe
 
 ## 4. Request a public listing
 
-To save your node in the shared directory, open the template and replace the sample name, public IPv4 address or hostname, and UDP port. Region is optional. The **Main server** administrator adds the entry so other players can see and select it. [Open the node listing template](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/new?template=lan-play-node.md)
+Open the template and fill in the node name, public IPv4 or hostname, and UDP port. Enter your own region if you want it displayed. The **Main server** administrator adds the node to the shared directory. [Open the node listing template](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/issues/new?template=lan-play-node.md)
 
 ## 5. Confirm the public listing
 
