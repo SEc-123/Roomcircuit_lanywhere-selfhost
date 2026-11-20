@@ -28,6 +28,7 @@ typedef struct {
     CatalogMatch title;
 } CatalogGameChoice;
 /* Known LCIDs followed by catalog title IDs; each choice filters the exact raw ID.
- * Offset/next are opaque cursors. Search matches a substring in either language. */
+ * Offset/next are opaque cursors. Search normalizes accents, punctuation and
+ * spacing, then matches prefixes or keywords across both title languages. */
 size_t game_catalog_choices(const GameCatalog *catalog, const char *query, size_t offset,
                             CatalogGameChoice *out, size_t capacity, size_t *next);

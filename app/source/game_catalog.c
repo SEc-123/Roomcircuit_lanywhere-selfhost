@@ -81,22 +81,74 @@ const char *game_catalog_name(const CatalogMatch *match, bool chinese)
     return chinese ? (match->zh ? match->zh : match->en) : (match->en ? match->en : match->zh);
 }
 
-static bool text_contains(const char *text, const char *query)
+enum { SearchQuerySize = 96, SearchTitleSize = 384 };
+
+static uint32_t search_character(const unsigned char **cursor)
 {
-    if (!query || !*query) return true;
-    if (!text) return false;
-    for (const unsigned char *start = (const unsigned char *)text; *start; start++) {
-        const unsigned char *left = start, *right = (const unsigned char *)query;
-        while (*left && *right) {
-            unsigned char a=*left, b=*right;
-            if (a>='A' && a<='Z') a+='a'-'A';
-            if (b>='A' && b<='Z') b+='a'-'A';
-            if (a!=b) break;
-            left++; right++;
-        }
-        if (!*right) return true;
+    const unsigned char *p = *cursor;
+    uint32_t cp = *p++;
+    unsigned tail = cp >= 0xf0 ? 3 : cp >= 0xe0 ? 2 : cp >= 0xc0 ? 1 : 0;
+    if (tail) cp &= 0x3f >> tail;
+    while (tail && (*p & 0xc0) == 0x80) {
+        cp = (cp << 6) | (*p++ & 0x3f);
+        tail--;
     }
-    return false;
+    *cursor = p;
+    return tail ? 0 : cp;
+}
+
+static void normalize_search(const char *text, char *out, size_t capacity, bool keep_words)
+{
+    static const char latin1[] =
+        "aaaaaaaceeeeiiii" "dnooooo ouuuuyts"
+        "aaaaaaaceeeeiiii" "dnooooo ouuuuyty";
+    size_t used = 0;
+    const unsigned char *p = (const unsigned char *)(text ? text : "");
+    while (*p && used + 1 < capacity) {
+        const unsigned char *start = p;
+        uint32_t cp = search_character(&p);
+        if (cp >= 0xff01 && cp <= 0xff5e) cp -= 0xfee0;
+        if (cp >= 0xc0 && cp <= 0xff) cp = (unsigned char)latin1[cp - 0xc0];
+        if (cp >= 'A' && cp <= 'Z') cp += 'a' - 'A';
+        if ((cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9')) {
+            out[used++] = (char)cp;
+        } else if (cp >= 0x300 && cp <= 0x36f) {
+            continue;
+        } else if (cp < 0x80 || cp == 0xa0 || cp == 0xae || cp == 0xb7 || cp == 0x3000 || cp == 0x2122 ||
+                   (cp >= 0x2000 && cp <= 0x206f)) {
+            if (keep_words && used && out[used - 1] != ' ') out[used++] = ' ';
+        } else {
+            const size_t bytes = (size_t)(p - start);
+            if (bytes >= capacity - used) break;
+            memcpy(out + used, start, bytes);
+            used += bytes;
+        }
+    }
+    if (used && out[used - 1] == ' ') used--;
+    out[used] = '\0';
+}
+
+static bool search_title(const CatalogMatch *title, const char *compact, const char *words)
+{
+    if (!*compact) return true;
+    char en[SearchTitleSize], zh[SearchTitleSize];
+    normalize_search(title->en, en, sizeof(en), false);
+    normalize_search(title->zh, zh, sizeof(zh), false);
+    if (strstr(en, compact) || strstr(zh, compact)) return true;
+    while (*words) {
+        char token[SearchQuerySize];
+        const size_t length = strcspn(words, " ");
+        memcpy(token, words, length);
+        token[length] = '\0';
+        bool matched = strstr(en, token) || strstr(zh, token);
+        if (!matched && (!strcmp(token, "pokemon") || !strcmp(token, "宝可梦") || !strcmp(token, "寶可夢"))) {
+            matched = strstr(en, "pokemon") || strstr(zh, "宝可梦") || strstr(zh, "寶可夢");
+        }
+        if (!matched) return false;
+        words += length;
+        if (*words) words++;
+    }
+    return true;
 }
 
 size_t game_catalog_choices(const GameCatalog *catalog, const char *query, size_t offset,
@@ -104,6 +156,9 @@ size_t game_catalog_choices(const GameCatalog *catalog, const char *query, size_
 {
     if (next) *next = SIZE_MAX;
     if (!catalog || !out || !capacity || offset > catalog->alias_count + catalog->title_count) return 0;
+    char compact[SearchQuerySize], words[SearchQuerySize];
+    normalize_search(query, compact, sizeof(compact), false);
+    normalize_search(query, words, sizeof(words), true);
     size_t count = 0;
     const size_t rows = catalog->alias_count + catalog->title_count;
     for (size_t index = offset; index < rows; index++) {
@@ -114,7 +169,7 @@ size_t game_catalog_choices(const GameCatalog *catalog, const char *query, size_
         if (!id || id == UINT64_MAX || (!alias && find_id(catalog->aliases, catalog->alias_count, AliasSize, id)))
             continue;
         const CatalogMatch title = game_catalog_identify(catalog, 0, id);
-        if (!title.kind || (!text_contains(title.en, query) && !text_contains(title.zh, query))) continue;
+        if (!title.kind || !search_title(&title, compact, words)) continue;
         if (count == capacity) {
             if (next) *next = index;
             break;

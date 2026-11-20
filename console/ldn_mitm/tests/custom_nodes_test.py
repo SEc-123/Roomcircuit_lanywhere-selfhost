@@ -31,6 +31,13 @@ int main() {
     assert(!ParseShared(packet,sizeof(packet),hash,&shared));
     assert(!std::memcmp(&shared,&unchanged,sizeof(shared)));
     packet[51]=0;
+    unsigned char labelled[sizeof(packet)+NODE_REGION_LABEL_BYTES]{};
+    std::memcpy(labelled,packet,sizeof(packet));
+    labelled[33]=NODE_REGION_LABEL_VERSION;
+    std::strcpy(reinterpret_cast<char *>(labelled+sizeof(packet)),"São Paulo");
+    assert(ParseShared(labelled,sizeof(labelled),hash,&shared));
+    assert(!std::strcmp(shared.region_labels[node_region_label_index(13)],"São Paulo"));
+    assert(!ParseShared(labelled,sizeof(labelled)-1,hash,&shared));
     const char *conf = "# local\n[node]\nname=Test\nhost=LOCAL.example.\nport=11451\nregion=europe\n"
                        "[node]\nname=Duplicate central\nhost=EXAMPLE.NET\nport=11451\n";
     NodeDynamicCatalog result{};
@@ -38,6 +45,11 @@ int main() {
     assert(result.count==2 && result.nodes[1].id==NODE_LOCAL_BASE);
     assert(!std::strcmp(result.nodes[1].host,"local.example"));
     assert(result.nodes[1].region==2 && result.nodes[1].port==11451);
+    assert(!std::strcmp(result.region_labels[node_region_label_index(13)],"São Paulo"));
+    const char *china = "[node]\nname=Beijing\nhost=china.example.net\nport=11451\nregion=中国\n";
+    assert(ParseLocal(china,std::strlen(china),shared,&result));
+    assert(result.nodes[1].region==1 &&
+           !std::strcmp(result.region_labels[node_region_label_index(NODE_LOCAL_BASE)],"China"));
     const char *bad[] = {"[node]\nname=X\nhost=x\nport=0\n", "[node]\nname=X\nhost=bad/name\nport=2\n",
                          "[node]\nname=X\nhost=x\nport=65536\n", "[node]\nname=X\nhost=x\nport=2\ninvalid=3\n",
                          "[node]\nname=X\nhost=x\nport=2\nport=3\n"};

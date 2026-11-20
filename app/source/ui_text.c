@@ -124,6 +124,7 @@ static const UiTranslation translations[] = {
     {"What's new", "更新内容"},
     {"No release notes provided.", "暂无更新说明。"},
     {"Later", "稍后"},
+    {"Other locations", "其他地区"},
     {"Download and install", "下载并安装"},
     {"Repair installation", "修复安装"},
     {"Download cancelled.", "已取消下载。"},

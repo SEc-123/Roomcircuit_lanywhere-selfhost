@@ -13,6 +13,8 @@
 
 #define NODE_ROWS 6
 #define NODE_ALL_REGIONS 255u
+#define NODE_REGION_CHINA 6u
+#define NODE_REGION_CUSTOM 7u
 #define NODE_COLOR_BG RGBA(0x00, 0x00, 0x00, 0xFF)
 #define NODE_COLOR_PANEL RGBA(0x11, 0x11, 0x11, 0xFF)
 #define NODE_COLOR_RAIL RGBA(0x08, 0x08, 0x08, 0xFF)
@@ -31,8 +33,8 @@
 #define NODE_LIST_Y 275
 #define NODE_ROW_HEIGHT 54
 #define NODE_REGION_Y 244
-#define NODE_REGION_HEIGHT 49
-#define NODE_REGION_COUNT 7
+#define NODE_REGION_HEIGHT 39
+#define NODE_REGION_COUNT 9
 #define NODE_NO_REGION_TOUCHED 254u
 #define NODE_FOOTER_Y 650
 #define NODE_FILTER_LIST_Y 291
@@ -45,6 +47,7 @@ typedef struct {
 } NodeView;
 static NodeView view;
 static NodeDynamicEntry dynamic_nodes[NODE_TOTAL_CAPACITY];
+static char dynamic_regions[NODE_DYNAMIC_CAPACITY][NODE_REGION_LABEL_BYTES];
 static bool dynamic_present[NODE_TOTAL_CAPACITY];
 static uint32_t dynamic_enabled, dynamic_available;
 static uint32_t dynamic_generation;
@@ -169,7 +172,32 @@ const char *nodes_ui_name(uint32_t id)
     return name;
 }
 bool nodes_ui_valid(uint32_t id) { NodeDynamicEntry entry; return node_copy(id, &entry); }
-uint8_t nodes_ui_region_for(uint32_t id) { NodeDynamicEntry entry; return node_copy(id, &entry) ? entry.region : NodeRegionUnknown; }
+static bool builtin_china(uint32_t id)
+{
+    return id < NODE_CATALOG_COUNT && (!strcmp(LanywhereNodes[id].country, "CN") ||
+        !strncmp(LanywhereNodes[id].provider, "lanplay-cn-", sizeof("lanplay-cn-") - 1));
+}
+
+static void custom_region_label(uint32_t id, char label[NODE_REGION_LABEL_BYTES])
+{
+    label[0] = '\0';
+    const uint32_t index = node_region_label_index(id);
+    if (!initialized || index == NODE_DYNAMIC_CAPACITY) return;
+    mutexLock(&view_lock);
+    memcpy(label, dynamic_regions[index], NODE_REGION_LABEL_BYTES);
+    mutexUnlock(&view_lock);
+}
+
+uint8_t nodes_ui_region_for(uint32_t id)
+{
+    NodeDynamicEntry entry;
+    if (!node_copy(id, &entry)) return NodeRegionUnknown;
+    if (builtin_china(id)) return NODE_REGION_CHINA;
+    char label[NODE_REGION_LABEL_BYTES];
+    custom_region_label(id, label);
+    if (!strcmp(label, "China")) return NODE_REGION_CHINA;
+    return *label && entry.region == NodeRegionUnknown ? NODE_REGION_CUSTOM : entry.region;
+}
 const char *nodes_ui_provider(uint32_t id)
 {
     if (id < NODE_CATALOG_COUNT) return LanywhereNodes[id].provider;
@@ -181,8 +209,8 @@ const char *nodes_ui_provider(uint32_t id)
 }
 const char *nodes_ui_region(uint8_t region)
 {
-    static const char *labels[] = {"Region unverified", "Asia", "Europe", "Americas", "Oceania", "Africa"};
-    return ui_text(region < 6 ? labels[region] : "All regions");
+    static const char *labels[] = {"Region unverified", "Asia", "Europe", "Americas", "Oceania", "Africa", "China", "Other locations"};
+    return ui_text(region < sizeof(labels) / sizeof(*labels) ? labels[region] : "All regions");
 }
 const char *nodes_ui_country(const char *country)
 {
@@ -197,6 +225,16 @@ const char *nodes_ui_country(const char *country)
     if (!strcmp(country, "ID"))
         return ui_text("Indonesia");
     return country;
+}
+
+const char *nodes_ui_location(uint32_t id)
+{
+    if (builtin_china(id)) return ui_text("China");
+    if (id < NODE_CATALOG_COUNT && LanywhereNodes[id].country[0]) return nodes_ui_country(LanywhereNodes[id].country);
+    static __thread char label[NODE_REGION_LABEL_BYTES];
+    custom_region_label(id, label);
+    if (*label) return !strcmp(label, "China") ? ui_text("China") : label;
+    return nodes_ui_region(nodes_ui_region_for(id));
 }
 uint32_t nodes_ui_region_mask(uint8_t region)
 {
@@ -460,6 +498,7 @@ bool nodes_ui_refresh_catalog(Service *service)
             entry->protocol != NodeProtocolLanPlay || entry->region > NodeRegionAfrica ||
             !entry->port || entry->flags > 1 || !memchr(entry->name, 0, sizeof(entry->name)) ||
             !memchr(entry->host, 0, sizeof(entry->host))) return false;
+        if (!memchr(catalog.region_labels[node_region_label_index(entry->id)], 0, NODE_REGION_LABEL_BYTES)) return false;
         next[slot] = *entry; present[slot] = true;
         if (entry->flags & 1) enabled |= 1u << slot;
         if (slot < NODE_SHARED_CAPACITY && (catalog.available & (1u << slot))) available |= 1u << slot;
@@ -467,10 +506,12 @@ bool nodes_ui_refresh_catalog(Service *service)
     mutexLock(&view_lock);
     const bool local_invalid = (catalog.enabled & NODE_LOCAL_CONFIG_INVALID) != 0;
     if (memcmp(dynamic_nodes, next, sizeof(next)) || memcmp(dynamic_present, present, sizeof(present)) ||
+        memcmp(dynamic_regions, catalog.region_labels, sizeof(dynamic_regions)) ||
         dynamic_enabled != enabled || dynamic_available != available || view.local_config_invalid != local_invalid)
         ++dynamic_generation;
     memcpy(dynamic_nodes, next, sizeof(next));
     memcpy(dynamic_present, present, sizeof(present));
+    memcpy(dynamic_regions, catalog.region_labels, sizeof(dynamic_regions));
     dynamic_enabled = enabled; dynamic_available = available;
     if (view.local_config_invalid != local_invalid) view.changed = true;
     view.local_config_invalid = local_invalid;
@@ -728,7 +769,7 @@ static void measurement_label(const NodeMeasurement *m, char text[80])
     else if (m->state != NodeMeasureReady)
         snprintf(text, 80, "%s", m->measured_at_ms ? ui_text("Unreachable") : "—");
     else
-        snprintf(text, 80, "%u ms · %s", m->median_ms, m->kind == NodeProbeUdp ? "UDP" : "TCP");
+        snprintf(text, 80, "%u ms", m->median_ms);
 }
 static uint8_t region_for_row(unsigned row)
 {
@@ -803,13 +844,6 @@ static void draw_regions(uint8_t region, bool focus, bool draw_counts)
     }
 }
 
-static void node_location(const LanywhereNode *node, char location[96])
-{
-    const char *place = node->country[0] ? nodes_ui_country(node->country) :
-                        node->region == NodeRegionUnknown ? ui_text("Unverified") : nodes_ui_region(node->region);
-    snprintf(location, 96, "%s", place);
-}
-
 static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *order, unsigned count,
                         unsigned selected, uint32_t current, bool region_focus, const bool *recommended)
 {
@@ -859,11 +893,7 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
             const char *recommendation = group_code[0] ? " (Recommended)" : " (Recommended for you)";
             gfx_text_fit(379, y + 31, 15, NODE_COLOR_ACCENT, ui_text(recommendation), 305);
         }
-        char location[96];
-        if (id < NODE_CATALOG_COUNT) node_location(&LanywhereNodes[id], location);
-        else snprintf(location, sizeof(location), "%s", nodes_ui_region(node.region));
-        gfx_text_fit(704, y + 16, 18, NODE_COLOR_DIM, location, 145);
-        const char *protocol = node.protocol == NodeProtocolLanPlay ? "UDP" : "TCP";
+        gfx_text_fit(704, y + 16, 18, NODE_COLOR_DIM, nodes_ui_location(node.id), 145);
         if (m->state == NodeMeasureReady && id < NODE_CATALOG_COUNT && group_code[0] && group.participants &&
             group.nodes[id].measured_members == group.participants) {
             if (group.nodes[id].reachable_members < group.participants)
@@ -871,12 +901,10 @@ static void draw_picker(const NodeView *copy, uint8_t region, const uint32_t *or
             else
                 snprintf(text, sizeof(text), ui_text("You %u / worst %u ms"),
                          m->median_ms, group.nodes[id].worst_median_ms);
-        } else if (m->state == NodeMeasureReady && !node_measurement_recommended(m)) {
-            snprintf(text, sizeof(text), "%u ms · %s · %u/%u", m->median_ms, protocol, m->received, m->sent);
         } else if (m->state == NodeMeasureReady) {
             measurement_label(m, text);
         } else {
-            snprintf(text, sizeof(text), "%s", protocol);
+            strcpy(text, "—");
         }
         gfx_text_fit(864, y + 16, 18, NODE_COLOR_TEXT, text, 211);
         const char *status = "Not measured";
@@ -1303,9 +1331,6 @@ static void draw_room_check(const NodeMeasurement *m, uint32_t node_id, bool gat
     if (gateway)
         gfx_text(56, 330, 23, NODE_COLOR_DIM, ui_text("Main server gateway"));
     if (m->state == NodeMeasureReady) {
-        snprintf(value, sizeof(value), ui_text("Replies %u/%u · variation %u ms"), m->received, m->sent,
-                 m->jitter_ms);
-        gfx_text(56, 380, 22, NODE_COLOR_DIM, value);
         if (node_measurement_weak(m))
             gfx_text(56, 450, 24, NODE_COLOR_WARN, ui_text("This connection may be slow or unstable."));
         if (gateway)

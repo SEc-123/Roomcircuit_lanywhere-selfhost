@@ -95,6 +95,7 @@ const SELF_CAPABILITIES = (process.env.LANYWHERE_LANPLAY_REALM ? 65536 : 0) | 3 
     (process.env.LANYWHERE_LANPLAY_REALM ? 0 : upstreamGateway.ROOM_PASSCODE_CAPABILITY |
         upstreamGateway.ROOM_ACCESS_CAPABILITY | upstreamGateway.UNIFIED_LOBBY_CAPABILITY |
         pushProtocol.CAPABILITY | nodeDirectory.CAPABILITY | directRoomMetadata.CAPABILITY | customNodeRegistry.CAPABILITY |
+        customNodeRegistry.REGION_CAPABILITY |
         (regionalEndpoint ? regionalDirectory.CAPABILITY : 0) |
         (communityEndpoint ? regionalDirectory.COMMUNITY_LOBBY_CAPABILITY : 0));
 const IDLE_MS = 20000;
@@ -819,9 +820,10 @@ function onFrame(socket, type, body) {
             return sendError(socket,E.BUSY,'Node selection is busy. Try again.');
         upstreams.handleFrame(socket,type,body);
         if (type === customNodeRegistry.CATALOG_REQUEST) {
-            if (body.length) return sendError(socket, E.BAD_REQUEST, 'Invalid custom node catalog request.');
+            const withRegions = body.length === 1 && body[0] === customNodeRegistry.REGION_VERSION;
+            if (body.length && !withRegions) return sendError(socket, E.BAD_REQUEST, 'Invalid custom node catalog request.');
             const sources = customLobby.nodeSources();
-            return send(socket, customNodeRegistry.CATALOG_RESPONSE, customNodeRegistry.response(customNodes, sources));
+            return send(socket, customNodeRegistry.CATALOG_RESPONSE, customNodeRegistry.response(customNodes, sources, withRegions));
         }
         if (type === customNodeRegistry.LOBBY_REQUEST) {
             const page = extendedNodesLobby.page(body, true);

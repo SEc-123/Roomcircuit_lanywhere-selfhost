@@ -50,6 +50,10 @@ test('administrator registry checks limits, public hosts and persistent node ide
     assert.equal(data.length,232);assert(data.subarray(0,32).equals(catalog.hash));
     assert.equal(data[32],1);assert.equal(data.readUInt32LE(36),0);
     assert.equal(data.readUInt32LE(40),13);assert.equal(data.readUInt16LE(50),0);
+    assert.deepEqual(registry.parseRegion("中国"), {region:1, regionLabel:"China"});
+    assert.deepEqual(registry.parseRegion("  São Paulo "), {region:0, regionLabel:"São Paulo"});
+    assert.throws(() => registry.parseRegion("北".repeat(11)), /31 UTF-8 bytes/);
+    assert.throws(() => registry.parseRegion("China\nport=1"), /31 UTF-8 bytes/);
     const sources = new Map([['custom-13', Object.assign([], {upstreamAddress:'127.0.0.1'})]]);
     const unsafe = registry.response(registry.validate(fixture()), sources);
     assert.equal(unsafe.readUInt32LE(36), 0);assert.deepEqual([...unsafe.subarray(228,232)], [0,0,0,0]);
@@ -109,7 +113,9 @@ test('custom room metadata stays scoped to its live server endpoint', () => {
 
 test('actual relay negotiates custom catalog and V2 without breaking legacy requests', {timeout:15000}, async t => {
     const dir=fs.mkdtempSync(path.join(os.tmpdir(),'roomcircuit-custom-wire-'));
-    const config=path.join(dir,'nodes.json');fs.writeFileSync(config,JSON.stringify(fixture()));
+    const config=path.join(dir,'nodes.json'), doc=fixture();
+    doc.nodes[0].regionLabel='Moscow';
+    fs.writeFileSync(config,JSON.stringify(doc));
     const child=spawn(process.execPath,[path.join(__dirname,'server.js'),'--port','0'],{env:{...process.env,
         ROOMCIRCUIT_CUSTOM_NODES:config,LANYWHERE_STATE_DIR:dir,LANYWHERE_STATS_PORT:'0',LANYWHERE_PUBLIC_PORT:'0',
         LANYWHERE_OPS_PORT:'0',LANYWHERE_LANPLAY_PORT:'0',LANYWHERE_ENABLE_LANPLAY_UPSTREAM:'0',
@@ -122,11 +128,15 @@ test('actual relay negotiates custom catalog and V2 without breaking legacy requ
     for(let i=0;i<100&&!port;i++){if(child.exitCode!==null)throw Error(log);port=Number(/datos UDP en (\d+)/.exec(log)?.[1]||0);if(!port)await delay(50);}
     assert(port,log);
     const peer=new Peer('Wire','127.0.0.1',port);await peer.connect();peers.push(peer);
-    peer.send(11);assert((await peer.frame(0x89)).readUInt32LE() & registry.CAPABILITY);
+    peer.send(11);const caps=(await peer.frame(0x89)).readUInt32LE();
+    assert(caps & registry.CAPABILITY);assert(caps & registry.REGION_CAPABILITY);
     peer.send(0x32);const old=await peer.frame(0xb2);assert.equal(old.length,40);assert(old.subarray(0,32).equals(catalog.hash));
     peer.send(0x38);const response=await peer.frame(0xb8);assert.equal(response.length,232);assert.equal(response[32],1);
     assert.equal(response.readUInt32LE(40),13);assert.equal(response.readUInt16LE(48),11451);
     assert.equal(response.toString('ascii',52,180).split('\0')[0],'moscow.example.org');
+    peer.send(0x38,Buffer.from([2]));const labelled=await peer.frame(0xb8);
+    assert.equal(labelled.length,264);assert.equal(labelled[33],2);
+    assert.equal(labelled.toString('utf8',232).split('\0')[0],'Moscow');
     const request=Buffer.alloc(20);request.writeUInt32LE(1<<13,16);
     peer.send(0x33,request);await assert.rejects(peer.frame(0xb3), /protocol error 4/);
     peer.send(0x39,request);const page=await peer.frame(0xb9);assert.equal(page.length,16);assert.equal(page[8],0);

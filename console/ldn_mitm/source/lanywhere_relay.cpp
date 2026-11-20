@@ -3678,7 +3678,8 @@ namespace ams::mitm::lanywhere {
             struct Scratch {
                 NodeDynamicCatalog clean, fresh, combined;
                 char config[8192];
-                u8 reply[40 + (NODE_SHARED_CAPACITY - NODE_CATALOG_COUNT) * sizeof(NodeDynamicEntry)];
+                u8 reply[40 + (NODE_SHARED_CAPACITY - NODE_CATALOG_COUNT) *
+                    (sizeof(NodeDynamicEntry) + NODE_REGION_LABEL_BYTES)];
             };
             std::unique_ptr<Scratch, decltype(&std::free)> scratch(static_cast<Scratch *>(std::calloc(1, sizeof(Scratch))), &std::free);
             if (!scratch) return false;
@@ -3686,9 +3687,13 @@ namespace ams::mitm::lanywhere {
             clean.version = 1;
             {
                 std::scoped_lock lock(g_catalog_lock);
-                for (u32 i = 0; i < g_dynamic_nodes.count; ++i)
-                    if (g_dynamic_nodes.nodes[i].id < NODE_SHARED_CAPACITY)
-                        clean.nodes[clean.count++] = g_dynamic_nodes.nodes[i];
+                for (u32 i = 0; i < g_dynamic_nodes.count; ++i) {
+                    const auto &node = g_dynamic_nodes.nodes[i];
+                    if (node.id >= NODE_SHARED_CAPACITY) continue;
+                    clean.nodes[clean.count++] = node;
+                    const auto index = node_region_label_index(node.id);
+                    std::memcpy(clean.region_labels[index], g_dynamic_nodes.region_labels[index], NODE_REGION_LABEL_BYTES);
+                }
                 clean.enabled = g_dynamic_nodes.enabled & ((1u << NODE_SHARED_CAPACITY) - 1);
             }
             bool fresh_received = false;
@@ -3699,8 +3704,10 @@ namespace ams::mitm::lanywhere {
                 const int fd = ConnectServer(server, &error, 3000, "self");
                 if (fd >= 0) {
                     u32 caps = 0, status = 0; u8 type = 0;
+                    const u8 region_version = NODE_REGION_LABEL_VERSION;
                     if (QueryCapabilities(fd, &caps, 3000, &status) && (caps & NODE_DYNAMIC_CAPABILITY) &&
-                        SendFrameTo(fd, NODE_DYNAMIC_CATALOG_REQUEST, nullptr, 0, nullptr, 0)) {
+                        SendFrameTo(fd, NODE_DYNAMIC_CATALOG_REQUEST, &region_version,
+                                    (caps & NODE_REGION_LABEL_CAPABILITY) ? 1 : 0, nullptr, 0)) {
                         const ssize_t bytes = ReadListFrame(fd, &type, scratch->reply, sizeof(scratch->reply), 3000, &status);
                         if (bytes >= 0 && type == NODE_DYNAMIC_CATALOG_RESPONSE &&
                             custom_nodes::ParseShared(scratch->reply, static_cast<size_t>(bytes), LanywhereNodeCatalogHash, &scratch->fresh)) {
@@ -3736,6 +3743,7 @@ namespace ams::mitm::lanywhere {
                     }
                 }
                 if (duplicate) {
+                    std::memset(combined.region_labels[node_region_label_index(candidate.id)], 0, NODE_REGION_LABEL_BYTES);
                     for (u32 j = i + 1; j < combined.count; ++j) combined.nodes[j - 1] = combined.nodes[j];
                     combined.nodes[--combined.count] = {};
                 } else ++i;
@@ -3755,6 +3763,8 @@ namespace ams::mitm::lanywhere {
                         g_dynamic_nodes.enabled &= NODE_LOCAL_CONFIG_INVALID | ((1u << NODE_SHARED_CAPACITY) - 1);
                         for (u32 i = 0; i < g_dynamic_nodes.count;) {
                             if (g_dynamic_nodes.nodes[i].id < NODE_LOCAL_BASE) { ++i; continue; }
+                            std::memset(g_dynamic_nodes.region_labels[node_region_label_index(g_dynamic_nodes.nodes[i].id)],
+                                        0, NODE_REGION_LABEL_BYTES);
                             for (u32 j = i + 1; j < g_dynamic_nodes.count; ++j) g_dynamic_nodes.nodes[j - 1] = g_dynamic_nodes.nodes[j];
                             g_dynamic_nodes.nodes[--g_dynamic_nodes.count] = {};
                         }

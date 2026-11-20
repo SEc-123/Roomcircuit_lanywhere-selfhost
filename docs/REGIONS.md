@@ -26,12 +26,12 @@ The shared [catalog](../common/node-catalog.json) records stable IDs, endpoints,
 | Muitxobem | `muitxobem-lanplay.ddns.net:11451` | Brazil — directory |
 | Mainbareng | `switch.mainbareng.web.id:11451` | Indonesia — directory |
 | Servegame | `switch.servegame.com:11451` | Germany — directory |
-| Jax | `srv.jaxlewis.top:11451` | Unverified |
-| Gugu | `gugu.mulaosi.cn:11451` | Unverified |
-| Olunira | `olunira.fun:11451` | Unverified |
-| 47.102.121.212 | `47.102.121.212:11451` | Unverified |
+| Jax | `srv.jaxlewis.top:11451` | China |
+| Gugu | `gugu.mulaosi.cn:11451` | China |
+| Olunira | `olunira.fun:11451` | China |
+| 47.102.121.212 | `47.102.121.212:11451` | China |
 
-The public region source is [lan-play-status's server directory](https://github.com/GreatWizard/lan-play-status/blob/master/src/data/servers.json). Missing or contradictory region evidence stays unverified; a hostname or language does not establish its country.
+Regions are based on the [LAN Play directory](https://github.com/GreatWizard/lan-play-status/blob/master/src/data/servers.json) and [APNIC address registrations](https://www.apnic.net/about-apnic/whois_search/). The **China** filter is available in RoomCircuit v0.9.3 and later.
 
 Servegame is disabled in this release: probes responded, but discovery/admission failed. [Per-node protocol checks](distribution/PUBLIC-NODES-0.8.0.md)
 

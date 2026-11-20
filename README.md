@@ -1,13 +1,25 @@
 # RoomCircuit (formerly LANywhere Self-host)
 
-RoomCircuit brings compatible Nintendo Switch games online through their built-in **Local Wireless** mode. Host in the game as you would with someone nearby, and players on other networks can find and join your room.
+RoomCircuit brings **Local Wireless multiplayer** for compatible Nintendo Switch games online. Its main client runs on **Atmosphère**. Players can find rooms across different servers, choose a faster route, and schedule a game before anyone needs to open a room.
 
 [Download the latest release](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest) · [Install](#install) · [Play](#play) · [Update](#update)
+
+## Supported clients
+
+| Platform | Client |
+| --- | --- |
+| Nintendo Switch | RoomCircuit on Atmosphère |
+| Desktop | Eden, compatible Yuzu builds, and supported Ryujinx-family builds such as Ryubing and Kenji-NX |
+| Android | Eden and supported Kenji-NX builds |
+| iPhone | NX Pocket and patched MeloNX with the LAN Play gateway setup |
+| Mac | NX Pocket with the LAN Play gateway setup |
+
+Emulator crossplay is a preview. Use the same compatible game and update on each device, and follow the [crossplay setup](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/CROSSPLAY.md) for your client.
 
 ## What you can do
 
 - **Browse and join rooms.** See public rooms across available nodes and filter by game or region.
-- **Choose where to host.** Test built-in, administrator-published and locally configured LAN Play nodes. Compare the 13 built-in nodes with friends using a shared test code.
+- **Choose where to host.** Measure latency to available nodes, or compare routes with friends before you host. Use the **China** filter to find Chinese nodes.
 - **Manage room passwords.** Share your in-game password in the lobby or keep it private.
 - **Schedule a session.** Agree on a time with other players so nobody has to leave a game room open while waiting. Players can mark themselves ready and find the room when it opens.
 
@@ -36,27 +48,20 @@ You can also choose the hosting node from the RoomCircuit overlay in Ultrahand. 
 
 If the game uses link codes instead of a room list, choose the same node, enter the same code in the game, and start local matchmaking on both consoles.
 
-### Add a LAN Play node
+### LAN Play nodes
 
-Create `config/RoomCircuit/nodes.ini` on the SD card. Add one section per node:
+<a name="running-your-own-node"></a>
+<a name="one-click-self-host-setup"></a>
 
-```ini
-[node]
-name=Russia
-host=lanplay.example.org
-port=11451
-region=europe
-```
-
-Open **Nodes** again to load changes. `name`, `host` and `port` are required; `region` may be `unknown`, `asia`, `europe`, `americas`, `oceania` or `africa`. Up to seven local-only endpoints are supported. Use a public IPv4 address or hostname and UDP port supplied by the LAN Play server operator. The sample hostname is a placeholder.
-
-If both the old and new `nodes.ini` changed differently, back up both, keep the intended content in `config/RoomCircuit/nodes.ini`, move the old file aside, and reopen **Nodes**.
-
-An administrator-published node and its rooms appear in the shared lobby. An unregistered local node is selected by each player; its rooms are found from the game's Local Wireless search. Matching host and port use the administrator-published identity. The shared friend test currently compares the 13 built-in nodes. [Administrator setup and script example](deploy/CUSTOM-NODES.md)
+To run a LAN Play node and offer it as a shared hosting option, follow the [LAN Play node guide](docs/LAN-PLAY-NODES.md).
 
 ### Schedule a session
 
 Open **Appointments** with **−** from the lobby. Press **L** to create a session and **A** to join or leave one. From 30 minutes before the start, press **Y** to mark yourself ready. Press **X** to find rooms near the start time. Game-time room alerts require **Main server** and Ultrahand with API notifications enabled.
+
+On a phone or computer, use the [shared appointments panel](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/WEB-APPOINTMENTS.md) to schedule games with Switch players.
+
+Supported emulator builds can open the same appointments inside the app. See [native emulator integrations](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/blob/main/docs/NATIVE-INTEGRATIONS.md).
 
 Press **→** from the room list to open the in-app guide. See [node routing and game compatibility](docs/REGIONS.md) for details.
 
@@ -67,8 +72,8 @@ Press **→** from the room list to open the in-app guide. See [node routing and
 **v0.8.8** is the recommended starting version for in-app updates with the standard RoomCircuit build. The installed version appears beside the app name.
 
 1. Open RoomCircuit and press **LS** (click the left stick) to check for updates. **Update available** is highlighted when a newer version is detected.
-2. Close any running game from **HOME** before installing the update.
-3. Select **Download and install**. Keep the Switch on until **Restart required** appears, then restart into Atmosphère.
+2. Open **Update available** to review both versions and what's changed.
+3. Close the game, select **Download and install**, then restart Atmosphère when prompted.
 
 ### Manual update (any version)
 
