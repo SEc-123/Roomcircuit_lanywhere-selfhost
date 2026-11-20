@@ -1,6 +1,6 @@
 services:
   lanplay:
-    image: spacemeowx2/switch-lan-play:latest
+    image: spacemeowx2/switch-lan-play@sha256:853d10e28ce13476e9cdcd7e545e84cda69a6971528c2fbd7be38dd23a97b114
     container_name: roomcircuit-lanplay-node
     restart: unless-stopped
     ports:

@@ -14,7 +14,7 @@ import sys
 import time
 from urllib.request import urlopen
 
-IMAGE = "spacemeowx2/switch-lan-play:latest"
+IMAGE = "spacemeowx2/switch-lan-play@sha256:853d10e28ce13476e9cdcd7e545e84cda69a6971528c2fbd7be38dd23a97b114"
 CONTAINER = "roomcircuit-lanplay-node"
 MANAGED_LABEL = "org.roomcircuit.managed-by"
 MANAGED_VALUE = "roomcircuit-lanplay-node-setup"
