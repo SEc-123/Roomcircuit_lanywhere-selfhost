@@ -48,7 +48,7 @@ region=europe
 ## 3. Play with friends
 
 1. Share your `[node]` block with your friends. Each player saves it to their own `nodes.ini` as shown in step 2.
-2. On each Switch, press **Y** in the RoomCircuit lobby to open **Nodes**. Press **X** to refresh if needed. When the node responds, select it with **A** and check **Hosting line**.
+2. On each Switch, press **Y** next to **Hosting line** at the bottom of the lobby. Press **X** to refresh if needed. When the node responds, select it with **A**.
 3. Open the game's **Local Wireless** menu. One player creates a room and the others search for it and join.
 
 ## 4. Request a public listing

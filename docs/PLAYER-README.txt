@@ -17,14 +17,14 @@ RoomCircuit
 若降级后提示旧设置已变更，请备份并对比 switch/RoomCircuit/data/ 和 config/RoomCircuit/data/，再决定保留哪些数据。
 
 在线更新
-点「更新」查看当前版本、新版本和更新内容。关闭游戏后按 A 安装，完成后重启虚拟系统。
+点「更新」查看当前版本、新版本和更新内容。关闭游戏后按 A 安装，完成后重启回原来的大气层模式。
 安装中断时，从自制软件菜单打开 RoomCircuit Recovery。
 
 建房与加入
-• 单人建房。大厅按 Y 选节点，按 A 确认。看一眼底部「建房线路」，再按 + 回游戏，在「本地无线」里建房。新房间会用这条线路，选了第三方节点就用该节点建房。节点页按 R 筛地区，X 重新测速。
+• 单人建房。在大厅底部「建房线路」旁按 Y 更换节点，按 A 确认。按 + 回游戏，在「本地无线」里建房。节点页按 R 筛地区，X 重新测速。
 • 重启后保留所选建房节点。在 Ultrahand 打开 RoomCircuit，选「建房节点」即可切换；请先退出联机房间。
-• 推荐。最多三个，根据你这台 Switch 的网络产生。TCP/UDP 是测速方式，不是游戏内延迟，也不代表其他玩家的网络。地区未核实会明确标注。
-• 加入。左键浏览游戏，A 筛选，右键回房间。ZL+ZR 可筛游戏和地区。A 选房，查看你到房间节点的连接，再打开游戏搜索。连接较差时可选择继续或返回。
+• 推荐。按你的连接推荐最多三条线路。未分类的节点可在「其他地区」找到。
+• 加入。在房间列表按 ZL+ZR 筛选游戏和地区。按 A 选房并查看连接，再打开游戏搜索。
 • 一起测速。节点页按 L 创建或输入临时码，共同推荐当前覆盖 13 个内置节点。自定义节点可单独测速。
 • 对局线路。直连房走房间实际公共节点；旧版「社区 · LANywhere」等房间可能经主服务器兼容转发，连接检查会明确标注。断线只尝试原节点，恢复失败需重新加入。
 • 密码与提醒。在游戏内设密码。可从大厅公开或隐藏密码。在 Ultrahand 浮层输入密码后按 +，再按 A 公开或 X 隐藏。第三方直连时在游戏里验密码。约局提醒使用主服务器。
@@ -62,10 +62,10 @@ Open Update to see both versions and what's new. Close the game and press A to i
 If installation is interrupted, open RoomCircuit Recovery from the Homebrew Menu.
 
 Host or join
-• Host on your own. Press Y in the lobby, choose a node, then confirm with A. Check Hosting line and press + to return to the game. New Local Wireless rooms use that node, including third-party nodes. In the node picker, press R to filter by region or X to test again.
+• Host on your own. Press Y next to Hosting line, choose a node and press A. Press + to return to the game and host in Local Wireless. In the node picker, press R to filter by region or X to test again.
 • Your hosting node is remembered after reboot. In Ultrahand, open RoomCircuit and select Hosting node to change it. Leave the local-wireless session first.
-• Recommendations. Up to three, based on this Switch's network. TCP/UDP identifies the probe, not in-game latency or other players' connections. Unverified regions are labeled.
-• Join. Press Left to browse games, A to filter, and Right to return to rooms. ZL+ZR opens filters. A selects a room and checks your connection to its node. Continue or go back if it is weak, then search in the game.
+• Recommendations. Up to three, based on your connection. Find unclassified nodes under Other regions.
+• Join. Press ZL+ZR by the room list to filter by game and region. Press A to select a room and check its connection, then search in Local Wireless.
 • Test with friends. L in the node picker creates or joins a temporary code. Shared recommendations currently cover the 13 built-in nodes; custom nodes can be measured individually.
 • Game route. Direct rooms use their public node. Legacy Community · LANywhere rooms may use Main server gateway; the connection check labels this. Recovery retries the same node. Rejoin if it fails.
 • Passwords and alerts. Set the password in the game. Use the lobby to share or hide it. In Ultrahand, enter the password and press +. Press A to share or X to hide it. Games check passwords on direct nodes. Appointment alerts use Main server.

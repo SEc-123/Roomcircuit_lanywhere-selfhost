@@ -310,11 +310,21 @@ bool gfx_text_marquee(int x, int y, int size, u32 color, const char *utf8, int m
     return overflow > 0;
 }
 
+static int button_pill_width(int glyph_width)
+{
+    return glyph_width + 14 > 30 ? glyph_width + 14 : 30;
+}
+
+int gfx_button_width(const char *button, const char *label)
+{
+    return button_pill_width(gfx_text_width(18, button)) + 10 + gfx_text_width(22, label);
+}
+
 int gfx_button(int x, int y, const char *button, const char *label)
 {
     const int d = 30;
     int bw = gfx_text_width(18, button);
-    int pill = bw + 14 > d ? bw + 14 : d;  // "+" y letras caben en un círculo; textos largos, en una píldora
+    int pill = button_pill_width(bw);
     gfx_round_rect(x, y, pill, d, d / 2, RGBA(0xD8, 0xD8, 0xD8, 0xFF));
     gfx_text(x + (pill - bw) / 2, y + 5, 18, RGBA(0x11, 0x11, 0x11, 0xFF), button);
     int w = gfx_text(x + pill + 10, y + 3, 22, RGBA(0xE8, 0xE8, 0xE8, 0xFF), label);

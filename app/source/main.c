@@ -1555,6 +1555,13 @@ static bool room_board_available(const View *v)
     return v->node_directory && appointment_entry_available(v);
 }
 
+static bool room_filters_requested(const View *v, u64 down, u64 held)
+{
+    const u64 shortcut = HidNpadButton_ZL | HidNpadButton_ZR;
+    return room_board_available(v) &&
+        ((down & TOUCH_NODE_FILTER) || ((held & shortcut) == shortcut && (down & shortcut)));
+}
+
 /* Rail choices refer to the exact raw game IDs accepted by the directory. */
 static unsigned room_board_games(const View *v, u64 choices[LOBBY_PAGE_SIZE + 1])
 {
@@ -1741,22 +1748,22 @@ static void side_column(const View *v)
     if (can_change_host_region(v)) {
         gfx_round_rect(x, y, SIDE_W, 94, 18, C_PANEL);
         gfx_text(x + 20, y + 12, 24, C_TEXT, ui_text("Hosting line"));
+        const char *change = ui_text("Change");
+        const int change_x = x + SIDE_W - 20 - gfx_button_width("Y", change);
+        const int name_width = change_x - (x + 36);
         if (current_host_line_available(v)) {
             char node_label[96];
-            gfx_text_fit(x + 20, y + 49, 24, C_CODE, v->node_picker_available?hosting_node_label(v,node_label,sizeof(node_label)):region_label(v->host_region), SIDE_W - 94);
+            gfx_text_fit(x + 20, y + 49, 24, C_CODE, v->node_picker_available ?
+                         hosting_node_label(v, node_label, sizeof(node_label)) : region_label(v->host_region),
+                         name_width);
         } else {
             char label[96];
             snprintf(label, sizeof(label), ui_text("%s unavailable"), region_label(v->host_region));
-            gfx_text_fit(x + 20, y + 49, 19, C_WARN, label, SIDE_W - 94);
+            gfx_text_fit(x + 20, y + 49, 19, C_WARN, label, name_width);
         }
-        gfx_button(x + SIDE_W - 62, y + 44, "Y", "");
+        gfx_button(change_x, y + 44, "Y", change);
         add_zone(x, y, SIDE_W, 94, HidNpadButton_Y);
         y += 110;
-    }
-    if(v->node_directory && !v->appointment_game_id && !show_matching(v) && !v->private_panel && !v->private_room){
-        gfx_round_rect(x,y,SIDE_W,76,18,C_PANEL);
-        gfx_button(x+20,y+23,"ZL+ZR",ui_text("Filter rooms"));
-        add_zone(x,y,SIDE_W,76,TOUCH_NODE_FILTER);y+=92;
     }
     if (can_share_game_password(v)) {
         gfx_round_rect(x, y, SIDE_W, 76, 18, C_PANEL);
@@ -1876,27 +1883,28 @@ static void draw_room_board(const View *v)
         g_board_title_started = stamp;
     }
     const u64 title_elapsed = stamp - g_board_title_started;
-    gfx_text(X, 96, 35, C_TEXT, ui_text("Public rooms"));
-    const char *region = nodes_ui_region(v->region_filter);
-    int width = gfx_button(975, 100, "ZL+ZR", region);
-    add_zone(970, 92, width + 24, 51, TOUCH_NODE_FILTER);
+    const char *rooms_title = ui_text("Public rooms");
+    gfx_text(X, 96, 35, C_TEXT, rooms_title);
     if (v->status_valid && supports_reserved(v) && v->st.state != StateInRoom && v->st.state != StateConnecting) {
-        width = gfx_button(705, 100, "L", TR("Buscar partida", "Quick match"));
-        add_zone(695, 92, width + 18, 51, HidNpadButton_L);
+        const int match_x = X + gfx_text_width(35, rooms_title) + 24;
+        const int width = gfx_button(match_x, 100, "L", TR("Buscar partida", "Quick match"));
+        add_zone(match_x - 8, 92, width + 16, 51, HidNpadButton_L);
     }
-    if (can_share_game_password(v)) {
-        width = gfx_button(690, 100, "Y", ui_text("Edit game password"));
-        add_zone(680, 92, width + 18, 51, HidNpadButton_Y);
-    } else if (has_direct_host(v)) {
-        gfx_text_fit(648, 109, 19, C_DIM, ui_text("Syncing room details…"), 314);
+    int page_right = RIGHT - 18;
+    if (v->next_page != LOBBY_PAGE_END) {
+        const char *next = ui_text("Next");
+        const int width = gfx_button_width("ZR", next);
+        const int x = page_right - width;
+        gfx_button(x, 100, "ZR", next);
+        add_zone(x - 8, 92, width + 16, 51, HidNpadButton_ZR);
+        page_right = x - 24;
     }
     if (v->page_index > 0) {
-        width = gfx_button(405, 100, "ZL", ui_text("Prev"));
-        add_zone(397, 92, width + 12, 51, HidNpadButton_ZL);
-    }
-    if (v->next_page != LOBBY_PAGE_END) {
-        width = gfx_button(540, 100, "ZR", ui_text("Next"));
-        add_zone(531, 92, width + 12, 51, HidNpadButton_ZR);
+        const char *prev = ui_text("Prev");
+        const int width = gfx_button_width("ZL", prev);
+        const int x = page_right - width;
+        gfx_button(x, 100, "ZL", prev);
+        add_zone(x - 8, 92, width + 16, 51, HidNpadButton_ZL);
     }
 
     gfx_round_rect(X, Y, RIGHT - X, BOTTOM - Y, 12, C_LINE);
@@ -1905,12 +1913,23 @@ static void draw_room_board(const View *v)
     gfx_rect(RAIL, Y + 1, 1, BOTTOM - Y - 2, C_LINE);
     gfx_rect(X + 1, Y + HEAD, RIGHT - X - 2, 1, C_LINE);
     gfx_text(X + 18, Y + 13, 22, C_TEXT, ui_text("Games"));
+    char filter_label[96];
+    const char *filter_action = ui_text("Filter rooms");
+    if (v->region_filter != 255) {
+        snprintf(filter_label, sizeof(filter_label), "%s · %s", filter_action, nodes_ui_region(v->region_filter));
+        filter_action = filter_label;
+    }
+    const int filter_width = gfx_button_width("ZL+ZR", filter_action);
+    const int filter_x = RIGHT - 18 - filter_width;
+    gfx_button(filter_x, Y + 11, "ZL+ZR", filter_action);
+    add_zone(filter_x - 8, Y + 1, filter_width + 16, HEAD - 1, TOUCH_NODE_FILTER);
     char buffer[160];
     const char *heading = board_game_title(v, v->game_filter, buffer, sizeof(buffer));
+    const int heading_width = filter_x - (RAIL + 40);
     if (name_pane == 2)
-        g_board_title_animates |= gfx_text_marquee(RAIL + 20, Y + 10, 28, C_TEXT, heading, RIGHT - RAIL - 38, title_elapsed);
+        g_board_title_animates |= gfx_text_marquee(RAIL + 20, Y + 10, 28, C_TEXT, heading, heading_width, title_elapsed);
     else
-        gfx_text_fit(RAIL + 20, Y + 10, 28, C_TEXT, heading, RIGHT - RAIL - 38);
+        gfx_text_fit(RAIL + 20, Y + 10, 28, C_TEXT, heading, heading_width);
     u64 choices[LOBBY_PAGE_SIZE + 1];
     const unsigned count = room_board_games(v, choices);
     unsigned focused_index = 0;
@@ -2021,10 +2040,6 @@ static void draw_board_header(const View *v)
     gfx_rect(535, 80, gfx_text_width(22, rooms), 2, C_OK);
     const int width = gfx_button(639, 26, "-", ui_text("Appointments"));
     add_zone(633, 12, width + 12, 61, HidNpadButton_Minus);
-    if (can_change_host_region(v)) {
-        const int node_width = gfx_button(866, 26, "Y", ui_text("Nodes"));
-        add_zone(859, 12, node_width + 14, 61, HidNpadButton_Y);
-    }
     draw_update_action(310, 22, !can_change_provider(v));
     gfx_button(1068, 26, "RS", g_zh ? "English" : "中文");
     add_zone(1056, 12, 168, 61, HidNpadButton_StickR);
@@ -2057,6 +2072,33 @@ static void draw_appointments_link(const View *v)
     if (!appointment_entry_available(v)) return;
     const int width = gfx_button(SIDE_X, 92, "←", ui_text("Appointments"));
     add_zone(SIDE_X - 8, 85, width + 16, 43, HidNpadButton_Left);
+}
+
+static void draw_board_route(const View *v, int right_actions)
+{
+    const bool direct = has_direct_host(v);
+    const bool edit_password = can_share_game_password(v);
+    const bool hosting = direct || edit_password;
+    char label[160], route[256];
+    const char *name = direct ? direct_host_title(v) : edit_password ?
+        board_game_title(v, v->st.game_id, label, sizeof(label)) : hosting_node_label(v, label, sizeof(label));
+    if (!name) name = nodes_ui_name(v->direct_host.node_id);
+    const char *waiting = direct && !edit_password ? ui_text("Syncing room details…") : NULL;
+    snprintf(route, sizeof(route), "%s · %s%s%s", ui_text(hosting ? "My room" : "Hosting line"),
+             name, waiting ? " · " : "", waiting ? waiting : "");
+
+    const char *action = edit_password ? ui_text("Edit password") :
+        can_change_host_region(v) ? ui_text("Change") : NULL;
+    const int action_width = action ? gfx_button_width("Y", action) : 0;
+    const int room = right_actions - MARGIN - 24 - (action ? action_width + 16 : 0);
+    if (room <= 0) return;
+    gfx_text_fit(MARGIN, FOOTER_Y + 26, 19, C_OK, route, room);
+    if (action) {
+        const int route_width = gfx_text_width(19, route);
+        const int action_x = MARGIN + (route_width < room ? route_width : room) + 16;
+        gfx_button(action_x, FOOTER_Y + 20, "Y", action);
+        add_zone(MARGIN - 8, FOOTER_Y + 8, action_x + action_width - MARGIN + 16, 56, HidNpadButton_Y);
+    }
 }
 
 static void draw(const View *v)
@@ -2117,16 +2159,6 @@ static void draw(const View *v)
 
     gfx_rect(0, FOOTER_Y, GFX_W, GFX_H - FOOTER_Y, C_CARD);
     gfx_rect(0, FOOTER_Y, GFX_W, 1, C_LINE);
-    if (board) {
-        char route[192];
-        char node_label[96];
-        const bool hosting = has_direct_host(v);
-        const char *title = hosting ? direct_host_title(v) : NULL;
-        snprintf(route, sizeof(route), "%s · %s", ui_text(hosting ? "My room" : "Hosting line"),
-                 title ? title : hosting ? nodes_ui_name(v->direct_host.node_id) : hosting_node_label(v,node_label,sizeof(node_label)));
-        gfx_round_rect(MARGIN, FOOTER_Y + 31, 8, 8, 4, C_OK);
-        gfx_text_fit(MARGIN + 16, FOOTER_Y + 22, 19, C_OK, route, 352);
-    }
     const char *buttons[8], *labels[8];
     int n = 0;
     if (v->provider_panel) {
@@ -2174,8 +2206,9 @@ static void draw(const View *v)
     }
     int total = 0;
     for (int i = 0; i < n; i++)
-        total += 30 + 10 + gfx_text_width(22, labels[i]) + (i ? 28 : 0);
+        total += gfx_button_width(buttons[i], labels[i]) + (i ? 28 : 0);
     int x = GFX_W - MARGIN - total;
+    if (board) draw_board_route(v, x);
     for (int i = 0; i < n; i++) {
         if (board && buttons[i][0] == 'A')
             gfx_round_rect(x - 8, FOOTER_Y + 12, 56 + gfx_text_width(22, labels[i]), 48, 8, C_ACCENT);
@@ -2810,8 +2843,7 @@ int main(int argc, char **argv)
             svcSleepThread(33000000ULL);
             continue;
         }
-        if(v.node_directory && !v.appointment_game_id && !v.external_confirm && !show_matching(&v) && !v.private_room &&
-           ((down&TOUCH_NODE_FILTER) || ((padGetButtons(&pad)&HidNpadButton_ZL)&&(down&HidNpadButton_ZR)))){
+        if (room_filters_requested(&v, down, padGetButtons(&pad))) {
             if(nodes_ui_filters(&pad,&g_catalog,&v.game_filter,&v.region_filter)){
                 mutexLock(&g_list_lock);g_node_game_filter=v.game_filter;g_node_region=v.region_filter;g_node_mask=nodes_ui_region_mask(v.region_filter);mutexUnlock(&g_list_lock);
                 v.page_index=0;v.sel=-1;v.selection=(LobbyRoomId){0};

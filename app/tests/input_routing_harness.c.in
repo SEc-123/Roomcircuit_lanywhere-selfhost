@@ -24,6 +24,7 @@ const char *nodes_ui_provider(uint32_t id) { return id == 13 ? "custom-13" : Lan
 #define TOUCH_CARD (1ULL << 62)
 #define TOUCH_NETWORK_CHOICE (1ULL << 61)
 #define TOUCH_GAME_RAIL (1ULL << 54)
+#define TOUCH_NODE_FILTER (1ULL << 55)
 /* SOURCE_PAGE_LIMIT */
 /* SOURCE_STATUS */
 /* SOURCE_VIEW */
@@ -520,6 +521,15 @@ int main(void) {
     g_touched_game=0;
     step(&v,TOUCH_GAME_RAIL);assert(!v.game_filter&&!g_node_game_filter&&calls.page==2);checked();
     step(&v,HidNpadButton_Minus);assert(calls.appointment_open==1&&!effects());checked();
+    v=lobby();v.node_directory=true;
+    const u64 filter_chord=HidNpadButton_ZL|HidNpadButton_ZR;
+    assert(room_filters_requested(&v,HidNpadButton_ZL,filter_chord)&&
+           room_filters_requested(&v,HidNpadButton_ZR,filter_chord)&&
+           room_filters_requested(&v,TOUCH_NODE_FILTER,0));checked();
+    assert(!room_filters_requested(&v,HidNpadButton_Y,filter_chord)&&
+           !room_filters_requested(&v,HidNpadButton_ZL,HidNpadButton_ZL));checked();
+    v.private_panel=true;
+    assert(!room_filters_requested(&v,TOUCH_NODE_FILTER,0));checked();
     (void)g_zh;(void)g_es;
     v=lobby();v.node_picker_available=true;v.host_node=0;
     step(&v,HidNpadButton_Y);assert(node_picks==1&&v.host_node==2&&v.host_region==RelayRegionCommunity);checked();

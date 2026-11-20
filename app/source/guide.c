@@ -5,7 +5,7 @@
 typedef struct { const char *title, *steps[3], *key; } GuidePage;
 static const GuidePage pages_zh[] = {
     { "创建房间", {
-        "大厅按 Y 打开节点列表，选中节点后按 A。",
+        "大厅底部按 Y 更换节点，选好后按 A。",
         "确认大厅底部的「建房线路」已显示所选节点。",
         "按 + 回到游戏，在「本地无线」里创建房间。"
     }, "也可在浮层选「建房节点」。新房间会使用所选线路。" },
@@ -13,7 +13,7 @@ static const GuidePage pages_zh[] = {
         "在大厅按 A 选房，线路按房间来源自动切换。",
         "按提示打开游戏，或从 HOME 回游戏。",
         "在“本地无线”里搜索房间并加入。"
-    }, "选房后可查看你到节点的延迟。ZL+ZR 筛选游戏和地区。" },
+    }, "在房间列表按 ZL+ZR 筛选游戏和地区。" },
     { "游戏内配对", {
         "两台都开启 RoomCircuit 的本地无线接管。",
         "在游戏里选本地通信，输入相同连接码。",
@@ -42,7 +42,7 @@ static const GuidePage pages_zh[] = {
     { "在线更新", {
         "打开「更新」，查看当前版本、新版本和更新内容。",
         "关闭游戏后，按 A 下载并安装。",
-        "更新完成后，退出并重启进入虚拟系统。"
+        "更新完成后，重启回原来的大气层模式。"
     }, "安装时请保持开机。" },
     { "自定义节点", {
         "在 config/RoomCircuit/nodes.ini 添加节点。",
@@ -52,7 +52,7 @@ static const GuidePage pages_zh[] = {
 };
 static const GuidePage pages_en[] = {
     { "Host a room", {
-        "Press Y in the lobby, choose a node, then press A.",
+        "Press Y next to Hosting line. Choose a node with A.",
         "Check the selected node under Hosting line in the lobby.",
         "Press + to return to the game and host in Local Wireless."
     }, "You can also choose the hosting node in the overlay." },
@@ -60,7 +60,7 @@ static const GuidePage pages_en[] = {
         "Select with A. The lobby uses that room's source.",
         "Open the game when prompted, or return to it from HOME.",
         "Search in Local Wireless and join the room."
-    }, "Check your latency before joining. ZL+ZR filters game and region." },
+    }, "Press ZL+ZR by the room list to filter game and region." },
     { "Pair in game", {
         "Enable RoomCircuit on both consoles.",
         "Choose local communication and enter the same link code.",
@@ -89,7 +89,7 @@ static const GuidePage pages_en[] = {
     { "Online update", {
         "Open Update to see both versions and what's new.",
         "Close the game and press A to download and install.",
-        "When finished, exit and restart into your virtual system."
+        "Restart into the same Atmosphère mode when finished."
     }, "Keep the console on while installing." },
     { "Custom nodes", {
         "Add nodes to config/RoomCircuit/nodes.ini.",

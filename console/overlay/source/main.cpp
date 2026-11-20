@@ -396,7 +396,7 @@ namespace {
             case NodeRegionAmericas: return tr("Americas", "美洲");
             case NodeRegionOceania: return tr("Oceania", "大洋洲");
             case NodeRegionAfrica: return tr("Africa", "非洲");
-            default: return tr("Region unknown", "地区未知");
+            default: return tr("Other regions", "其他地区");
         }
     }
 

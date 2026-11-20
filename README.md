@@ -35,15 +35,15 @@ You need a Switch running Atmosphère, an internet connection, and a game with a
 
 ### Host a room
 
-1. From the lobby, press **Y** to open **Nodes**. Choose a node and press **A**. In the picker, press **R** to filter by region, **X** to retest, or **L** to test with friends.
-2. Check **Hosting line** at the bottom of the lobby. Press **+** to close RoomCircuit, then return to the game and create a room in **Local Wireless**. The new room uses the selected node.
-3. Set the room password in the game, then reopen RoomCircuit. Once the lobby shows **My room** and the password action is available, press **Y** and choose **Share in lobby** or **Keep password hidden**.
+1. Press **Y** next to **Hosting line** at the bottom of the lobby. Choose a node and press **A**. In the picker, press **R** to filter by region, **X** to retest, or **L** to test with friends.
+2. Press **+** to return to the game and create a room in **Local Wireless**.
+3. Set the room password in the game, then reopen RoomCircuit. Press **Y** next to **My room** and choose **Share in lobby** or **Keep password hidden**.
 
 You can also choose the hosting node from the RoomCircuit overlay in Ultrahand. Leave the current local-wireless session before switching nodes. The overlay follows Ultrahand's theme, side and sound settings. It needs Ultrahand and its loader; the Album app works separately.
 
 ### Join a room
 
-1. Use **ZL + ZR** to filter the lobby by game and region. Select a room and press **A**. RoomCircuit checks your connection and selects the room's node.
+1. Press **ZL + ZR** by the room list to filter by game and region. Select a room and press **A**. RoomCircuit checks your connection and selects the room's node.
 2. Open or return to the game, choose **Local Wireless**, and search for the room. Enter the game's password when prompted.
 
 If the game uses link codes instead of a room list, choose the same node, enter the same code in the game, and start local matchmaking on both consoles.
