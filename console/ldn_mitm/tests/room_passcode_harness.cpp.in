@@ -58,6 +58,7 @@ static bool SendFrame(u8, const void *body, size_t size, const void *extra=nullp
 
 namespace lanywhere {
 using ::DescribeRoomPasscodeHost;
+using ::DescribeRoomPasscodeHostState;
 using ::LookupRoomPasscode;
 using ::ShareRoomPasscode;
 using ::SetRoomAccess;
@@ -83,6 +84,7 @@ public:
     Result SetRoomPasscode(RoomPasscodeChange change, sf::Out<u32> status);
     Result GetRoomPasscode(RoomPasscodeLookup lookup, sf::Out<RoomPasscodeReply> reply);
     Result GetRoomPasscodeHost(sf::Out<RoomPasscodeHost> host);
+    Result GetRoomPasscodeHostState(sf::Out<RoomPasscodeHostState> host);
     Result SetGameRoomAccess(RoomAccessChange change, sf::Out<u32> status);
     Result UnlockGameRoom(RoomAccessUnlock unlock, sf::Out<u32> status);
     Result SelectUnifiedLobbyRoom(UnifiedRoomRequest request);
@@ -249,6 +251,12 @@ int main() {
     std::signal(SIGPIPE, SIG_IGN);
     LanywhereService ipc;
     RoomPasscodeHost description{};
+    RoomPasscodeHostState access_state{};
+    const auto expect_mode = [&](RoomAccessMode mode) {
+        assert(ipc.GetRoomPasscodeHostState({&access_state}) == 0);
+        assert(access_state.status == RoomPasscodeOk && access_state.mode == mode &&
+               std::string(access_state.room) == "ABC234");
+    };
     RoomPasscodeChange change{"ABC234", {}};
     RoomPasscodeLookup lookup{42, "ABC234"};
     RoomPasscodeReply found{};
@@ -297,11 +305,15 @@ int main() {
         g_direct_registration.verified_at = DirectMetadataNow();
         assert(ipc.GetRoomPasscodeHost({&description}) == 0 && description.status == RoomPasscodeOk);
         assert(std::strcmp(description.room, change.room) == 0);
+        expect_mode(RoomAccessNone);
         assert(SetRoomAccess({change, 0, 0}) == RoomPasscodeUnavailable && directory.seen_direct().empty());
         directory.direct_capability = true;
         assert(ipc.SetGameRoomAccess({change, 0, 0}, {&status}) == 0 && status == RoomPasscodeOk);
+        expect_mode(RoomAccessShared);
         assert(ipc.SetGameRoomAccess({change, 1, 0}, {&status}) == 0 && status == RoomPasscodeOk);
+        expect_mode(RoomAccessHidden);
         assert(ipc.SetRoomPasscode({"ABC234", {}}, {&status}) == 0 && status == RoomPasscodeOk);
+        expect_mode(RoomAccessNone);
         const auto requests = directory.seen_direct();
         assert(requests.size() == 3 && directory.seen().empty());
         for (size_t i = 0; i < requests.size(); i++) {
@@ -355,8 +367,13 @@ int main() {
         std::strcpy(g_error, "unchanged");
         assert(ipc.GetRoomPasscodeHost({&description}) == 0);
         assert(description.status == RoomPasscodeOk && std::string(description.room) == "ABC234");
+        expect_mode(RoomAccessNone);
         assert(ipc.SetRoomPasscode(change, {&status}) == 0 && status == RoomPasscodeOk);
+        expect_mode(RoomAccessShared);
+        ++g_stream_epoch; // Reconnecting the same membership keeps the saved mode.
+        expect_mode(RoomAccessShared);
         assert(ipc.SetRoomPasscode({"ABC234", {}}, {&status}) == 0 && status == RoomPasscodeOk);
+        expect_mode(RoomAccessNone);
         const auto requests = relay.seen();
         assert(requests.size() == 2);
         for (const auto &body : requests) {
@@ -366,7 +383,7 @@ int main() {
         }
         assert(requests[0][7] == ROOM_PASSCODE_MAX && std::memcmp(requests[0].data() + 24, code.data(), code.size()) == 0);
         assert(requests[1][7] == 0 && std::all_of(requests[1].begin() + 24, requests[1].end(), [](u8 b) { return b == 0; }));
-        assert(g_stream_epoch == 11 && g_state == RelayState::InRoom && std::string(g_error) == "unchanged");
+        assert(g_stream_epoch == 12 && g_state == RelayState::InRoom && std::string(g_error) == "unchanged");
     }
     {
         PasscodeRelay relay;
@@ -458,6 +475,12 @@ int main() {
         assert(relay.seen().empty()); // Old server: no downgrade of hidden to shared.
         g_capabilities |= ROOM_ACCESS_CAPABILITY;
         assert(ipc.SetGameRoomAccess(access, {&status}) == 0 && status == RoomPasscodeOk);
+        expect_mode(RoomAccessHidden);
+        const auto membership = g_token;
+        ++g_token; // The same displayed room code can be used by a new membership.
+        expect_mode(RoomAccessNone);
+        g_token = membership;
+        expect_mode(RoomAccessHidden);
         access.hidden = 0;
         assert(ipc.SetGameRoomAccess(access, {&status}) == 0 && status == RoomPasscodeOk);
         access.change = {"ABC234", {}};

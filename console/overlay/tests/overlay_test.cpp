@@ -11,7 +11,7 @@ static u32 storage_health=0;
 static bool present=true,ignore_set=false;static int opens=0,sets=0;static u64 ticks=1;
 static LanywhereOverlayStatus status{};
 static LanywhereOverlayMatch match{};
-static RoomPasscodeHost passcode_host{};
+static RoomPasscodeHostState passcode_host{};
 static NodeHostInfo host_node{};
 static NodeActiveRouteInfo active_route{};
 static NodeDynamicCatalog node_catalog{};
@@ -68,14 +68,25 @@ Result mockDispatch(Service*,u32 command,const void*in,size_t in_size,void*out,s
      std::memcpy(params.buffers[0].ptr,&reply,sizeof(reply));return 0;
  }
  if(command==3){std::memcpy(out,&status,size);return 0;}if(command==9){std::memcpy(out,&match,size);return 0;}
- if (command == ROOM_PASSCODE_IPC_HOST) {
+ if (command == ROOM_PASSCODE_HOST_STATE_IPC) {
      assert(size == sizeof(passcode_host));
      std::memcpy(out, &passcode_host, size);
+     return 0;
+ }
+ if (command == ROOM_PASSCODE_IPC_HOST) {
+     RoomPasscodeHost legacy{};
+     assert(size == sizeof(legacy));
+     legacy.status = passcode_host.status;
+     std::memcpy(legacy.room, passcode_host.room, sizeof(legacy.room));
+     std::memcpy(out, &legacy, size);
      return 0;
  }
  if (command == ROOM_ACCESS_IPC_SET) {
      assert(in_size == sizeof(last_access) && size == sizeof(u32));
      std::memcpy(&last_access, in, in_size);
+     if (share_status == RoomPasscodeOk)
+         passcode_host.mode = !last_access.change.passcode[0] ? RoomAccessNone :
+             last_access.hidden ? RoomAccessHidden : RoomAccessShared;
      *static_cast<u32 *>(out) = share_status;
      ++share_count;
      return 0;
@@ -316,6 +327,12 @@ static void testPasscodeGui() {
     ticks += 1000;
     gui.update();
     auto *action = findItem(main_ui.get(), "Game password");
+    assert(action && action->value == "Not set");
+    unknown_command = ROOM_PASSCODE_HOST_STATE_IPC;
+    refresh();
+    gui.update();
+    assert(action->value == "Unknown"); // An older module still permits editing.
+    unknown_command = 0;
     assert(action && action->onClick(HidNpadButton_A));
     auto &editor = tsl::nextGui;
     assert(editor && share_count == 0);
@@ -353,8 +370,16 @@ static void testPasscodeGui() {
     assert(last_access.hidden == 0 && last_access.reserved == 0);
     assert(findItem(edit_ui.get(), "Password shared in lobby."));
     assert(!findItem(edit_ui.get(), "[00Aa!]"));
+    gui.update();
+    assert(action->value == "Shared");
+    g_chinese = true;
+    gui.update();
+    assert(action->value == "已分享");
+    g_chinese = false;
     press(HidNpadButton_Minus);
     assert(share_count == 2 && last_access.change.passcode[0] == 0 && last_access.hidden == 0);
+    gui.update();
+    assert(action->value == "Not set");
 
     press(HidNpadButton_R); // Digits again.
     for (size_t i = 0; i < ROOM_PASSCODE_MAX; ++i) press(HidNpadButton_A);
@@ -366,10 +391,14 @@ static void testPasscodeGui() {
     press(HidNpadButton_X);
     assert(share_count == 3 && last_access.hidden == 1 &&
            findItem(edit_ui.get(), "Try again in a moment."));
+    gui.update();
+    assert(action->value == "Not set");
     for (char c : last_access.change.passcode) assert(c == '0');
     share_status = RoomPasscodeOk;
     press(HidNpadButton_X);
     assert(share_count == 4 && last_access.hidden == 1 && findItem(edit_ui.get(), "Password hidden."));
+    gui.update();
+    assert(action->value == "Hidden");
 
     fail_command = ROOM_ACCESS_IPC_SET;
     press(HidNpadButton_A);
@@ -381,8 +410,11 @@ static void testPasscodeGui() {
 
     std::memcpy(status.code, "ABC124", 6);
     std::memcpy(passcode_host.room, "ABC124", 6);
+    passcode_host.mode = RoomAccessNone;
     press(HidNpadButton_A);
     assert(share_count == 4 && findItem(edit_ui.get(), "Room closed or changed."));
+    gui.update();
+    assert(action->value == "Not set");
     press(HidNpadButton_B);
     assert(!editor->handleInput(HidNpadButton_B, 0, {}, {}, {}));
     edit_ui.reset();

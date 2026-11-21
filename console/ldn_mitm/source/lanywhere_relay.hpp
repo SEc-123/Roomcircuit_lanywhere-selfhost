@@ -126,6 +126,7 @@ namespace ams::mitm::lanywhere {
                            u64 game_id = 0, bool self_only = false, bool background = false);
     void ExchangeAppointment(const AppointmentRequest &request, AppointmentResponse *response);
     RoomPasscodeHost DescribeRoomPasscodeHost();
+    RoomPasscodeHostState DescribeRoomPasscodeHostState();
     u32 ShareRoomPasscode(const RoomPasscodeChange &change);
     u32 SetRoomAccess(const RoomAccessChange &change);
     u32 UnlockRoomAccess(const RoomAccessUnlock &unlock);
