@@ -1,0 +1,106 @@
+name: Verify experimental native online
+on:
+  push:
+    paths:
+      - 'experimental/native-online/**'
+      - '.github/workflows/native-online.yml'
+  pull_request:
+    paths:
+      - 'experimental/native-online/**'
+      - '.github/workflows/native-online.yml'
+permissions:
+  contents: read
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: false
+      - name: Test account broker
+        working-directory: experimental/native-online/native-backend
+        run: go test -race -mod=readonly ./...
+      - name: Test username account core
+        working-directory: experimental/native-online/native-backend/username-core
+        run: go test -race -mod=readonly ./...
+      - name: Test native account adapter
+        working-directory: experimental/native-online/native-backend/nx-adapter
+        run: go test -race -mod=readonly ./...
+      - name: Test TLS ingress
+        working-directory: experimental/native-online/native-backend/ingress
+        run: go test -race -mod=readonly ./...
+      - name: Test staging registration gateway
+        working-directory: experimental/native-online/native-backend/staging-profile/register-gateway
+        run: go test -race -mod=readonly ./...
+      - name: Test isolated staging database and service templates
+        working-directory: experimental/native-online/native-backend/staging-profile
+        run: |
+          python3 -B systemd/test_render.py
+          python3 -B database/test_database.py
+      - name: Test emuMMC startup boundary
+        working-directory: experimental/native-online/native-validation/emummc-startup
+        run: sh test-startup.sh
+      - name: Test TLS, DNS, and certificate-store parsing
+        working-directory: experimental/native-online
+        run: |
+          go test -race native-client/tls_scope_test.go
+          c++ -std=c++20 -Wall -Wextra -Werror native-client/test_private_dns.cpp -o "$RUNNER_TEMP/native-dns-test"
+          "$RUNNER_TEMP/native-dns-test"
+          cc -std=c11 -Wall -Wextra -Werror -c native-validation/trust-store/store.c -o "$RUNNER_TEMP/native-store.o"
+          c++ -std=c++20 -Wall -Wextra -Werror native-client/test_private_certstore.cpp "$RUNNER_TEMP/native-store.o" -o "$RUNNER_TEMP/native-store-test"
+          "$RUNNER_TEMP/native-store-test"
+      - name: Test explicit TLS configuration and alias preflight
+        working-directory: experimental/native-online
+        run: |
+          python3 native-validation/build-inputs/test_prepare.py
+          python3 native-validation/preflight/test_check.py
+          python3 native-validation/https-endpoint/test_prepare_endpoint.py
+          python3 native-validation/https-endpoint/test_local_profile.py
+  username-postgres-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        title: [mario-party-superstars, pico-park]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check out pinned NEX source
+        uses: actions/checkout@v4
+        with:
+          repository: openpak/switch-nex
+          ref: 2af4741d321f9d9f9aa45f96454137f86130c288
+          path: .native-nex-source
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: false
+      - name: Download pinned Go modules
+        working-directory: .native-nex-source
+        run: go mod download
+      - name: Prepare offline staging build dependencies
+        if: matrix.title == 'mario-party-superstars'
+        working-directory: experimental/native-online
+        run: |
+          for module in account-lab native-backend native-backend/username-core native-backend/nx-adapter native-backend/staging-profile/register-gateway; do
+            (cd "$module" && go mod download)
+          done
+      - name: Verify staging profile generation
+        if: matrix.title == 'mario-party-superstars'
+        working-directory: experimental/native-online/native-backend/staging-profile
+        env:
+          RC_NEX_SOURCE: ${{ github.workspace }}/.native-nex-source
+        run: python3 -B test_prepare.py
+      - name: Test isolated username grant and title-scoped NEX flow
+        working-directory: experimental/native-online/native-backend
+        env:
+          TEST_TITLE: ${{ matrix.title }}
+        run: python3 -B username-core/e2e.py --nex-source "$GITHUB_WORKSPACE/.native-nex-source" --title "$TEST_TITLE"
