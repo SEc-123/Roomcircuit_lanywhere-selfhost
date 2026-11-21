@@ -67,7 +67,8 @@
     AMS_SF_METHOD_INFO(C, H, 48, Result, GetStorageHealth, (ams::sf::Out<u32> health), (health)) \
     AMS_SF_METHOD_INFO(C, H, 49, Result, GetHostNodeIdentity, (const ams::sf::OutBuffer &identity), (identity)) \
     AMS_SF_METHOD_INFO(C, H, 50, Result, StartHostNodeTask, (const ams::sf::InBuffer &identity, ams::sf::Out<u64> task_id), (identity, task_id)) \
-    AMS_SF_METHOD_INFO(C, H, 51, Result, GetHostNodeTask, (u64 task_id, const ams::sf::OutBuffer &out), (task_id, out))
+    AMS_SF_METHOD_INFO(C, H, 51, Result, GetHostNodeTask, (u64 task_id, const ams::sf::OutBuffer &out), (task_id, out)) \
+    AMS_SF_METHOD_INFO(C, H, 52, Result, GetRoomPasscodeHostState, (ams::sf::Out<RoomPasscodeHostState> host), (host))
 
 AMS_SF_DEFINE_INTERFACE(ams::mitm::lanywhere, ILanywhereService, AMS_ILANYWHERE_SERVICE, 0x594E414C)
 
@@ -112,6 +113,7 @@ namespace ams::mitm::lanywhere {
             Result SetRoomPasscode(RoomPasscodeChange change, sf::Out<u32> status);
             Result GetRoomPasscode(RoomPasscodeLookup lookup, sf::Out<RoomPasscodeReply> reply);
             Result GetRoomPasscodeHost(sf::Out<RoomPasscodeHost> host);
+            Result GetRoomPasscodeHostState(sf::Out<RoomPasscodeHostState> host);
             Result SetGameRoomAccess(RoomAccessChange change, sf::Out<u32> status);
             Result UnlockGameRoom(RoomAccessUnlock unlock, sf::Out<u32> status);
             Result ReadAppointmentSubscriptions(const sf::OutBuffer &out);

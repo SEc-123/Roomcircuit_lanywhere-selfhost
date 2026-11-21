@@ -54,7 +54,8 @@ Result lanywhereOverlayGetStorageHealth(Service *s, u32 *health);
 Result lanywhereOverlayGetNodeCatalog(Service *s, NodeDynamicCatalog *out);
 Result lanywhereOverlayStartNodeTask(Service *s, const NodeDynamicEntry *expected, u64 *task_id);
 Result lanywhereOverlayGetNodeTask(Service *s, u64 task_id, NodeHostTaskStatus *out);
-Result lanywhereOverlayGetPasscodeHost(Service *s, RoomPasscodeHost *out);
+#define OVERLAY_ROOM_ACCESS_UNKNOWN UINT32_MAX
+Result lanywhereOverlayGetPasscodeHostState(Service *s, RoomPasscodeHostState *out);
 Result lanywhereOverlaySetRoomAccess(Service *s, const RoomAccessChange *change, u32 *status);
 
 #ifdef __cplusplus

@@ -18,7 +18,7 @@ namespace {
     Service g_ldnSrv{}, g_relay{};
     LdnMitmConfigService g_config{};
     overlay::Snapshot g_snapshot{};
-    RoomPasscodeHost g_passcode_host{};
+    RoomPasscodeHostState g_passcode_host{};
     NodeHostInfo g_host_node{};
     bool g_host_node_valid = false;
     NodeDynamicEntry g_host_identity{};
@@ -107,7 +107,7 @@ namespace {
                         0 : RC_STORAGE_HEALTH_BOOTSTRAP_UNCHECKED;
             }
             if (status.state == 2 && status.my_index == 0 && status.game_id) {
-                if (R_FAILED(lanywhereOverlayGetPasscodeHost(&g_relay, &g_passcode_host)) ||
+                if (R_FAILED(lanywhereOverlayGetPasscodeHostState(&g_relay, &g_passcode_host)) ||
                     std::memcmp(status.code, g_passcode_host.room, sizeof(status.code)))
                     g_passcode_host = {};
             }
@@ -269,8 +269,7 @@ namespace {
                     if (clear) m_message = tr("Password cleared.", "密码已清除。");
                     else if (request.hidden) m_message = tr("Password hidden.", "密码已隐藏。");
                     else m_message = tr("Password shared in lobby.", "密码已公开到大厅。");
-                    g_notice = m_message;
-                    g_notice_until = armGetSystemTick() + 5 * armGetSystemTickFreq();
+                    refresh();
                     break;
                 case RoomPasscodeInvalid: m_message = tr("Invalid password.", "密码格式无效。"); break;
                 case RoomPasscodeRoomUnavailable: m_message = tr("Room closed or changed.", "房间已关闭或变化。"); break;
@@ -305,7 +304,7 @@ namespace {
         }
 
     public:
-        explicit PasscodeGui(const RoomPasscodeHost &host) {
+        explicit PasscodeGui(const RoomPasscodeHostState &host) {
             std::memcpy(m_change.room, host.room, sizeof(m_change.room));
         }
 
@@ -664,6 +663,13 @@ namespace {
                 }
                 m_list->removeItem(m_password);
                 m_password = nullptr;
+            }
+            if (m_password) {
+                const auto mode = g_passcode_host.mode;
+                const char *value = mode == RoomAccessShared ? tr("Shared", "已分享") :
+                    mode == RoomAccessHidden ? tr("Hidden", "已隐藏") :
+                    mode == RoomAccessNone ? tr("Not set", "未设置") : tr("Unknown", "状态未知");
+                m_password->setValue(value, mode == RoomAccessNone || mode == OVERLAY_ROOM_ACCESS_UNKNOWN);
             }
         }
 

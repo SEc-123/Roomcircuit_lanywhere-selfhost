@@ -333,6 +333,11 @@ namespace ams::mitm::lanywhere {
         R_SUCCEED();
     }
 
+    Result LanywhereService::GetRoomPasscodeHostState(sf::Out<RoomPasscodeHostState> host) {
+        host.SetValue(lanywhere::DescribeRoomPasscodeHostState());
+        R_SUCCEED();
+    }
+
     Result LanywhereService::SetGameRoomAccess(RoomAccessChange change, sf::Out<u32> status) {
         status.SetValue(lanywhere::SetRoomAccess(change));
         R_SUCCEED();

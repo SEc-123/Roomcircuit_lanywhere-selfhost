@@ -16,6 +16,7 @@
 #define ROOM_PASSCODE_IPC_HOST 19
 #define ROOM_ACCESS_IPC_SET 20
 #define ROOM_ACCESS_IPC_UNLOCK 21
+#define ROOM_PASSCODE_HOST_STATE_IPC 52
 
 enum RoomPasscodeStatus {
     RoomPasscodeOk,
@@ -46,6 +47,13 @@ typedef struct {
     uint32_t reserved;
     char room[8];
 } RoomPasscodeHost;
+
+/* The host snapshot exposes only the access mode and room identity. */
+typedef struct {
+    uint32_t status;
+    uint32_t mode;
+    char room[8];
+} RoomPasscodeHostState;
 
 typedef struct {
     uint32_t status;
@@ -82,6 +90,7 @@ static_assert(sizeof(RoomPasscodeChange) == 32);
 static_assert(sizeof(RoomAccessChange) == 40 && sizeof(RoomAccessUnlock) == 40);
 static_assert(sizeof(RoomPasscodeLookup) == 16);
 static_assert(sizeof(RoomPasscodeHost) == 16);
+static_assert(sizeof(RoomPasscodeHostState) == 16);
 static_assert(sizeof(RoomPasscodeReply) == 32 && offsetof(RoomPasscodeReply, passcode) == 8);
 static_assert(sizeof(RoomPasscodeRequest) == 48 && offsetof(RoomPasscodeRequest, game_id) == 16);
 #else
@@ -89,6 +98,7 @@ _Static_assert(sizeof(RoomPasscodeChange) == 32, "room password change");
 _Static_assert(sizeof(RoomAccessChange) == 40 && sizeof(RoomAccessUnlock) == 40, "room access IPC");
 _Static_assert(sizeof(RoomPasscodeLookup) == 16, "room password lookup");
 _Static_assert(sizeof(RoomPasscodeHost) == 16, "room password host");
+_Static_assert(sizeof(RoomPasscodeHostState) == 16, "room password host state");
 _Static_assert(sizeof(RoomPasscodeReply) == 32 && offsetof(RoomPasscodeReply, passcode) == 8, "room password reply");
 _Static_assert(sizeof(RoomPasscodeRequest) == 48 && offsetof(RoomPasscodeRequest, game_id) == 16, "room password request");
 #endif

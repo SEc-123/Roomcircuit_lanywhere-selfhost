@@ -210,12 +210,23 @@ Result lanywhereOverlayGetActiveRoute(Service *s, NodeActiveRouteInfo *out) {
     return 0;
 }
 
-Result lanywhereOverlayGetPasscodeHost(Service *s, RoomPasscodeHost *out) {
+Result lanywhereOverlayGetPasscodeHostState(Service *s, RoomPasscodeHostState *out) {
     memset(out, 0, sizeof(*out));
-    RoomPasscodeHost value = {0};
-    Result rc = serviceDispatchOut(s, ROOM_PASSCODE_IPC_HOST, value);
-    if (R_FAILED(rc)) return rc;
-    if (value.reserved || value.status > RoomPasscodeBusy)
+    RoomPasscodeHostState value = {0};
+    Result rc = serviceDispatchOut(s, ROOM_PASSCODE_HOST_STATE_IPC, value);
+    if (rc == MAKERESULT(10, 221)) {
+        RoomPasscodeHost legacy = {0};
+        rc = serviceDispatchOut(s, ROOM_PASSCODE_IPC_HOST, legacy);
+        if (R_FAILED(rc)) return rc;
+        if (legacy.reserved) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+        value.status = legacy.status;
+        value.mode = OVERLAY_ROOM_ACCESS_UNKNOWN;
+        memcpy(value.room, legacy.room, sizeof(value.room));
+    } else {
+        if (R_FAILED(rc)) return rc;
+        if (value.mode > RoomAccessHidden) return MAKERESULT(Module_Libnx, LibnxError_BadInput);
+    }
+    if (value.status > RoomPasscodeBusy)
         return MAKERESULT(Module_Libnx, LibnxError_BadInput);
     if (value.status == RoomPasscodeOk) {
         if (value.room[6] || value.room[7])

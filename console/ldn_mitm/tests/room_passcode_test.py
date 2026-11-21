@@ -77,7 +77,7 @@ def main():
     names = [(17, 'SetRoomPasscode'), (18, 'GetRoomPasscode'), (19, 'GetRoomPasscodeHost'),
              (20, 'SetGameRoomAccess'), (21, 'UnlockGameRoom'), (25, 'SelectUnifiedLobbyRoom'),
              (28, 'GetRelayRegion'), (29, 'SetRelayRegion'), (30, 'GetRegionalRoomPasscode'), (31, 'UnlockRegionalGameRoom'),
-             (32, 'GetRelayRegions'), (40, 'GetDirectRoomPasscode')]
+             (32, 'GetRelayRegions'), (40, 'GetDirectRoomPasscode'), (52, 'GetRoomPasscodeHostState')]
     for number, name in names:
         assert re.search(rf'AMS_SF_METHOD_INFO\(C, H, {number}, Result, {name}\b', service_header)
     ipc = '\n'.join(function(service, f'Result LanywhereService::{name}(') for _, name in names)

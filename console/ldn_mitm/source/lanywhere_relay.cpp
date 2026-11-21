@@ -3240,9 +3240,25 @@ namespace ams::mitm::lanywhere {
     namespace {
         constexpr int RoomPasscodeTimeoutMs = 1500;
 
-        u32 CapturePasscodeHost(GameRoute *route, u64 *game_id, bool hidden = false) {
+        struct ConfirmedPasscodeAccess {
+            GameRoute host;
+            u64 game_id;
+            RoomAccessMode mode;
+        };
+        constinit os::SdkMutex g_main_passcode_write_lock;
+        ConfirmedPasscodeAccess g_confirmed_passcode_access{}; // Protected by g_lock.
+
+        bool SamePasscodeRoom(const GameRoute &first, const GameRoute &second) {
+            // A room token survives a transport reconnect, unlike the stream epoch.
+            return first.room_token && first.room_token == second.room_token &&
+                first.discovery.ipv4 == second.discovery.ipv4 &&
+                first.discovery.port == second.discovery.port &&
+                !std::memcmp(first.room_code, second.room_code, CodeLength);
+        }
+
+        u32 CapturePasscodeHost(GameRoute *route, u64 *game_id, bool hidden = false, RoomAccessMode *mode = nullptr) {
             std::scoped_lock lock(g_lock);
-            if (g_state != RelayState::InRoom || g_recovering || !g_stream_ready.load())
+            if (g_direct_session.load() || g_state != RelayState::InRoom || g_recovering || !g_stream_ready.load())
                 return RoomPasscodeRoomUnavailable;
             if (g_my_index != 0) return RoomPasscodeNotHost;
             if (std::strcmp(g_room_provider, "self") || !(g_capabilities & ROOM_PASSCODE_CAPABILITY) ||
@@ -3257,6 +3273,11 @@ namespace ams::mitm::lanywhere {
             route->room_token = g_token;
             std::memcpy(route->room_code, g_code, CodeLength);
             *game_id = g_game_id;
+            if (mode) {
+                const auto &confirmed = g_confirmed_passcode_access;
+                *mode = confirmed.game_id == *game_id && SamePasscodeRoom(confirmed.host, *route) ?
+                    confirmed.mode : RoomAccessNone;
+            }
             return RoomPasscodeOk;
         }
 
@@ -3304,26 +3325,42 @@ namespace ams::mitm::lanywhere {
         }
     }
 
-    RoomPasscodeHost DescribeRoomPasscodeHost() {
-        GameRoute route{};
-        u64 game_id = 0;
-        RoomPasscodeHost host{};
+    RoomPasscodeHostState DescribeRoomPasscodeHostState() {
+        RoomPasscodeHostState host{};
         if (g_direct_session.load()) {
-            const auto direct = DescribeDirectHost();
-            if (!(direct.flags & DirectRoomHostCanEdit)) {
+            lanplay::HostedRoom direct{};
+            if (!lanplay::GetHostedRoom(&direct)) {
                 host.status = RoomPasscodeUnavailable;
                 return host;
             }
-            std::scoped_lock lock(g_lock);
+            std::scoped_lock route_lock(g_lock);
+            std::scoped_lock metadata_lock(g_direct_metadata_lock);
+            if (g_direct_registration.epoch != direct.epoch || !DirectMetadataReady(g_direct_registration)) {
+                host.status = RoomPasscodeUnavailable;
+                return host;
+            }
             if (!g_direct_session.load() || g_direct_room.room_epoch != direct.epoch) {
                 host.status = RoomPasscodeRoomUnavailable;
                 return host;
             }
+            host.mode = g_direct_registration.mode;
             std::memcpy(host.room, g_direct_room.room_code, sizeof(host.room));
             return host;
         }
-        host.status = CapturePasscodeHost(&route, &game_id);
+        GameRoute route{};
+        u64 game_id = 0;
+        RoomAccessMode mode = RoomAccessNone;
+        host.status = CapturePasscodeHost(&route, &game_id, false, &mode);
+        host.mode = mode;
         if (host.status == RoomPasscodeOk) std::memcpy(host.room, route.room_code, CodeLength);
+        return host;
+    }
+
+    RoomPasscodeHost DescribeRoomPasscodeHost() {
+        const auto state = DescribeRoomPasscodeHostState();
+        RoomPasscodeHost host{};
+        host.status = state.status;
+        std::memcpy(host.room, state.room, sizeof(host.room));
         return host;
     }
 
@@ -3338,6 +3375,7 @@ namespace ams::mitm::lanywhere {
         const size_t length = end ? static_cast<size_t>(end - change.passcode) : ROOM_PASSCODE_MAX;
         if ((access.hidden && !length) || !ValidRoomPasscodeText(change.passcode, length)) return RoomPasscodeInvalid;
         if (g_direct_session.load()) return SetDirectRoomAccess(access, length);
+        std::scoped_lock write_lock(g_main_passcode_write_lock);
         GameRoute host{};
         RoomPasscodeRequest request{};
         const u32 status = CapturePasscodeHost(&host, &request.game_id, access.hidden != 0);
@@ -3348,7 +3386,17 @@ namespace ams::mitm::lanywhere {
         request.length = static_cast<u8>(length);
         request.host_token = host.room_token;
         std::memcpy(request.passcode, change.passcode, length);
-        return ExchangeRoomPasscode(request, host.discovery, &host).status;
+        const auto reply = ExchangeRoomPasscode(request, host.discovery, &host);
+        if (reply.status == RoomPasscodeOk) {
+            std::scoped_lock lock(g_lock);
+            if (g_direct_session.load() || g_state != RelayState::InRoom || g_my_index != 0 ||
+                g_token != host.room_token || g_game_id != request.game_id ||
+                g_server.sin_addr.s_addr != host.discovery.ipv4 || g_server.sin_port != host.discovery.port ||
+                std::memcmp(g_code, host.room_code, CodeLength)) return RoomPasscodeRoomUnavailable;
+            const auto mode = !length ? RoomAccessNone : access.hidden ? RoomAccessHidden : RoomAccessShared;
+            g_confirmed_passcode_access = {host, request.game_id, mode};
+        }
+        return reply.status;
     }
 
     u32 UnlockRegionalRoomAccess(const RegionalAccessUnlock &regional) {
