@@ -804,14 +804,24 @@ static void draw_list(const GameCatalog *catalog, AppointmentTouchZone touch)
         gfx_text_fit(SideX, 619, 18, MUTED, ui_text(alert), Right - SideX);
 }
 
-static void draw_games(AppointmentTouchZone touch)
+static const char *installed_game_name(const GameCatalog *catalog, const GameCacheRecord *game)
+{
+    const CatalogMatch match = game_catalog_identify(catalog, game->application_id, 0);
+    const bool chinese = ui_chinese();
+    const char *preferred = chinese ? game->names.chinese : game->names.english;
+    const char *name = game_display_name(&match, chinese, preferred, strcmp(game->names.english, game->names.chinese) != 0,
+        game->names.english, game->names.chinese);
+    return name ? name : ui_text("Game info not provided");
+}
+
+static void draw_games(const GameCatalog *catalog, AppointmentTouchZone touch)
 {
     gfx_round_rect(ListX, PanelY, Right - ListX, PanelBottom - PanelY, 11, LINE);
     gfx_round_rect(ListX + 1, PanelY + 1, Right - ListX - 2, PanelBottom - PanelY - 2, 10, PAPER);
     for (int i = 0; i < g_game_count; i++) {
         const int y = ListY + i * StepH;
         row_surface(ListX + 11, y, Right - ListX - 22, RowH, i == g_game_selected, i == g_game_selected);
-        const char *name = ui_chinese() ? g_games[i].names.chinese : g_games[i].names.english;
+        const char *name = installed_game_name(catalog, &g_games[i]);
         draw_game_title(ListX + 24, y + 16, 24, TEXT, name, Right - ListX - 48,
             i == g_game_selected, AnimateGamePick, (GameFilter){g_games[i].application_id, true});
         if (i + 1 != g_game_count) gfx_rect(ListX + 24, y + RowH + 3, Right - ListX - 48, 1, LINE);
@@ -825,9 +835,9 @@ static void draw_games(AppointmentTouchZone touch)
         action_right(Right - 6, 107, "ZR", "Next", HidNpadButton_ZR, touch);
 }
 
-static void draw_time(AppointmentTouchZone touch)
+static void draw_time(const GameCatalog *catalog, AppointmentTouchZone touch)
 {
-    const char *name = ui_chinese() ? g_game.names.chinese : g_game.names.english;
+    const char *name = installed_game_name(catalog, &g_game);
     gfx_round_rect(ListX, PanelY, Right - ListX, 241, 11, LINE);
     gfx_round_rect(ListX + 1, PanelY + 1, Right - ListX - 2, 239, 10, PAPER);
     draw_game_title(ListX + 24, PanelY + 19, 26, TEXT, name, Right - ListX - 48,
@@ -880,8 +890,8 @@ void appointments_draw(const GameCatalog *catalog, AppointmentTouchZone touch)
     if (g_screen == ListScreen) {
         draw_list(catalog, touch);
     } else {
-        if (g_screen == GameScreen) draw_games(touch);
-        else draw_time(touch);
+        if (g_screen == GameScreen) draw_games(catalog, touch);
+        else draw_time(catalog, touch);
         action(ListX, FooterY + 20, "B", "Back", HidNpadButton_B, touch);
     }
     if (g_notice)

@@ -6,35 +6,33 @@ This directory supplies **display metadata**, not a game compatibility list, an 
 
 The bulk source is the community-maintained, metadata-only [blawar/titledb](https://github.com/blawar/titledb), pinned to commit [`d424690446eec6f4484209b9a1c067c7f7511398`](https://github.com/blawar/titledb/tree/d424690446eec6f4484209b9a1c067c7f7511398). It declares the MIT license; the exact notice is included in `LICENSE.titledb`. This is not Nintendo attestation or endorsement.
 
-`source-lock.json` pins the US/GB English and CN/HK Chinese regional files, their byte lengths, Git blob hashes, sanitized content hashes and license hash. `provenance.json` adds SHA-256 digests of the original public source bytes, the generator and curated inputs, plus the selected source file/NSUID for each name.
+`source-lock.json` pins the English storefront files, CN/HK Chinese files and Japanese/Korean original-name sources, with Git blob hashes, sanitized content hashes and the license hash. `provenance.json` records the source or publisher reference for each selected name.
 
-The factual simplified Sword label **宝可梦 剑** is checked against Nintendo's [official simplified-Chinese announcement](https://www.nintendo.com/hk/topics/article/a_190812_01_sc.html), with a [second publisher reference](https://www.nintendo.com/hk/topics/article/a_200326_03_sc.html). Only this checked label is overridden; missing Chinese names are not automatically translated. The two additional curated labels and LCID observations publish only their limited selected title records, observation date and method. Their fingerprint covers those public records alone. No whole-device cache fingerprint, user path, device identifier or wider user inventory is retained.
+`curated-labels.json` includes publisher references for labels such as Nintendo's [马力欧卡丁车8 豪华版](https://www.nintendoswitch.com.cn/software/70010000027090) and Larian's [神界：原罪2 - 终极版](https://store.steampowered.com/app/435150/Divinity_Original_Sin_2/?l=schinese). `lcid-observations.json` includes only selected application and communication IDs from recorded local metadata or public retail observations.
 
 ## Data contract
 
-- `catalog.json`: `schema: 1`, `source_commit`, `scope`, and sorted `records` containing **`appid`**, **`en`**, **`zh`**, **`zh_locale`**. IDs are uppercase hex16. A language can be empty. Chinese mainland names are preferred; HK fallback is identified as `zh-Hant-HK` by source locale and is not machine-converted. Roman-only HK names are not counted as Chinese translations.
-- `lcid-mappings.json`: only explicit limited NACP observations. Each entry has `lcid`, observed `appids`, evidence IDs, `ambiguous`, `exhaustive: false`, `unknown_additional_candidates_possible: true`, and `launch_authority: false`.
+- `catalog.json` contains sorted base AppIDs and known English and Chinese names. Records without either name may carry `original` and `original_locale` from a Japanese or Korean storefront.
+- `lcid-mappings.json` records observed local communication IDs, possible AppIDs and their sources. Title lookup is for display. Local launch still requires verification on the Switch.
 - `raw_appid_catalog_candidates` is separate from observed NACP `appids`. Numeric equality alone is a **display-only catalog candidate**, never proof that AppID equals LCID.
 - `curated-labels.json` and `lcid-observations.json` contain the readable evidence and limited public observations.
 - `name-conflicts.json` retains differing regional/source names; it does not merge application identities. Selection is deterministic: base entry before demo, preferred source locale, then numeric NSUID and name.
 
 For the two Violet-related LCIDs, ambiguity was observed and remains explicit. The Scarlet AppID-valued shared identifier has Violet in its observed NACP list and Scarlet only as a separate raw-ID catalog candidate. Unknown further applications remain possible. A single published candidate must not be treated as a globally unique LCID mapping.
 
-For **0100ABF008968000**, the catalog supplies **Pokémon™ Sword / 宝可梦 剑**. There is **no independent Sword NACP relation** in these inputs. A screenshot displaying that raw LCID may therefore receive a labeled catalog-candidate title. Local NS/NACP queries must independently establish availability, installed state and launch suitability.
+The recorded Sword/Shield, Brilliant Diamond/Shining Pearl, Let's Go Pikachu/Eevee and Scarlet/Violet shared identifiers retain multiple candidates. A room with only a shared identifier displays the candidates. A host-provided game identity can resolve the edition.
 
 ## Coverage of the pinned sample
 
 | Measure | Count |
 |---|---:|
-| Unique eligible Switch 1 base AppIDs | 20,910 |
-| English regional names | 19,999 |
-| Chinese names | 3,530 |
-| Both languages | 2,619 |
-| Simplified Chinese / curated Hans | 65 |
-| Identified HK Chinese fallback | 3,465 |
-| Regional name conflict groups | 842 |
-| Explicit observed LCID relations | 3 |
-| Known ambiguous LCIDs | 2 |
+| Unique eligible Switch 1 base AppIDs | 25,049 |
+| English regional names | 20,059 |
+| Chinese names | 3,531 |
+| Both languages | 2,629 |
+| Original-name fallback | 4,088 |
+| Explicit observed communication IDs | 9 |
+| Known shared communication IDs | 5 |
 
 `coverage.json` includes per-source raw/accepted/excluded counts. These figures describe the pinned input sample, **not every Switch game worldwide** and not supported multiplayer games. Base application IDs can include demos when a valid ID is supplied.
 

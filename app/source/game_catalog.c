@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-enum { HeaderSize = 20, TitleSize = 16, AliasSize = 24 };
+enum { HeaderSize = 20, TitleSizeV1 = 16, TitleSizeV2 = 20, AliasSize = 24 };
 
 static uint32_t read32(const unsigned char *p)
 {
@@ -19,14 +19,18 @@ bool game_catalog_open(GameCatalog *catalog, const void *data, size_t size)
     if (!catalog) return false;
     *catalog = (GameCatalog){0};
     const unsigned char *p = data;
-    if (!p || size < HeaderSize || memcmp(p, "LYCAT1\0\0", 8) != 0) return false;
+    if (!p || size < HeaderSize) return false;
+    size_t stride = TitleSizeV1;
+    if (memcmp(p, "LYCAT2\0\0", 8) == 0) stride = TitleSizeV2;
+    else if (memcmp(p, "LYCAT1\0\0", 8) != 0) return false;
     const size_t titles = read32(p + 8), aliases = read32(p + 12), text = read32(p + 16);
     const size_t remaining = size - HeaderSize;
-    if (!titles || titles > remaining / TitleSize || aliases > (remaining - titles * TitleSize) / AliasSize ||
-        !text || text != remaining - titles * TitleSize - aliases * AliasSize)
+    if (!titles || titles > remaining / stride || aliases > (remaining - titles * stride) / AliasSize ||
+        !text || text != remaining - titles * stride - aliases * AliasSize)
         return false;
-    const unsigned char *alias_data = p + HeaderSize + titles * TitleSize;
-    *catalog = (GameCatalog){p + HeaderSize, alias_data, alias_data + aliases * AliasSize, titles, aliases, text};
+    const unsigned char *alias_data = p + HeaderSize + titles * stride;
+    *catalog = (GameCatalog){.titles = p + HeaderSize, .aliases = alias_data, .text = alias_data + aliases * AliasSize,
+        .title_count = titles, .alias_count = aliases, .text_size = text, .title_stride = stride};
     return true;
 }
 
@@ -54,10 +58,12 @@ static const char *title_text(const GameCatalog *catalog, uint32_t offset)
 
 static CatalogMatch by_application(const GameCatalog *catalog, uint64_t id, CatalogKind kind)
 {
-    const unsigned char *row = find_id(catalog->titles, catalog->title_count, TitleSize, id);
+    const unsigned char *row = find_id(catalog->titles, catalog->title_count, catalog->title_stride, id);
     if (!row) return (CatalogMatch){0};
     const char *en = title_text(catalog, read32(row + 8)), *zh = title_text(catalog, read32(row + 12));
-    return en || zh ? (CatalogMatch){id, en, zh, kind} : (CatalogMatch){0};
+    const char *original = catalog->title_stride == TitleSizeV2 ? title_text(catalog, read32(row + 16)) : NULL;
+    return en || zh || original ?
+        (CatalogMatch){.app_id = id, .en = en, .zh = zh, .kind = kind, .original = original} : (CatalogMatch){0};
 }
 
 CatalogMatch game_catalog_identify(const GameCatalog *catalog, uint64_t host_app_id, uint64_t lcid)
@@ -69,7 +75,8 @@ CatalogMatch game_catalog_identify(const GameCatalog *catalog, uint64_t host_app
     if (alias) {
         const uint64_t app_id = read64(alias + 8);
         if (app_id) return by_application(catalog, app_id, CatalogCommunication);
-        return (CatalogMatch){0, title_text(catalog, read32(alias + 16)), title_text(catalog, read32(alias + 20)), CatalogShared};
+        return (CatalogMatch){.en = title_text(catalog, read32(alias + 16)),
+            .zh = title_text(catalog, read32(alias + 20)), .kind = CatalogShared};
     }
     /* Equal 64-bit values are only a display clue; NACP can use a different or shared LCID. */
     return by_application(catalog, lcid, CatalogEqualId);
@@ -78,7 +85,24 @@ CatalogMatch game_catalog_identify(const GameCatalog *catalog, uint64_t host_app
 const char *game_catalog_name(const CatalogMatch *match, bool chinese)
 {
     if (!match) return NULL;
-    return chinese ? (match->zh ? match->zh : match->en) : (match->en ? match->en : match->zh);
+    const char *preferred = chinese ? match->zh : match->en;
+    const char *alternate = chinese ? match->en : match->zh;
+    return preferred ? preferred : alternate ? alternate : match->original;
+}
+
+/* A catalog label for the selected language takes priority over room/cache
+ * names, which can carry untranslated text in either slot. */
+const char *game_display_name(const CatalogMatch *match, bool chinese, const char *local, bool local_preferred,
+                              const char *en, const char *zh)
+{
+    const char *localized = match ? (chinese ? match->zh : match->en) : NULL;
+    if (localized) return localized;
+    if (local_preferred && local && local[0]) return local;
+    const char *preferred = chinese ? zh : en;
+    if (preferred && preferred[0]) return preferred;
+    if (local && local[0]) return local;
+    const char *alternate = chinese ? en : zh;
+    return alternate && alternate[0] ? alternate : game_catalog_name(match, chinese);
 }
 
 enum { SearchQuerySize = 96, SearchTitleSize = 384 };
@@ -131,16 +155,17 @@ static void normalize_search(const char *text, char *out, size_t capacity, bool 
 static bool search_title(const CatalogMatch *title, const char *compact, const char *words)
 {
     if (!*compact) return true;
-    char en[SearchTitleSize], zh[SearchTitleSize];
+    char en[SearchTitleSize], zh[SearchTitleSize], original[SearchTitleSize];
     normalize_search(title->en, en, sizeof(en), false);
     normalize_search(title->zh, zh, sizeof(zh), false);
-    if (strstr(en, compact) || strstr(zh, compact)) return true;
+    normalize_search(title->original, original, sizeof(original), false);
+    if (strstr(en, compact) || strstr(zh, compact) || strstr(original, compact)) return true;
     while (*words) {
         char token[SearchQuerySize];
         const size_t length = strcspn(words, " ");
         memcpy(token, words, length);
         token[length] = '\0';
-        bool matched = strstr(en, token) || strstr(zh, token);
+        bool matched = strstr(en, token) || strstr(zh, token) || strstr(original, token);
         if (!matched && (!strcmp(token, "pokemon") || !strcmp(token, "宝可梦") || !strcmp(token, "寶可夢"))) {
             matched = strstr(en, "pokemon") || strstr(zh, "宝可梦") || strstr(zh, "寶可夢");
         }
@@ -164,7 +189,7 @@ size_t game_catalog_choices(const GameCatalog *catalog, const char *query, size_
     for (size_t index = offset; index < rows; index++) {
         const bool alias = index < catalog->alias_count;
         const uint64_t id = alias ? read64(catalog->aliases + index * AliasSize) :
-            read64(catalog->titles + (index - catalog->alias_count) * TitleSize);
+            read64(catalog->titles + (index - catalog->alias_count) * catalog->title_stride);
         /* A catalog title is an exact-ID filter, not a claim about its unknown LCIDs. */
         if (!id || id == UINT64_MAX || (!alias && find_id(catalog->aliases, catalog->alias_count, AliasSize, id)))
             continue;

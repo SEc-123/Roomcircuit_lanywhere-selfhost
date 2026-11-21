@@ -7,6 +7,37 @@
       "public_records_sha256": "c8cbf21188216c59e7018c8fde77b4d6e01243865c417e729a9757f962476915",
       "method": "Two selected application records and their ordered NACP local-communication ID arrays were inspected. Only these limited records are included here.",
       "scope": "A partial observation, not exhaustive LCID identity or current installation status. Unknown additional applications sharing an LCID remain possible."
+    },
+    "pokeldn_swsh": {
+      "kind": "retail_local_wireless_and_nacp_observation",
+      "url": "https://github.com/Decryptu/pokeldn/blob/4e0897e77f7ed41e6ef3ae6321d79942f09a89b4/docs/swsh_session.md",
+      "scope": "Sword and Shield use Sword’s broadcast LCID; Shield also lists its own ApplicationID value in NACP."
+    },
+    "pokeldn_bdsp": {
+      "kind": "retail_local_wireless_observation",
+      "url": "https://github.com/Decryptu/pokeldn/blob/4e0897e77f7ed41e6ef3ae6321d79942f09a89b4/docs/bdsp_session.md",
+      "scope": "Brilliant Diamond and Shining Pearl share the observed broadcast LCID."
+    },
+    "pokeldn_lgpe": {
+      "kind": "retail_local_wireless_observation",
+      "url": "https://github.com/Decryptu/pokeldn/blob/4e0897e77f7ed41e6ef3ae6321d79942f09a89b4/docs/lgpe.md",
+      "identifier_url": "https://github.com/Decryptu/pokeldn/blob/4e0897e77f7ed41e6ef3ae6321d79942f09a89b4/pokeldn/lgpe/session.py#L24",
+      "scope": "Let’s Go Pikachu and Eevee use the same observed broadcast LCID."
+    },
+    "pokeldn_pla": {
+      "kind": "retail_local_wireless_observation",
+      "url": "https://github.com/Decryptu/pokeldn/blob/4e0897e77f7ed41e6ef3ae6321d79942f09a89b4/docs/pla.md",
+      "scope": "Observed Pokémon Legends: Arceus broadcast LCID."
+    },
+    "pokeldn_sv": {
+      "kind": "retail_local_wireless_and_nacp_observation",
+      "url": "https://github.com/Decryptu/pokeldn/blob/4e0897e77f7ed41e6ef3ae6321d79942f09a89b4/docs/sv.md",
+      "scope": "Scarlet and Violet list both title IDs in NACP. Scarlet’s ID was observed in shared broadcasts."
+    },
+    "pokeldn_za": {
+      "kind": "retail_nacp_observation",
+      "url": "https://github.com/Decryptu/pokeldn/blob/4e0897e77f7ed41e6ef3ae6321d79942f09a89b4/docs/za.md",
+      "scope": "The Pokémon Legends: Z-A record lists the same LCID in all eight NACP slots."
     }
   },
   "observations": [
@@ -42,6 +73,95 @@
         "0100A3D008C5C000"
       ],
       "evidence": "local_nacp_20261107"
+    },
+    {
+      "appid": "0100ABF008968000",
+      "lcids": [
+        "0100ABF008968000"
+      ],
+      "known_ambiguous_lcids": [
+        "0100ABF008968000"
+      ],
+      "evidence": "pokeldn_swsh"
+    },
+    {
+      "appid": "01008DB008C2C000",
+      "lcids": [
+        "0100ABF008968000",
+        "01008DB008C2C000"
+      ],
+      "known_ambiguous_lcids": [
+        "0100ABF008968000"
+      ],
+      "evidence": "pokeldn_swsh"
+    },
+    {
+      "appid": "0100000011D90000",
+      "lcids": [
+        "0100000011D90000"
+      ],
+      "known_ambiguous_lcids": [
+        "0100000011D90000"
+      ],
+      "evidence": "pokeldn_bdsp"
+    },
+    {
+      "appid": "010018E011D92000",
+      "lcids": [
+        "0100000011D90000"
+      ],
+      "known_ambiguous_lcids": [
+        "0100000011D90000"
+      ],
+      "evidence": "pokeldn_bdsp"
+    },
+    {
+      "appid": "010003F003A34000",
+      "lcids": [
+        "010003F003A34000"
+      ],
+      "known_ambiguous_lcids": [
+        "010003F003A34000"
+      ],
+      "evidence": "pokeldn_lgpe"
+    },
+    {
+      "appid": "0100187003A36000",
+      "lcids": [
+        "010003F003A34000"
+      ],
+      "known_ambiguous_lcids": [
+        "010003F003A34000"
+      ],
+      "evidence": "pokeldn_lgpe"
+    },
+    {
+      "appid": "01001F5010DFA000",
+      "lcids": [
+        "01001F5010DFA000"
+      ],
+      "known_ambiguous_lcids": [],
+      "evidence": "pokeldn_pla"
+    },
+    {
+      "appid": "0100A3D008C5C000",
+      "lcids": [
+        "0100A3D008C5C000",
+        "01008F6008C5E000"
+      ],
+      "known_ambiguous_lcids": [
+        "0100A3D008C5C000",
+        "01008F6008C5E000"
+      ],
+      "evidence": "pokeldn_sv"
+    },
+    {
+      "appid": "0100F43008C44000",
+      "lcids": [
+        "0100F43008C44000"
+      ],
+      "known_ambiguous_lcids": [],
+      "evidence": "pokeldn_za"
     }
   ]
 }

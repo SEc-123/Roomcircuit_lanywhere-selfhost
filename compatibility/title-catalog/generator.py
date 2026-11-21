@@ -150,12 +150,17 @@ def generate(lock,cache):
     for appid,langs in sorted(candidates.items()):
         record={'appid':appid,'en':'','zh':'','zh_locale':''};details={}
         for lang,values in sorted(langs.items()):
+            if lang=='original':continue
             values.sort();chosen=values[0];record[lang]=chosen[3]
             if lang=='zh':record['zh_locale']=chosen[4]
             details[lang]={'file':chosen[5],'nsuid':str(chosen[2])}
             unique=sorted(set(v[3] for v in values))
             if len(unique)>1:conflicts.append({'appid':appid,'language':lang,'chosen':chosen[3],'alternatives':unique})
-        if record['en'] or record['zh']:records.append(record);provenance[appid]=details
+        if not (record['en'] or record['zh']) and 'original' in langs:
+            original=min(langs['original'])
+            record.update(original=original[3],original_locale=original[4])
+            details['original']={'file':original[5],'nsuid':str(original[2])}
+        if details:records.append(record);provenance[appid]=details
     overrides=json.loads((ROOT/'curated-labels.json').read_text())
     index={r['appid']:r for r in records}
     for row in overrides['records']:
@@ -164,6 +169,9 @@ def generate(lock,cache):
             if lang in row:
                 index[row['appid']][lang]=name_text(row[lang]);provenance[row['appid']][lang]={'curated_evidence':row['evidence']}
         if 'zh' in row:index[row['appid']]['zh_locale']=row['zh_locale']
+        record=index[row['appid']]
+        if record.get('original') and (record['en'] or record['zh']):
+            del record['original'],record['original_locale'],provenance[row['appid']]['original']
     catalog={'schema':1,'source_commit':lock['commit'],'scope':'Switch 1 base application names; display metadata only','records':records}
     observations=json.loads((ROOT/'lcid-observations.json').read_text());maps={}
     for row in observations['observations']:
@@ -176,24 +184,25 @@ def generate(lock,cache):
         m['appids']=sorted(set(m['appids']));m['evidence']=sorted(set(m['evidence']));m['ambiguous']|=len(m['appids'])>1
         m['unknown_additional_candidates_possible']=True
         m['raw_appid_catalog_candidates']=[lcid] if lcid in index and lcid not in m['appids'] else []
-    mappings={'schema':1,'scope':'Observed NACP relations only; partial sample, never exhaustive','mappings':[maps[k] for k in sorted(maps)]}
+    mappings={'schema':1,'scope':'Observed NACP or retail local wireless relations; partial, display only','mappings':[maps[k] for k in sorted(maps)]}
     coverage={'schema':1,'base_appids':len(records),'en_names':sum(bool(r['en']) for r in records),'zh_names':sum(bool(r['zh']) for r in records),
         'both_languages':sum(bool(r['en'] and r['zh']) for r in records),'zh_hans':sum(r['zh_locale'].startswith('zh-Hans') for r in records),
         'zh_hant_hk':sum(r['zh_locale']=='zh-Hant-HK' for r in records),'localized_name_conflict_groups':len(conflicts),
+        'original_names':sum(bool(r.get('original')) for r in records),
         'explicit_lcid_relations':len(maps),'known_ambiguous_lcids':sum(m['ambiguous'] for m in maps.values()),'sources':source_stats,
         'coverage_denominator':'Eligible exact AppIDs in the pinned input files, not every Switch game worldwide',
-        'sword':{'appid':'0100ABF008968000','catalog_record':index.get('0100ABF008968000'),'explicit_lcid_proof':False,
-            'resolution':'raw LCID equal to catalog AppID may be displayed as a catalog candidate only'}}
+        'sword':{'appid':'0100ABF008968000','catalog_record':index.get('0100ABF008968000'),
+            'observed_apps':maps.get('0100ABF008968000',{}).get('appids',[])}}
     provenance_file={'schema':1,'repository':lock['repository'],'commit':lock['commit'],'license':'MIT','license_file':'LICENSE.titledb',
         'license_sha256':lock['license_sha256'],'license_url':lock['license_url'],
         'generator_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'input_files':inputs,'record_sources':provenance,
         'curated_labels_sha256':hashlib.sha256((ROOT/'curated-labels.json').read_bytes()).hexdigest(),
         'lcid_observations_sha256':hashlib.sha256((ROOT/'lcid-observations.json').read_bytes()).hexdigest(),
-        'locale_policy':'CN source names preferred; HK source is labeled zh-Hant-HK by source region, not machine-converted. Roman-only HK names are not counted as Chinese translations.',
+        'locale_policy':'CN source names preferred; HK source labeled zh-Hant-HK. Original storefront names fill titles without an English or Chinese name.',
         'namespace_policy':'AppID is not LCID. Catalog candidates are display-only and never prove installation, local launch safety or game interoperability.'}
     for name,value in [('catalog.json',catalog),('lcid-mappings.json',mappings),('coverage.json',coverage),('provenance.json',provenance_file),('name-conflicts.json',{'schema':1,'conflicts':conflicts})]:
         write(ROOT/name,encoded(value))
-    print(json.dumps({k:coverage[k] for k in ('base_appids','en_names','zh_names','both_languages','explicit_lcid_relations','known_ambiguous_lcids')},ensure_ascii=False),flush=True)
+    print(json.dumps({k:coverage[k] for k in ('base_appids','en_names','zh_names','original_names','both_languages','explicit_lcid_relations','known_ambiguous_lcids')},ensure_ascii=False),flush=True)
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--fetch',action='store_true');parser.add_argument('--cache-dir',type=Path);args=parser.parse_args()

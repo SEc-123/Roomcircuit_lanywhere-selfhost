@@ -20,6 +20,42 @@
       "zh": "宝可梦 紫",
       "zh_locale": "zh-Hans",
       "evidence": "local_nacp_20261107"
+    },
+    {
+      "appid": "0100152000022000",
+      "zh": "马力欧卡丁车8 豪华版",
+      "zh_locale": "zh-Hans",
+      "evidence": "nintendo_mario_kart_simplified"
+    },
+    {
+      "appid": "010027400CDC6000",
+      "zh": "神界：原罪2 - 终极版",
+      "zh_locale": "zh-Hans",
+      "evidence": "larian_divinity_simplified"
+    },
+    {
+      "appid": "01008DB008C2C000",
+      "zh": "宝可梦 盾",
+      "zh_locale": "zh-Hans",
+      "evidence": "nintendo_sword_simplified"
+    },
+    {
+      "appid": "0100000011D90000",
+      "zh": "宝可梦 晶灿钻石",
+      "zh_locale": "zh-Hans",
+      "evidence": "nintendo_bdsp_simplified"
+    },
+    {
+      "appid": "010018E011D92000",
+      "zh": "宝可梦 明亮珍珠",
+      "zh_locale": "zh-Hans",
+      "evidence": "nintendo_bdsp_simplified"
+    },
+    {
+      "appid": "0100F43008C44000",
+      "zh": "宝可梦传说 Z-A",
+      "zh_locale": "zh-Hans",
+      "evidence": "nintendo_za_simplified"
     }
   ],
   "evidence": {
@@ -35,6 +71,27 @@
       "public_records_sha256": "c8cbf21188216c59e7018c8fde77b4d6e01243865c417e729a9757f962476915",
       "method": "Two selected application records and their ordered NACP local-communication ID arrays were inspected. Only these limited records are included here.",
       "scope": "A partial observation, not exhaustive LCID identity or current installation status. Unknown additional applications sharing an LCID remain possible."
+    },
+    "nintendo_mario_kart_simplified": {
+      "kind": "publisher_label",
+      "url": "https://www.nintendoswitch.com.cn/software/70010000027090",
+      "scope": "Official simplified Chinese name for the same game edition, independent of the cartridge region."
+    },
+    "larian_divinity_simplified": {
+      "kind": "publisher_label",
+      "url": "https://store.steampowered.com/app/435150/Divinity_Original_Sin_2/?l=schinese",
+      "corroboration_url": "https://www.nintendo.com/us/store/products/divinity-original-sin-2-definitive-edition-switch/",
+      "scope": "Publisher’s Chinese name for the Definitive Edition, paired with Nintendo’s Switch listing of the same edition."
+    },
+    "nintendo_bdsp_simplified": {
+      "kind": "publisher_label",
+      "url": "https://www.nintendo.com/hk/topics/article/a_211210_03_sc.html",
+      "scope": "Official simplified Chinese labels for Brilliant Diamond and Shining Pearl."
+    },
+    "nintendo_za_simplified": {
+      "kind": "publisher_label",
+      "url": "https://www.nintendo.com/zh-hans-hk/topics/article/3D4BWhvrk602E86M5cEZIa",
+      "scope": "Official simplified Chinese name for Pokémon Legends: Z-A."
     }
   }
 }

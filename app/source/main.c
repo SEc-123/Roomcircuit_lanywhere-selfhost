@@ -391,6 +391,7 @@ typedef struct {
     u64 lcids[8];
     char name[128];
     Image icon;
+    bool name_preferred;
     bool installed;
     bool install_checked;
     unsigned attempts;
@@ -510,9 +511,9 @@ static const GameInfo *game_info(u64 id)
         const int en_preference[] = { 0, 1, 14, 13 };
         const int *preference = g_zh ? zh_preference : (g_es ? es_preference : en_preference);
         char name[0x200];
-        nacp_name((const unsigned char *)&control.nacp, sizeof(control.nacp), preference, 4, name, sizeof(name));
-        if (name[0])
-            game_identity_safe_title((const uint8_t *)name, strlen(name), g->name, sizeof(g->name));
+        const int selected = nacp_name((const unsigned char *)&control.nacp, sizeof(control.nacp), preference, 4, name, sizeof(name));
+        if (name[0] && game_identity_safe_title((const uint8_t *)name, strlen(name), g->name, sizeof(g->name)))
+            g->name_preferred = selected >= 0 && selected < 2;
         if (!g->icon.px && size > sizeof(control.nacp)) {
             Image icon = {0};
             decode_icon(&icon, control.icon, size - sizeof(control.nacp));
@@ -1108,21 +1109,19 @@ static bool game_info_has_lcid(const GameInfo *info, u64 lcid)
 static const char *room_title(const LobbyGroup *group, char *fallback, size_t capacity)
 {
     const GameInfo *local = local_game_info(group);
-    const char *name = local && local->name[0] ? local->name : NULL;
-    if (!name && group && group->metadata_flags) {
-        const char *preferred = g_zh ? group->title_zh : group->title_en;
-        const char *alternate = g_zh ? group->title_en : group->title_zh;
-        name = preferred[0] ? preferred : alternate[0] ? alternate : NULL;
-    }
-    if (name) return name;
-    const CatalogMatch catalog = room_catalog_match(group);
-    if (catalog.app_id && group && !group->metadata_flags) {
+    const bool sideband = group && group->metadata_flags;
+    const CatalogMatch catalog = local ? game_catalog_identify(&g_catalog, local->id, group->game_id) : room_catalog_match(group);
+    if (!local && catalog.app_id && !sideband) {
         const GameInfo *info = game_info(catalog.app_id);
-        if (info && info->installed && info->name[0] && game_info_has_lcid(info, group->game_id))
-            return info->name;
+        if (info && info->installed && game_info_has_lcid(info, group->game_id)) local = info;
     }
-    const char *catalog_name = game_catalog_name(&catalog, g_zh);
-    if (catalog_name) return catalog_name;
+    /* A bare numeric LCID clue cannot overrule an identified host's title. */
+    const bool catalog_first = !sideband ||
+        (group->application_id ? catalog.app_id == group->application_id : catalog.kind == CatalogCommunication);
+    const char *name = game_display_name(catalog_first ? &catalog : NULL, g_zh, local ? local->name : NULL,
+        local && local->name_preferred, sideband ? group->title_en : NULL, sideband ? group->title_zh : NULL);
+    if (!name) name = game_catalog_name(&catalog, g_zh);
+    if (name) return name;
     if (!group || !group->game_id || group->game_id == UINT64_MAX)
         return TR("No se proporcionó información del juego", "Game info not provided");
     snprintf(fallback, capacity, TR("ID del juego %016lX", "Game ID %016lX"), (unsigned long)group->game_id);
@@ -1131,12 +1130,14 @@ static const char *room_title(const LobbyGroup *group, char *fallback, size_t ca
 
 static const char *direct_host_title(const View *v)
 {
-    const char *preferred = g_zh ? v->direct_host.title_zh : v->direct_host.title_en;
-    const char *alternate = g_zh ? v->direct_host.title_en : v->direct_host.title_zh;
-    if (preferred[0]) return preferred;
-    if (alternate[0]) return alternate;
-    const GameInfo *installed = v->direct_host.application_id ? game_info(v->direct_host.application_id) : NULL;
-    return installed && installed->installed && installed->name[0] ? installed->name : NULL;
+    const u64 app = v->direct_host.application_id;
+    const GameInfo *local = app ? game_info(app) : NULL;
+    if (local && !local->installed) local = NULL;
+    const CatalogMatch catalog = game_catalog_identify(&g_catalog, app, v->st.game_id);
+    const bool catalog_first = app ? catalog.app_id == app : catalog.kind == CatalogCommunication;
+    const char *name = game_display_name(catalog_first ? &catalog : NULL, g_zh, local ? local->name : NULL,
+        local && local->name_preferred, v->direct_host.title_en, v->direct_host.title_zh);
+    return name ? name : game_catalog_name(&catalog, g_zh);
 }
 
 /* A host-declared ApplicationID is a display hint only, never a launch check. */

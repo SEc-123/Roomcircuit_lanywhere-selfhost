@@ -109,7 +109,7 @@ static bool run(const GameCatalog *catalog,u64 a,u64 b,u64 c,uint64_t *game,uint
 int main(void){
  unsigned char titles[32]={[0]=7,[8]=1,[16]=9,[24]=7};
  const unsigned char names[]="\0Alpha\0Beta\0";
- GameCatalog catalog={.titles=titles,.title_count=2,.text=names,.text_size=sizeof(names)};
+ GameCatalog catalog={.titles=titles,.title_count=2,.text=names,.text_size=sizeof(names),.title_stride=16};
  uint64_t game=9;uint8_t region=255;
  assert(run(&catalog,HidNpadButton_R,HidNpadButton_A,0,&game,&region)&&game==9&&region==NodeRegionAsia);
  assert(run(&catalog,HidNpadButton_AnyDown,HidNpadButton_A,0,&game,&region)&&game==7);

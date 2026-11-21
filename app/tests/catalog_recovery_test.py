@@ -96,21 +96,43 @@ int main(int argc, char **argv)
     const u64 sword=UINT64_C(0x0100ABF008968000);
     LobbyGroup room={.game_id=sword}; char fallback[128];
     CatalogMatch id=room_catalog_match(&room);
-    assert(id.app_id==sword && (id.kind==CatalogEqualId || id.kind==CatalogCommunication));
+    assert(!id.app_id && id.kind==CatalogShared);
     ui_set_language(false,false);
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Pokémon™ Sword"));
+    const char *name=room_title(&room,fallback,sizeof(fallback));
+    assert(strstr(name,"Pokémon™ Sword") && strstr(name,"Pokémon™ Shield"));
+    assert(!strcmp(room_title_note(&room),"Shared game ID"));
+    room.application_id=sword; room.metadata_flags=LOBBY_META_HOST;
+    strcpy(room.title_en,"Pokémon™ Sword"); strcpy(room.title_zh,"Pokémon™ Sword");
+    g_zh=true; ui_set_language(true,false);
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"宝可梦 剑"));
+
+    const u64 mario=UINT64_C(0x0100152000022000);
+    room=(LobbyGroup){.game_id=mario,.application_id=mario,.metadata_flags=LOBBY_META_HOST};
+    strcpy(room.title_en,"Mario Kart 8 Deluxe"); strcpy(room.title_zh,"Mario Kart 8 Deluxe");
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"马力欧卡丁车8 豪华版"));
+    have_local=true; local.id=mario; local.installed=true; local.name_preferred=true; local.lcids[0]=mario;
+    strcpy(local.name,"Mario Kart 8 Deluxe");
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"马力欧卡丁车8 豪华版"));
+    have_local=false;
+    local=(GameInfo){0};
+
+    const u64 divinity=UINT64_C(0x010027400CDC6000);
+    room=(LobbyGroup){.game_id=divinity};
+    g_zh=false; ui_set_language(false,false);
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Divinity: Original Sin 2 - Definitive Edition"));
     assert(!strcmp(room_title_note(&room),"Catalog match")); /* Inventory unavailable is not proof of absence. */
-    have_local=true; local.id=sword;local.install_checked=true;
-    assert(!strcmp(room_title_note(&room),"Not installed") && queried==sword);
+    have_local=true; local.id=divinity;local.install_checked=true;
+    assert(!strcmp(room_title_note(&room),"Not installed") && queried==divinity);
     local.installed=true;
-    strcpy(local.name,"Sword from local NS");
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Pokémon™ Sword")); /* Still no NACP LCID proof. */
-    local.lcids[0]=sword;
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Sword from local NS"));
+    local.name_preferred=true;
+    strcpy(local.name,"Divinity from local NS");
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Divinity: Original Sin 2 - Definitive Edition"));
+    local.lcids[0]=divinity;
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"Divinity: Original Sin 2 - Definitive Edition"));
     assert(!room_title_note(&room));
     assert(!local_game_info(&room)); /* Catalog fallback does not confer launch permission. */
     local.installed=false; g_zh=true; ui_set_language(true,false);
-    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"宝可梦 剑"));
+    assert(!strcmp(room_title(&room,fallback,sizeof(fallback)),"神界：原罪2 - 终极版"));
     assert(!strcmp(room_title_note(&room),"未安装"));
     room.game_id=UINT64_C(0x0100A3D008C5C000);
     assert(strstr(room_title(&room,fallback,sizeof(fallback)),"宝可梦 紫"));

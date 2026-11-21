@@ -50,12 +50,13 @@ def compile_catalog(source):
         key = identity(row['appid'])
         if key in names:
             raise ValueError(f'Duplicate application: {key:016X}')
-        en, zh = clean(row.get('en')), clean(row.get('zh'))
-        if en or zh:
-            names[key] = en, zh
+        en, zh, original = (clean(row.get(lang)) for lang in ('en', 'zh', 'original'))
+        if en or zh or original:
+            names[key] = en, zh, original
     if not names or len(names) > 100000:
         raise ValueError('Invalid application record count')
-    title_table = b''.join(struct.pack('<QII', key, put(en), put(zh)) for key, (en, zh) in sorted(names.items()))
+    title_table = b''.join(struct.pack('<QIII', key, put(en), put(zh), put(original))
+                           for key, (en, zh, original) in sorted(names.items()))
 
     aliases = {}
     for row in records(source / 'lcid-mappings.json', 'mappings'):
@@ -70,11 +71,11 @@ def compile_catalog(source):
             candidates = {identity(value) for value in row.get('raw_appid_catalog_candidates', [])}
             app_ids = sorted(set(app_ids) | (candidates & names.keys()))
             def label(lang):
-                values = [names[key][lang] or names[key][0] or names[key][1] for key in app_ids]
+                values = [names[key][lang] or next(text for text in names[key] if text) for key in app_ids]
                 return clean(' / '.join(dict.fromkeys(values)))
             aliases[lcid] = 0, put(label(0)), put(label(1))
     alias_table = b''.join(struct.pack('<QQII', key, *values) for key, values in sorted(aliases.items()))
-    data = struct.pack('<8sIII', b'LYCAT1\0\0', len(names), len(aliases), len(text)) + title_table + alias_table + text
+    data = struct.pack('<8sIII', b'LYCAT2\0\0', len(names), len(aliases), len(text)) + title_table + alias_table + text
     if len(data) > MAX_TABLE:
         raise ValueError('Game catalogue exceeds the embedded size limit')
     return data

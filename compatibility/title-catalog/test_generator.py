@@ -15,6 +15,7 @@ HERE=Path(__file__).resolve().parent
 spec=importlib.util.spec_from_file_location('catalog_generator',HERE/'generator.py')
 g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
 SWORD='0100ABF008968000';DYING='01008C8012920000';VIOLET='01008F6008C5E000';SCARLET='0100A3D008C5C000'
+SHIELD='01008DB008C2C000';ORIGINAL='0100C00010000000'
 
 class CatalogTests(unittest.TestCase):
     def test_base_application_namespace(self):
@@ -46,13 +47,18 @@ class CatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='title-catalog-unit-') as temporary:
             root=Path(temporary);cache=root/'cache';cache.mkdir();previous=g.ROOT;g.ROOT=root
             try:
-                for file in ('LICENSE.titledb','curated-labels.json','lcid-observations.json'):(root/file).write_bytes((HERE/file).read_bytes())
+                (root/'LICENSE.titledb').write_bytes((HERE/'LICENSE.titledb').read_bytes())
+                (root/'curated-labels.json').write_bytes(g.encoded({'records':[
+                    {'appid':SWORD,'zh':'宝可梦 剑','zh_locale':'zh-Hans','evidence':'fixture'}]}))
+                (root/'lcid-observations.json').write_bytes(g.encoded({'observations':[
+                    {'appid':VIOLET,'lcids':[SCARLET],'known_ambiguous_lcids':[SCARLET],'evidence':'fixture'}]}))
                 lock={'repository':'https://github.com/blawar/titledb','commit':'1'*40,'license_url':'https://example.invalid/LICENSE',
                       'license_sha256':hashlib.sha256((root/'LICENSE.titledb').read_bytes()).hexdigest(),'files':[]}
                 for filename,language,locale,priority,names in [
                     ('US.en.json','en','en-US',0,[(SWORD,'Pokémon Sword'),(DYING,'Dying Light'),(VIOLET,'Pokémon Violet'),(SCARLET,'Pokémon Scarlet')]),
                     ('GB.en.json','en','en-GB',1,[(SWORD,'Sword regional alternative')]),
-                    ('HK.zh.json','zh','zh-Hant-HK',1,[(SWORD,'寶可夢 劍'),(SCARLET,'寶可夢 朱')])]:
+                    ('HK.zh.json','zh','zh-Hant-HK',1,[(SWORD,'寶可夢 劍'),(SCARLET,'寶可夢 朱')]),
+                    ('JP.ja.json','original','ja-JP',0,[(SWORD,'ポケットモンスター ソード'),(ORIGINAL,'日本語だけのタイトル')])]:
                     source={'schema':1,'commit':lock['commit'],'file':filename,'git_blob_sha1':'a'*40,'raw_sha256':'b'*64,'raw_bytes':123,'counters':{'accepted_rows':len(names)},
                             'records':[{'appid':appid,'name':name,'nsuid':str(70010000000001+i),'demo':False} for i,(appid,name) in enumerate(names)]}
                     raw=g.encoded(source);(cache/(filename+'.gz')).write_bytes(gzip.compress(raw,mtime=0))
@@ -65,6 +71,11 @@ class CatalogTests(unittest.TestCase):
                 rows={r['appid']:r for r in json.loads(before['catalog.json'])['records']}
                 self.assertEqual(rows[SWORD]['en'],'Pokémon Sword');self.assertEqual(rows[SWORD]['zh'],'宝可梦 剑')
                 self.assertEqual(rows[SCARLET]['zh_locale'],'zh-Hant-HK')
+                self.assertNotIn('original',rows[SWORD])
+                self.assertEqual(rows[ORIGINAL]['en'],'')
+                self.assertEqual(rows[ORIGINAL]['zh'],'')
+                self.assertEqual(rows[ORIGINAL]['original'],'日本語だけのタイトル')
+                self.assertEqual(rows[ORIGINAL]['original_locale'],'ja-JP')
                 mappings={r['lcid']:r for r in json.loads(before['lcid-mappings.json'])['mappings']}
                 self.assertNotIn(SWORD,mappings,'TitleDB AppID must never become an invented NACP relation')
                 self.assertTrue(mappings[SCARLET]['ambiguous']);self.assertFalse(mappings[SCARLET]['exhaustive'])
@@ -79,13 +90,24 @@ class CatalogTests(unittest.TestCase):
         records=json.loads((HERE/'catalog.json').read_text())['records'];ids=[r['appid'] for r in records]
         self.assertEqual(ids,sorted(set(ids)));self.assertGreater(len(ids),20000)
         for row in records:
-            self.assertEqual(set(row),{'appid','en','zh','zh_locale'});self.assertEqual(g.base_appid(row['appid']),row['appid'])
+            fields={'appid','en','zh','zh_locale'}
+            if row.get('original'):
+                fields.update(('original','original_locale'))
+                self.assertFalse(row['en'] or row['zh'])
+                self.assertIn(row['original_locale'],('ja-JP','ko-KR'))
+            self.assertEqual(set(row),fields);self.assertEqual(g.base_appid(row['appid']),row['appid'])
         sword=next(r for r in records if r['appid']==SWORD);self.assertEqual(sword['zh'],'宝可梦 剑');self.assertIn('Sword',sword['en'])
         for name in ('curated-labels.json','lcid-observations.json','provenance.json'):
             text=(HERE/name).read_text()
             for forbidden in ('/Volumes/','/Users/','cache_payload_sha256','source_report_sha256','iconUrl','rightsId','screenshots'):
                 self.assertNotIn(forbidden,text)
         obs=json.loads((HERE/'lcid-observations.json').read_text())
-        self.assertEqual(obs['evidence']['local_nacp_20261107']['public_records_sha256'],hashlib.sha256(g.encoded(obs['observations'])).hexdigest())
+        local=[row for row in obs['observations'] if row['evidence']=='local_nacp_20261107']
+        self.assertEqual(obs['evidence']['local_nacp_20261107']['public_records_sha256'],hashlib.sha256(g.encoded(local)).hexdigest())
+        mappings={row['lcid']:row for row in json.loads((HERE/'lcid-mappings.json').read_text())['mappings']}
+        self.assertTrue(mappings[SWORD]['ambiguous'])
+        self.assertEqual(set(mappings[SWORD]['appids']),{SWORD,SHIELD})
+        self.assertEqual(set(mappings[SCARLET]['appids']),{SCARLET,VIOLET})
+        self.assertTrue(all(not row['launch_authority'] for row in mappings.values()))
 
 if __name__=='__main__':unittest.main()
