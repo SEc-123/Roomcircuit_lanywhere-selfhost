@@ -47,7 +47,7 @@ ipc='\n'.join(d.function(service,sig) for sig in ['void UseBootAppointmentPartic
  'Result LanywhereService::SetAppointmentWatch(', 'Result LanywhereService::GetAppointmentWatch(',
  'Result LanywhereService::ReadAppointmentSubscriptions(', 'Result LanywhereService::UpdateAppointmentSubscription(',
  'Result LanywhereService::GetAppointmentAlertState('])
-template+='\nusing s32=int32_t;\n#include "appointments.h"\n#include "game_identity_text.h"\n#include "room_passcode.h"\n#include "unified_lobby.h"\n'+records+r'''
+template+='\nusing s32=int32_t;\n#include "appointments.h"\n#include "game_identity_text.h"\n#include "room_game_version.h"\n#include "room_passcode.h"\n#include "unified_lobby.h"\n'+records+r'''
 constexpr size_t MaxMembers=8;
 constexpr u32 CapabilityMetadata=64;
 constexpr u8 T_FindMetadataPage=0x22,T_MetadataPage=0xa2;

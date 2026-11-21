@@ -147,7 +147,8 @@ namespace {
             g_host_version = {.target = target};
         if (g_host_version.published || g_host_version.attempts >= 3) return;
         ++g_host_version.attempts;
-        RoomGameVersionUpdate update{.target = target};
+        RoomGameVersionUpdate update{};
+        update.target = target;
         if (!lanywhereOverlayReadGameVersion(target.application_id, 0, update.game_version)) return;
         const Result published = lanywhereOverlayPublishHostVersion(service, &update);
         if (published == MAKERESULT(10, 221)) g_host_version.unsupported = true;

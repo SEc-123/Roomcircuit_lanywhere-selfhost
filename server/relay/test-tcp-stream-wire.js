@@ -7,6 +7,7 @@ const { Peer } = require('../../deploy/smoke-relay.cjs');
 const P = require('./tcp-stream-protocol');
 const { CAPABILITY: DIRECT_ROOM_CAPABILITY } = require('./direct-room-metadata');
 const { CAPABILITY: CUSTOM_NODE_CAPABILITY, REGION_CAPABILITY: NODE_REGION_LABEL_CAPABILITY } = require('./custom-node-registry');
+const { CAPABILITY: ROOM_GAME_VERSION_CAPABILITY } = require('./room-game-version');
 
 test('actual TCP relay: flow-controlled byte stream, room isolation and detach reset', { timeout: 15000 }, async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stream-wire-'));
@@ -31,7 +32,7 @@ test('actual TCP relay: flow-controlled byte stream, room isolation and detach r
     async function enter(name, code, features = 3) {
         const p = new Peer(name, '127.0.0.1', port); peers.push(p); await p.connect();
         p.send(0x0b); assert.equal((await p.frame(0x89)).readUInt32LE(), 255 | 512 | 1024 | 2048 | 4096 | 32768 |
-            DIRECT_ROOM_CAPABILITY | CUSTOM_NODE_CAPABILITY | NODE_REGION_LABEL_CAPABILITY);
+            DIRECT_ROOM_CAPABILITY | CUSTOM_NODE_CAPABILITY | NODE_REGION_LABEL_CAPABILITY | ROOM_GAME_VERSION_CAPABILITY);
         const nick = Buffer.alloc(32); nick.write(name);
         p.send(code ? 2 : 1, Buffer.concat(code ? [code, nick, Buffer.alloc(8), Buffer.from([features])] :
             [Buffer.alloc(8), nick, Buffer.from([features])]));

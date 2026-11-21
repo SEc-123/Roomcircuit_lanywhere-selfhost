@@ -34,7 +34,7 @@ at=header.index('    struct GroupSummaryV2 {')
 records=header[at:header.index('    int FindGroupSummaries',at)]
 at=header.index('    int FindGroupSummaries(')
 summary_declaration=header[at:header.index(';',at)+1]
-template+='\nusing s32=int32_t;\n#include "unified_lobby.h"\n'+records+summary_declaration+'\n'+'\n'.join(discovery.function(source, sig) for sig in [
+template+='\nusing s32=int32_t;\n#include "room_game_version.h"\n#include "unified_lobby.h"\n'+records+summary_declaration+'\n'+'\n'.join(discovery.function(source, sig) for sig in [
     'bool CaptureAppointmentRoute(', 'bool AppointmentBackendCurrent(',
 ])+r'''
 #include "game_identity_text.h"
