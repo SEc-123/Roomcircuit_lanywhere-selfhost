@@ -68,7 +68,10 @@
     AMS_SF_METHOD_INFO(C, H, 49, Result, GetHostNodeIdentity, (const ams::sf::OutBuffer &identity), (identity)) \
     AMS_SF_METHOD_INFO(C, H, 50, Result, StartHostNodeTask, (const ams::sf::InBuffer &identity, ams::sf::Out<u64> task_id), (identity, task_id)) \
     AMS_SF_METHOD_INFO(C, H, 51, Result, GetHostNodeTask, (u64 task_id, const ams::sf::OutBuffer &out), (task_id, out)) \
-    AMS_SF_METHOD_INFO(C, H, 52, Result, GetRoomPasscodeHostState, (ams::sf::Out<RoomPasscodeHostState> host), (host))
+    AMS_SF_METHOD_INFO(C, H, 52, Result, GetRoomPasscodeHostState, (ams::sf::Out<RoomPasscodeHostState> host), (host)) \
+    AMS_SF_METHOD_INFO(C, H, 53, Result, ListVersionedNodeRooms, (NodeRoomsRequest request, ams::sf::Out<UnifiedPage> page, const ams::sf::OutBuffer &out), (request, page, out)) \
+    AMS_SF_METHOD_INFO(C, H, 54, Result, GetHostGameVersionTarget, (ams::sf::Out<RoomGameVersionTarget> out), (out)) \
+    AMS_SF_METHOD_INFO(C, H, 55, Result, PublishHostGameVersion, (RoomGameVersionUpdate update), (update))
 
 AMS_SF_DEFINE_INTERFACE(ams::mitm::lanywhere, ILanywhereService, AMS_ILANYWHERE_SERVICE, 0x594E414C)
 
@@ -102,6 +105,9 @@ namespace ams::mitm::lanywhere {
             Result GetDirectHostRoom(const sf::OutBuffer &out);
             Result GetDirectRoomPasscode(NodeRoomSelection request, sf::Out<RoomPasscodeReply> reply);
             Result ListAnnotatedNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out);
+            Result ListVersionedNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out);
+            Result GetHostGameVersionTarget(sf::Out<RoomGameVersionTarget> out);
+            Result PublishHostGameVersion(RoomGameVersionUpdate update);
             Result GetBuildVersion(const sf::OutBuffer &out);
             Result GetProtocolCapabilities(sf::Out<u32> out);
             Result ListGroupsV2(u32 offset, sf::Out<GroupPageV2> page, const sf::OutBuffer &out);

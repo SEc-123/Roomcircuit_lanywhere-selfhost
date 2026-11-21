@@ -1,6 +1,7 @@
 #include <cassert>
 #include <algorithm>
 #include <vector>
+#include "../../../common/direct_room_metadata.h"
 #define main overlay_entry_main
 #include "../source/main.cpp"
 #undef main
@@ -26,6 +27,27 @@ static RoomAccessChange last_access{};
 static u32 share_status = RoomPasscodeOk;
 static unsigned share_count = 0;
 static std::vector<u32>commands;
+static std::vector<NodeRoomWire> public_rooms;
+static NodeRoomSelection last_room{};
+static UnifiedRoomRequest last_gateway{};
+static unsigned select_count=0, gateway_count=0;
+static u32 room_snapshot=4;
+static bool versioned_rooms=false, version_target_supported=false, version_installed=false;
+static char remote_version[ROOM_GAME_VERSION_SIZE]{}, local_version[ROOM_GAME_VERSION_SIZE]{};
+static u64 installed_app_id=0, installed_lcid=0;
+static u64 alternate_app_id=0;
+static bool alternate_installed=false, alternate_check_failed=false;
+static RoomGameVersionTarget version_target{};
+static RoomGameVersionUpdate last_version{};
+static unsigned published_versions=0, version_reads=0;
+struct TestThread { void (*entry)(void *); void *arg; bool started, finished; };
+static void runThread(Thread *thread) {
+    auto *work = static_cast<TestThread *>(thread->impl);
+    assert(work && work->started);
+    if (work->finished) return;
+    work->entry(work->arg);
+    work->finished = true;
+}
 extern "C" {
 Result mockDispatch(Service*,u32 command,const void*in,size_t in_size,void*out,size_t size,MockParams params){
  commands.push_back(command);
@@ -43,6 +65,54 @@ Result mockDispatch(Service*,u32 command,const void*in,size_t in_size,void*out,s
  if(command==NODE_GET_HOST_IDENTITY_IPC){if(identity_missing)return 1;assert(params.buffers[0].size==sizeof(host_identity));std::memcpy(params.buffers[0].ptr,&host_identity,sizeof(host_identity));return 0;}
  if(command==NODE_GET_ACTIVE_ROUTE_IPC){assert(params.buffers[0].size==sizeof(active_route));std::memcpy(params.buffers[0].ptr,&active_route,sizeof(active_route));return 0;}
  if(command==NODE_GET_CATALOG_IPC){assert(params.buffers[0].size==sizeof(node_catalog));std::memcpy(params.buffers[0].ptr,&node_catalog,sizeof(node_catalog));return 0;}
+ if(command==ROOM_GAME_VERSION_LIST_IPC||command==DIRECT_ROOM_LIST_IPC||command==37){
+     const bool with_versions=command==ROOM_GAME_VERSION_LIST_IPC;
+     if(with_versions&&!versioned_rooms)return MAKERESULT(10,221);
+     assert(in_size==sizeof(NodeRoomsRequest)&&size==sizeof(UnifiedPage));
+     assert(params.buffers[0].size==NODE_LOBBY_PAGE_SIZE*(with_versions?sizeof(VersionedNodeRoomWire):sizeof(NodeRoomWire)));
+     const auto &request=*static_cast<const NodeRoomsRequest*>(in);
+     auto &page=*static_cast<UnifiedPage*>(out);
+     if(request.snapshot&&request.snapshot!=room_snapshot){
+         page={-1,NODE_LOBBY_END,0,0,0,UnifiedListStale};
+         return 0;
+     }
+     page={0,NODE_LOBBY_END,room_snapshot,1,1,0};
+     u32 eligible=0;
+     for(const auto &row:public_rooms){
+         u64 game_id;
+         std::memcpy(&game_id,row.group+8,sizeof(game_id));
+         if(!(request.node_mask&(1u<<row.node_id))||(request.game_id&&request.game_id!=game_id))continue;
+         if(eligible++<request.offset)continue;
+         if(page.count==static_cast<int32_t>(NODE_LOBBY_PAGE_SIZE)){page.next=eligible-1;break;}
+         if(with_versions){
+             auto &room=static_cast<VersionedNodeRoomWire*>(params.buffers[0].ptr)[page.count++];
+             room.room=row;
+             std::memcpy(room.game_version,remote_version,sizeof(remote_version));
+         }else static_cast<NodeRoomWire*>(params.buffers[0].ptr)[page.count++]=row;
+     }
+     return 0;
+ }
+ if(command==ROOM_GAME_VERSION_HOST_IPC){
+     if(!version_target_supported)return MAKERESULT(10,221);
+     assert(size==sizeof(version_target));std::memcpy(out,&version_target,size);return 0;
+ }
+ if(command==ROOM_GAME_VERSION_PUBLISH_IPC){
+     assert(in_size==sizeof(last_version));
+     std::memcpy(&last_version,in,sizeof(last_version));
+     assert(last_version.target.application_id==version_target.application_id);
+     assert(last_version.target.generation==version_target.generation);
+     ++published_versions;return 0;
+ }
+ if(command==38){
+     assert(in_size==sizeof(last_room));
+     std::memcpy(&last_room,in,sizeof(last_room));
+     ++select_count;return 0;
+ }
+ if(command==UNIFIED_LOBBY_IPC_SELECT){
+     assert(in_size==sizeof(last_gateway));
+     std::memcpy(&last_gateway,in,sizeof(last_gateway));
+     ++gateway_count;return 0;
+ }
  if(command==NODE_START_HOST_TASK_IPC){
      assert(params.buffers[0].size==sizeof(last_node));
      assert(size==sizeof(u64));
@@ -96,6 +166,33 @@ Result mockDispatch(Service*,u32 command,const void*in,size_t in_size,void*out,s
 bool serviceIsActive(Service*s){return s->active!=0;}void serviceClose(Service*s){s->active=0;}
 Result smGetService(Service*s,const char*){++opens;s->active=1;return 0;}
 Result smInitialize(){return 0;}void smExit(){}
+Result threadCreate(Thread *thread,void (*entry)(void *),void *arg,void*,size_t stack,int priority,int cpu){
+    assert(stack==0x4000&&priority==0x2c&&cpu==-2);
+    thread->impl=new TestThread{entry,arg,false,false};
+    return 0;
+}
+Result threadStart(Thread *thread){
+    static_cast<TestThread*>(thread->impl)->started=true;
+    if(g_room_job.action==RoomAction::PublishVersion&&!version_target_supported)runThread(thread);
+    return 0;
+}
+Result threadWaitForExit(Thread *thread){runThread(thread);return 0;}
+Result threadClose(Thread *thread){delete static_cast<TestThread*>(thread->impl);thread->impl=nullptr;return 0;}
+void svcSleepThread(int64_t){assert(false);}
+Result nsInitialize(){return 0;}void nsExit(){}
+Result nsIsAnyApplicationEntityInstalled(u64 id,bool *installed){
+    if(id==alternate_app_id){
+        *installed=alternate_installed;
+        return alternate_check_failed?1:0;
+    }
+    *installed=version_installed&&id==installed_app_id;
+    return 0;
+}
+Result nsGetApplicationControlData(NsApplicationControlSource source,u64 id,NsApplicationControlData *out,size_t size,u64 *used){
+    assert(source==NsApplicationControlSource_StorageOnly&&id==installed_app_id&&size==sizeof(*out));
+    std::memset(out,0,size);std::memcpy(out->nacp.display_version,local_version,sizeof(local_version));
+    out->nacp.local_communication_id[0]=installed_lcid;*used=size;++version_reads;return 0;
+}
 SmServiceName smEncodeName(const char*){return {1};}TipcService*smGetServiceSessionTipc(){static Service s{1};return &s;}
 static SetLanguage mocked_language=SetLanguage_ENUS;
 Result setInitialize(){return 0;}void setExit(){}Result setGetSystemLanguage(u64*out){*out=mocked_language;return 0;}Result setMakeLanguage(u64 code,SetLanguage*out){*out=static_cast<SetLanguage>(code);return 0;}
@@ -113,6 +210,188 @@ static tsl::elm::ListItem *findItem(tsl::elm::Element *tree, const char *text) {
         if (item && item->text == text) return item;
     }
     return nullptr;
+}
+
+static NodeRoomWire roomRow(u32 node, u32 flags, u8 access, const char *title, u8 players=1,
+                            u64 game_id=0x0100152000022000) {
+    NodeRoomWire row{};
+    std::memcpy(row.group,"ABC245",6);
+    std::memcpy(row.group+8,&game_id,sizeof(game_id));
+    std::memcpy(row.group+16,&game_id,sizeof(game_id));
+    row.group[32]=players;row.group[33]=8;row.group[34]=1;row.group[35]=access;
+    std::strcpy(reinterpret_cast<char *>(row.group)+80,title);
+    std::strcpy(reinterpret_cast<char *>(row.group)+208,"马力欧卡丁车8 豪华版");
+    row.node_id=node;row.flags=flags;
+    std::memcpy(row.locator.code,row.group,sizeof(row.locator.code));
+    if(node>=2&&flags==NodeRoomDirect){
+        row.locator.flavor=NodeFlavorStandard;row.locator.host_ip=0x0a0d0101;
+        std::memcpy(row.locator.network_id,&game_id,sizeof(game_id));
+        row.locator.network_id[16]=1;row.locator.bssid[0]=2;
+        if(node>=NODE_CATALOG_COUNT){row.locator.reserved[0]=8;row.locator.reserved[3]=8;}
+    }
+    return row;
+}
+
+static void testRoomSelector() {
+    reset();connectServices();
+    public_rooms={roomRow(11,NodeRoomDirect,RoomAccessNone,"Mario Kart 8 Deluxe")};
+    MainGui main;std::unique_ptr<tsl::elm::Element> main_ui(main.createUI());
+    auto *join=findItem(main_ui.get(),"Join room");
+    assert(join&&join->onClick(HidNpadButton_A));
+    auto &page=tsl::nextGui;assert(page);
+    const auto dispatches=commands.size();
+    std::unique_ptr<tsl::elm::Element> ui(page->createUI());
+    assert(roomJobRunning()&&commands.size()==dispatches);
+    assert(!page->handleInput(HidNpadButton_B,0,{},{},{}));
+    Overlay overlay;tsl::Overlay::test_instance=&overlay;
+    overlay.onHide();overlay.onShow();assert(commands.size()==dispatches);
+    runThread(&g_room_worker.thread);page->update();
+    assert(!roomJobRunning()&&!g_room_worker.created);
+    auto *room=findItem(ui.get(),"Mario Kart 8 Deluxe");
+    assert(room&&room->value=="Olunira · 1/8");
+
+    status.state=2;
+    assert(room->onClick(HidNpadButton_A)&&!select_count);
+    runThread(&g_room_worker.thread);page->update();
+    assert(findItem(ui.get(),"Leave the room and stop matching first.")&&!select_count);
+    status.state=0;
+    match.state=1;
+    assert(room->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    assert(findItem(ui.get(),"Leave the room and stop matching first.")&&!select_count);
+    match.state=0;
+    // Changed identity with the same room code is not a replacement target.
+    public_rooms[0].locator.network_id[16]=5;
+    assert(room->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    assert(findItem(ui.get(),"Room list changed. Refresh rooms.")&&!select_count);
+    assert(findItem(ui.get(),"Refresh rooms")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+
+    room=findItem(ui.get(),"Mario Kart 8 Deluxe");
+    const auto expected=public_rooms[0].locator;
+    assert(room&&room->onClick(HidNpadButton_A)&&!select_count);
+    assert(page->handleInput(HidNpadButton_B,0,{},{},{}));
+    runThread(&g_room_worker.thread);page->update();
+    assert(select_count==1&&last_room.node_id==11&&last_room.game_id==0x0100152000022000);
+    assert(!std::memcmp(&last_room.locator,&expected,sizeof(expected)));
+    assert(!node_select_count&&!gateway_count);
+    assert(findItem(ui.get(),"Search in Local Wireless."));
+    assert(findItem(ui.get(),"Return to game")->onClick(HidNpadButton_A)&&overlay.hidden);
+
+    public_rooms={roomRow(0,NodeRoomDirect,RoomAccessHidden,"Hidden room"),
+        roomRow(0,NodeRoomDirect,RoomAccessNone,"Full room",8),
+        roomRow(11,NodeRoomGateway,RoomAccessNone,"Gateway game"),
+        roomRow(11,NodeRoomDirect,RoomAccessHidden,"Password room")};
+    assert(findItem(ui.get(),"Refresh rooms")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    assert(findItem(ui.get(),"Hidden room")->onClick(HidNpadButton_A)&&!roomJobRunning());
+    assert(findItem(ui.get(),"Unlock this room in RoomCircuit.")&&select_count==1);
+    assert(findItem(ui.get(),"Full room")->onClick(HidNpadButton_A)&&!roomJobRunning());
+    assert(findItem(ui.get(),"Room is full.")&&select_count==1);
+    assert(findItem(ui.get(),"Gateway game")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    assert(gateway_count==1&&!std::strcmp(last_gateway.provider,"lanplay-cn-olunira"));
+    assert(!std::strcmp(last_gateway.code,"ABC245")&&last_gateway.game_id==last_room.game_id);
+    assert(findItem(ui.get(),"Refresh rooms")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    assert(findItem(ui.get(),"Password room")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    assert(select_count==2&&findItem(ui.get(),"Search and enter the password in game."));
+
+    // Pagination and stale snapshots never select an old room.
+    public_rooms.assign(7,roomRow(11,NodeRoomDirect,RoomAccessNone,"Mario Kart 8 Deluxe"));
+    assert(findItem(ui.get(),"Refresh rooms")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    auto *next=findItem(ui.get(),"Next page");
+    assert(next&&next->onClick(HidNpadButton_A));
+    ++room_snapshot;
+    runThread(&g_room_worker.thread);page->update();
+    assert(findItem(ui.get(),"Room list changed. Refresh rooms.")&&select_count==2);
+    assert(findItem(ui.get(),"Refresh rooms")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    assert(findItem(ui.get(),"Next page")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);page->update();
+    assert(findItem(ui.get(),"Previous page")&&!findItem(ui.get(),"Next page"));
+
+    // The new directory opcode is optional, but a malformed response is not usable.
+    Service service{1};NodeRoomsRequest request{};request.node_mask=1u<<11;
+    UnifiedPage info{};OverlayPublicRoom rooms[NODE_LOBBY_PAGE_SIZE]{};
+    unknown_command=DIRECT_ROOM_LIST_IPC;
+    assert(R_SUCCEEDED(lanywhereOverlayListRooms(&service,&request,&info,rooms))&&info.count==6);
+    public_rooms[0].locator.code[0]='O';
+    assert(R_FAILED(lanywhereOverlayListRooms(&service,&request,&info,rooms))&&info.count==-1&&!rooms[0].selection.game_id);
+    unknown_command=0;
+
+    g_chinese=true;
+    public_rooms={roomRow(11,NodeRoomDirect,RoomAccessNone,"Mario Kart 8 Deluxe")};
+    RoomJoinGui localized;std::unique_ptr<tsl::elm::Element> localized_ui(localized.createUI());
+    runThread(&g_room_worker.thread);localized.update();
+    assert(findItem(localized_ui.get(),"马力欧卡丁车8 豪华版"));
+    assert(findItem(localized_ui.get(),"刷新房间")->onClick(HidNpadButton_A)&&roomJobRunning());
+    // Unload waits for the worker before closing the independent session.
+    overlay.exitServices();
+    assert(!roomJobRunning()&&!g_room_worker.created&&!serviceIsActive(&g_relay));
+    tsl::Overlay::test_instance=nullptr;
+}
+
+static void testRoomVersions() {
+    reset();connectServices();
+    constexpr u64 mario=0x0100152000022000;
+    public_rooms={roomRow(11,NodeRoomDirect,RoomAccessNone,"Mario Kart 8 Deluxe")};
+    versioned_rooms=true;version_installed=true;installed_app_id=installed_lcid=mario;
+    std::strcpy(remote_version,"4.0.1");std::strcpy(local_version,"4.0.0");
+    RoomJoinGui chooser;std::unique_ptr<tsl::elm::Element> ui(chooser.createUI());
+    runThread(&g_room_worker.thread);chooser.update();
+    auto *room=findItem(ui.get(),"Mario Kart 8 Deluxe · 4.0.1");
+    const auto before=select_count;
+    assert(room&&room->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);chooser.update();
+    assert(findItem(ui.get(),"Game updates incompatible.")&&select_count==before&&version_reads==1);
+    installed_lcid=1;
+    assert(room->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);chooser.update();
+    assert(findItem(ui.get(),"Search in Local Wireless.")&&select_count==before+1);
+
+    constexpr u64 scarlet=0x0100A3D008C5C000, violet=0x01008F6008C5E000;
+    installed_app_id=installed_lcid=scarlet;
+    alternate_app_id=violet;
+    std::strcpy(remote_version,"3.0.1");std::strcpy(local_version,"3.0.0");
+    public_rooms={roomRow(11,NodeRoomDirect,RoomAccessNone,"Pokémon Scarlet",1,scarlet)};
+    assert(findItem(ui.get(),"Refresh rooms")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);chooser.update();
+    room=findItem(ui.get(),"Pokémon Scarlet · 3.0.1");
+    assert(room&&room->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);chooser.update();
+    assert(findItem(ui.get(),"Game updates incompatible.")&&select_count==before+1);
+    alternate_installed=true;
+    assert(room->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);chooser.update();
+    assert(findItem(ui.get(),"Search in Local Wireless.")&&select_count==before+2);
+    alternate_installed=false;alternate_check_failed=true;
+    assert(findItem(ui.get(),"Refresh rooms")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);chooser.update();
+    assert(findItem(ui.get(),"Pokémon Scarlet · 3.0.1")->onClick(HidNpadButton_A));
+    runThread(&g_room_worker.thread);chooser.update();
+    assert(findItem(ui.get(),"Search in Local Wireless.")&&select_count==before+3);
+
+    // The host is identified by the live ProgramID, even if both games are installed.
+    alternate_installed=true;alternate_check_failed=false;
+    status.state=2;status.my_index=0;status.game_id=scarlet;
+    version_target_supported=true;version_target={scarlet,17};
+    refresh();
+    MainGui main;std::unique_ptr<tsl::elm::Element> main_ui(main.createUI());
+    assert(roomJobRunning()&&!published_versions);
+    runThread(&g_room_worker.thread);main.update();
+    assert(published_versions==1&&!std::strcmp(last_version.game_version,"3.0.0"));
+    ticks+=2000;main.update();runThread(&g_room_worker.thread);main.update();
+    assert(published_versions==1);
+    version_target.generation=18;
+    ticks+=2000;main.update();runThread(&g_room_worker.thread);main.update();
+    assert(published_versions==2&&last_version.target.generation==18);
+    closeServices();
+    version_target_supported=versioned_rooms=version_installed=false;
+    alternate_app_id=0;alternate_installed=false;
 }
 
 static void finishBackendTask(bool succeed=true) {
@@ -507,7 +786,10 @@ int main(){
  testStorageHealth();
  testNodeTaskProtocol();
  testFrameworkLanguage();
- // No room CREATE/JOIN/LEAVE, list discovery or filesystem preference write API exists in this overlay.
+ // Selection is only a route to the game's own room search.
  for(u32 c:commands)assert(c!=0&&c!=1&&c!=2&&c!=4&&c!=6&&c!=7&&c!=8&&c!=11&&c!=12);
- std::puts("Actual overlay IPC + UI: backend task IDs, async selection, full identity and pin, busy/expired/old-module gates, safe hide/exit, storage conflicts, bilingual controls and password handling passed");
+ testRoomSelector();
+ for(u32 c:commands)assert(c!=0&&c!=1&&c!=2&&c!=6&&c!=7&&c!=8&&c!=NODE_START_HOST_TASK_IPC);
+ testRoomVersions();
+ std::puts("Actual overlay IPC + UI: backend node tasks, worker-only room selection, stale/busy/locked/full states, hide, unload, locale, and exact routing passed");
 }

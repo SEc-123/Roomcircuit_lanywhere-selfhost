@@ -184,7 +184,14 @@ int main(int argc, char **argv)
                     snprintf(v.sources[i], sizeof(v.sources[i]), "%s", LanywhereNodes[node].provider);
                     v.node_rows[i].node_id = node;
                 }
-                if (v.count > 2) { v.groups[1].room_access=RoomAccessHidden; v.groups[2].players=4; }
+                if (v.count > 2) {
+                    v.groups[1].room_access=RoomAccessHidden;
+                    v.groups[2].players=4;
+                    snprintf(v.room_versions[0], sizeof(v.room_versions[0]), "%s", "3.0.5");
+                    snprintf(v.room_versions[1], sizeof(v.room_versions[1]), "%s", "v1.12.4");
+                }
+                if (v.count == LOBBY_PAGE_SIZE)
+                    snprintf(v.room_versions[5], sizeof(v.room_versions[5]), "%s", "4.0.1-hotfix.12");
                 if (v.count) { v.sel=0; v.selection=lobby_room_id_on(&v.groups[0],v.sources[0]); }
             }
             if (scene == 45 || scene == 46) {

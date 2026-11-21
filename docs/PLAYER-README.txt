@@ -25,6 +25,8 @@ RoomCircuit
 • 重启后保留所选建房节点。在 Ultrahand 打开 RoomCircuit，选「建房节点」即可切换；请先退出联机房间。
 • 推荐。按你的连接推荐最多三条线路。未分类的节点可在「其他地区」找到。
 • 加入。在房间列表按 ZL+ZR 筛选游戏和地区。按 A 选房并查看连接，再打开游戏搜索。
+• 游戏内选房。在 Ultrahand 打开 RoomCircuit，选「加入房间」并选房。回到游戏的「本地无线」搜索。
+• 游戏版本。公开房显示房主已上报的版本。发现明确不兼容时，请更新游戏后再加入。
 • 一起测速。节点页按 L 创建或输入临时码，共同推荐当前覆盖 13 个内置节点。自定义节点可单独测速。
 • 对局线路。直连房走房间实际公共节点；旧版「社区 · LANywhere」等房间可能经主服务器兼容转发，连接检查会明确标注。断线只尝试原节点，恢复失败需重新加入。
 • 密码与提醒。在游戏内设密码。可从大厅公开或隐藏密码。在 Ultrahand 浮层输入密码后按 +，再按 A 公开或 X 隐藏。第三方直连时在游戏里验密码。约局提醒使用主服务器。
@@ -65,6 +67,8 @@ Host or join
 • Your hosting node is remembered after reboot. In Ultrahand, open RoomCircuit and select Hosting node to change it. Leave the local-wireless session first.
 • Recommendations. Up to three, based on your connection. Find unclassified nodes under Other regions.
 • Join. Press ZL+ZR by the room list to filter by game and region. Press A to select a room and check its connection, then search in Local Wireless.
+• In-game room selection. Open RoomCircuit in Ultrahand, choose Join room and select a room. Return to the game's Local Wireless menu and search.
+• Game updates. Public rooms show the version shared by the host. If the game updates are known to conflict, match them before joining.
 • Test with friends. L in the node picker creates or joins a temporary code. Shared recommendations currently cover the 13 built-in nodes; custom nodes can be measured individually.
 • Game route. Direct rooms use their public node. Legacy Community · LANywhere rooms may use Main server gateway; the connection check labels this. Recovery retries the same node. Rejoin if it fails.
 • Passwords and alerts. Set the password in the game. Use the lobby to share or hide it. In Ultrahand, enter the password and press +. Press A to share or X to hide it. Games check passwords on direct nodes. Appointment alerts use Main server.

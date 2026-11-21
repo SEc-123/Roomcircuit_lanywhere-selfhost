@@ -161,6 +161,20 @@ test('direct room annotations require the preimage and an exact live locator, pr
     assert.equal(got[4], 2);
     assert(got.subarray(5).every(byte => byte === 0), 'hidden mode never stores or returns password bytes');
     assert.equal(service.page(oldSnapshot, true)[16 + 35], 2, 'cached pages use current access state');
+    const versioned = Buffer.concat([write(2), Buffer.alloc(16)]);
+    versioned.writeBigUInt64LE(versioned.readBigUInt64LE(112), 120);
+    versioned.write('v1.2.3', 384);
+    assert.equal(status(versioned), STATUS.OK);
+    const listedVersion = (request = oldSnapshot) => {
+        const page = service.page(request, true, true);
+        assert.equal(page.length, 16 + 424);
+        return require('./room-game-version').parse(page.subarray(16 + 408), true);
+    };
+    assert.equal(listedVersion(), 'v1.2.3');
+    assert.equal(listedVersion(query(0, 0, 0n, 1 << 3)), '');
+    assert.equal(service.page(oldSnapshot, true).length, 16 + 408);
+    versioned[399] = 'x'.charCodeAt(0);
+    assert.equal(status(versioned), STATUS.INVALID, 'padded version cannot hide arbitrary bytes');
     const cloned = head(2, 2, 52);
     cloned[44] ^= 1;
     assert.equal(status(cloned), STATUS.ROOM_UNAVAILABLE);
@@ -178,6 +192,7 @@ test('direct room annotations require the preimage and an exact live locator, pr
     assert.equal(status(head(2, 2, 52)), STATUS.ROOM_UNAVAILABLE, 'duplicate live identity fails closed');
     sources.get(catalog.nodes[2].provider).length = 0;
     assert.equal(service.page(oldSnapshot, true)[16 + 34], 0, 'persistent snapshot cannot attest a closed room');
+    assert.equal(listedVersion(), '', 'version is erased when the source room is unavailable');
     assert.equal(status(head(2, 2, 52)), STATUS.ROOM_UNAVAILABLE);
     sources.get(catalog.nodes[2].provider).push(item);
     time = 45_001;

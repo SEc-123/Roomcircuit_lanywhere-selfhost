@@ -3,6 +3,7 @@
 const { createHash, timingSafeEqual } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const roomMetadata = require('./room-metadata');
+const roomGameVersion = require('./room-game-version');
 
 const REQUEST = 0x36, RESPONSE = 0xb6, CAPABILITY = 131072;
 const READ_BYTES = 52, WRITE_BYTES = 384, REPLY_BYTES = 32;
@@ -52,9 +53,10 @@ function create({ now = () => performance.now() } = {}) {
     // roomIsLive checks the directory's current direct locator, not the client-provided
     // room code or game filter. Requests can stage title data before its scan completes.
     function exchange(body, source, hostMask, roomIsLive) {
-        if (!Buffer.isBuffer(body) || ![READ_BYTES, WRITE_BYTES].includes(body.length)) return reply(STATUS.INVALID);
+        if (!Buffer.isBuffer(body) || ![READ_BYTES, WRITE_BYTES, WRITE_BYTES + roomGameVersion.SIZE].includes(body.length))
+            return reply(STATUS.INVALID);
         const op = body.readUInt32LE(), node = body.readUInt32LE(4);
-        if ((op !== READ || body.length !== READ_BYTES) && (op !== WRITE || body.length !== WRITE_BYTES))
+        if ((op !== READ || body.length !== READ_BYTES) && (op !== WRITE || body.length === READ_BYTES))
             return reply(STATUS.INVALID);
         if (node < 2 || node >= 32 || !(hostMask & (1 << node))) return reply(STATUS.UNAVAILABLE);
         const hostIp = body.readUInt32LE(8);
@@ -89,6 +91,9 @@ function create({ now = () => performance.now() } = {}) {
         body.copy(declaration, 16, 128);
         const title = roomMetadata.parse(declaration);
         if (!title) return reply(STATUS.INVALID);
+        const version = body.length === WRITE_BYTES ? '' : roomGameVersion.parse(body.subarray(WRITE_BYTES), true);
+        if (version === null || (version && (!title.applicationId || title.applicationId !== title.programId)))
+            return reply(STATUS.INVALID);
 
         const live = roomIsLive(node, hostIp, identity);
         if (!live && mode !== NONE) return reply(STATUS.ROOM_UNAVAILABLE);
@@ -102,7 +107,7 @@ function create({ now = () => performance.now() } = {}) {
 
         if (previous?.passcode) previous.passcode.fill(0);
         entries.set(id, {
-            title, mode, passcode: mode === SHARED ? Buffer.from(password) : null,
+            title, mode, version, passcode: mode === SHARED ? Buffer.from(password) : null,
             source: previous?.source ?? source, expires: time + LIFETIME_MS,
         });
         return reply(live ? STATUS.OK : STATUS.ROOM_UNAVAILABLE);
@@ -127,7 +132,11 @@ function create({ now = () => performance.now() } = {}) {
         return out;
     }
 
-    return { exchange, decorate, shutdown: () => {
+    function gameVersion(node, hostIp, identity) {
+        return get(node, hostIp, identity)?.version || '';
+    }
+
+    return { exchange, decorate, gameVersion, shutdown: () => {
         for (const [id, entry] of entries) forget(id, entry);
     } };
 }

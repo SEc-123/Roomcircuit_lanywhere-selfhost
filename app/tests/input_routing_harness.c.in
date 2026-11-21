@@ -61,11 +61,17 @@ static PadState pad;
 static bool ui_chinese(void);
 static bool accept_node=true,accept_probe=true,measured_gateway;
 static bool measured_locator;
+static bool reject_update_version;
 static NodeRoomLocator measured_target;
 static u32 picked_node=2,measured_node;
 static unsigned node_picks,node_probes;
 static bool nodes_ui_pick(PadState *p,int *service,u32 current,u32 *chosen){(void)p;(void)service;(void)current;node_picks++;*chosen=picked_node;return accept_node;}
 static bool nodes_ui_check_room(PadState *p,u32 id,bool gateway,const NodeRoomLocator *locator){(void)p;node_probes++;measured_node=id;measured_gateway=gateway;measured_locator=locator!=NULL;if(locator)measured_target=*locator;return accept_probe;}
+static bool block_incompatible_game_update(View *v,int index){
+    if (index < 0 || !reject_update_version) return false;
+    snprintf(v->message,sizeof(v->message),"Versions incompatible");
+    return true;
+}
 static bool accept_code = true, save_ok = true, launch_ok = true, node_reachable = true;
 static Result lanywhere_set_host_region(u32 region)
 {
@@ -499,6 +505,10 @@ int main(void) {
     strcpy(v.sources[0],"lanplay-nl");v.selection=lobby_room_id_on(&v.groups[0],v.sources[0]);
     v.node_rows[0]=(LobbyNodeRoom){.group=v.groups[0],.node_id=2,.flags=NodeRoomDirect};
     memcpy(v.node_rows[0].locator.code,"ABC234",7);v.node_rows[0].locator.flavor=1;v.node_rows[0].locator.host_ip=0x0a0d0101;
+    reject_update_version=true;
+    step(&v,HidNpadButton_A);
+    assert(node_probes==0&&!effects()&&!v.pinned.code[0]&&!strcmp(v.message,"Versions incompatible"));
+    reject_update_version=false;checked();
     step(&v,HidNpadButton_A);assert(node_probes==1&&measured_node==2&&!measured_gateway&&measured_locator&&measured_target.host_ip==0x0a0d0101&&node_selection.node_id==2&&node_selection.locator.host_ip==0x0a0d0101);checked();
     assert(has_pinned_direct_room(&v));checked();
     v.pinned_node.locator.code[0]='Z';

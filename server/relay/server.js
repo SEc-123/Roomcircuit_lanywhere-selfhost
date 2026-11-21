@@ -34,6 +34,7 @@ const { groupPage } = require('./group-page');
 const { create: createUnifiedLobby } = require('./unified-lobby');
 const regionalDirectory = require('./regional-directory');
 const nodeDirectory = require('./node-directory');
+const roomGameVersion = require('./room-game-version');
 const customNodeRegistry = require('./custom-node-registry');
 const directRoomMetadata = require('./direct-room-metadata');
 const nodeFriends = require('./node-friends');
@@ -104,7 +105,7 @@ const SELF_CAPABILITIES = (process.env.LANYWHERE_LANPLAY_REALM ? 65536 : 0) | 3 
     (process.env.LANYWHERE_LANPLAY_REALM ? 0 : upstreamGateway.ROOM_PASSCODE_CAPABILITY |
         upstreamGateway.ROOM_ACCESS_CAPABILITY | upstreamGateway.UNIFIED_LOBBY_CAPABILITY |
         pushProtocol.CAPABILITY | nodeDirectory.CAPABILITY | directRoomMetadata.CAPABILITY | customNodeRegistry.CAPABILITY |
-        customNodeRegistry.REGION_CAPABILITY |
+        customNodeRegistry.REGION_CAPABILITY | roomGameVersion.CAPABILITY |
         (regionalEndpoint ? regionalDirectory.CAPABILITY : 0) |
         (communityEndpoint ? regionalDirectory.COMMUNITY_LOBBY_CAPABILITY : 0));
 const IDLE_MS = 20000;
@@ -242,8 +243,11 @@ const appointmentPush = realmId ? null : pushProtocol.create({
 });
 const unifiedLobby = realmId ? null : createUnifiedLobby({
     providerIds: upstreams.lobbyProviders().filter(id => !id.startsWith('custom-')), queryProvider: upstreams.queryLobby,
-    selfRows: () => [...rooms.values()].filter(listedSelfGameRoom)
-        .map(room => roomMetadata.summary(room, describeGameAccess(room))),
+    selfRows: () => [...rooms.values()].filter(listedSelfGameRoom).map(room => {
+        const summary = roomMetadata.summary(room, describeGameAccess(room));
+        summary.gameVersion = roomMetadata.gameVersion(room);
+        return summary;
+    }),
     community: communityEndpoint ? {
         source: communityProvider.id, provider: regionalDirectory.COMMUNITY_PROVIDER, endpoint: communityEndpoint,
     } : null,
@@ -838,7 +842,8 @@ function onFrame(socket, type, body) {
         return send(socket, directRoomMetadata.RESPONSE, (body.length >= 8 && body.readUInt32LE(4) >= customNodeRegistry.FIRST ? extendedNodesLobby : nodesLobby).exchangeMetadata(body, ip));
     }
     const annotatedDirectory = type === nodeDirectory.ANNOTATED_REQUEST;
-    const extendedDirectory = type === customNodeRegistry.CATALOG_REQUEST || type === customNodeRegistry.LOBBY_REQUEST;
+    const versionedDirectory = type === roomGameVersion.LIST_REQUEST;
+    const extendedDirectory = type === customNodeRegistry.CATALOG_REQUEST || type === customNodeRegistry.LOBBY_REQUEST || versionedDirectory;
     if (extendedDirectory || annotatedDirectory || [nodeDirectory.CATALOG_REQUEST,nodeDirectory.REQUEST,nodeFriends.REQUEST].includes(type)) {
         if (realmId || !upstreams.isSelf(socket) || socket.member || appointmentPush?.has(socket))
             return sendError(socket, E.BAD_REQUEST, 'Node selection requires an idle connection.');
@@ -852,10 +857,10 @@ function onFrame(socket, type, body) {
             const sources = customLobby.nodeSources();
             return send(socket, customNodeRegistry.CATALOG_RESPONSE, customNodeRegistry.response(customNodes, sources, withRegions));
         }
-        if (type === customNodeRegistry.LOBBY_REQUEST) {
-            const page = extendedNodesLobby.page(body, true);
+        if (type === customNodeRegistry.LOBBY_REQUEST || versionedDirectory) {
+            const page = extendedNodesLobby.page(body, true, versionedDirectory);
             if (!page) return sendError(socket, E.BAD_REQUEST, 'Invalid custom node lobby request.');
-            return send(socket, customNodeRegistry.LOBBY_RESPONSE, page);
+            return send(socket, versionedDirectory ? roomGameVersion.LIST_RESPONSE : customNodeRegistry.LOBBY_RESPONSE, page);
         }
         if (type === nodeDirectory.CATALOG_REQUEST) {
             if (body.length) return sendError(socket,E.BAD_REQUEST,'Invalid node catalog request.');
@@ -1005,6 +1010,7 @@ function onFrame(socket, type, body) {
             const { room } = member;
             if (body.length === 0) {
                 room.published = null;
+                roomMetadata.clearGameVersion(room);
             } else {
                 const extended = appointmentPush && !socket.virtual && body.length === NETWORK_INFO_SIZE + 8;
                 if (body.length !== NETWORK_INFO_SIZE && !extended)
@@ -1017,6 +1023,8 @@ function onFrame(socket, type, body) {
                 const info = sanitizeNetworkInfo(room, network);
                 const sameSession = previous?.member === member &&
                     previous.info.subarray(SESSION_ID_START, SESSION_ID_END).equals(info.subarray(SESSION_ID_START, SESSION_ID_END));
+                if (!sameSession || !previous.info.subarray(0, 32).equals(info.subarray(0, 32)))
+                    roomMetadata.clearGameVersion(room);
                 let gameAccess = sameSession ? previous.gameAccess : undefined;
                 if (gameAccess?.hash && info[ACCEPT_POLICY] !== previous.info[ACCEPT_POLICY])
                     gameAccess = { hash: gameAccess.hash, grants: new Map() };
@@ -1096,6 +1104,9 @@ function onFrame(socket, type, body) {
             appointmentPush?.roomChanged(member.room);
             return;
         }
+        case roomGameVersion.SET_REQUEST:
+            if (!realmId && listedSelfGameRoom(member?.room)) roomMetadata.setGameVersion(member, body);
+            return;
         case T.FIND_META_PAGE: {
             const extended = body.length === 13 && body[12] === 1 && !realmId;
             if (body.length !== 12 && !extended) return sendError(socket, E.BAD_REQUEST, 'página de metadatos no válida');

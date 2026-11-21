@@ -59,7 +59,7 @@ template<class G, class... Args> std::unique_ptr<Gui> &swapTo(SwapDepth, Args&&.
     nextGui = std::make_unique<G>(std::forward<Args>(args)...);
     return nextGui;
 }
-class Overlay {public:virtual ~Overlay()=default;virtual void initServices(){}virtual void exitServices(){}virtual void onShow(){}virtual void onHide(){}virtual std::unique_ptr<Gui>loadInitialGui()=0;template<class G>std::unique_ptr<Gui>initially(){return std::make_unique<G>();}};
+class Overlay {public:inline static Overlay *test_instance=nullptr;bool hidden=false;static Overlay *get(){return test_instance;}void hide(){hidden=true;onHide();}virtual ~Overlay()=default;virtual void initServices(){}virtual void exitServices(){}virtual void onShow(){}virtual void onHide(){}virtual std::unique_ptr<Gui>loadInitialGui()=0;template<class G>std::unique_ptr<Gui>initially(){return std::make_unique<G>();}};
 namespace hlp {
 template<class F>void doWithSmSession(F f) { f(); }
 inline bool sdCardMounted = true;

@@ -41,6 +41,7 @@ static bool MatchesFilter(const ldn::NetworkInfo &, const u8 *) { return true; }
 bool QueryCapabilities(int fd, u32 *flags, int timeout_ms = MatchIoTimeoutMs, u32 *status = nullptr);
 u32 SetRoomAccess(const RoomAccessChange &change);
 
+#include "room_game_version.h"
 constexpr size_t NetworkInfoSize = 0x480;
 static u64 g_host_program_id = 0;
 static bool g_metadata_sent = false;
@@ -108,6 +109,7 @@ public:
     u16 port = 0;
     std::atomic<bool> reply_to_ping{true};
     std::atomic<bool> direct_capability{false};
+    std::atomic<bool> versions_capability{false};
     explicit PasscodeRelay(std::vector<u8> payload = std::vector<u8>(32), u8 kind = ROOM_PASSCODE_RESPONSE_TYPE,
                            std::function<void()> before_reply = {}) {
         listener = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -154,7 +156,8 @@ public:
                         assert(body.empty());
                         std::vector<u8> flags(4);
                         put32(flags.data(), CapabilityMatch | ROOM_ACCESS_CAPABILITY |
-                            (direct_capability ? DIRECT_ROOM_CAPABILITY : 0));
+                            (direct_capability ? DIRECT_ROOM_CAPABILITY : 0) |
+                            (versions_capability ? ROOM_GAME_VERSION_CAPABILITY : 0));
                         response(fd, T_CapsReply, flags);
                     } else if (type == T_Reserve) {
                         {
@@ -336,9 +339,25 @@ int main() {
                 assert(std::all_of(std::begin(request.password), std::end(request.password), [](char c) { return c == 0; }));
             }
         }
+        BindGameVersionTarget(g_direct_registration.version, record.application_id);
+        RoomGameVersionUpdate version{GetHostGameVersionTarget(), "3.0.5"};
+        assert(version.target.application_id == record.application_id && version.target.generation);
+        assert(PublishHostGameVersion(version) == 0);
+        auto direct = directory.seen_direct();
+        assert(direct.size() == 3);
+        assert(PublishDirectMetadata(lanplay::hosted_room, g_direct_registration).status == RoomPasscodeOk);
+        direct = directory.seen_direct();
+        assert(direct.size() == 4 && direct.back().size() == sizeof(DirectRoomMetadata));
+        directory.versions_capability = true;
+        assert(PublishDirectMetadata(lanplay::hosted_room, g_direct_registration).status == RoomPasscodeOk);
+        direct = directory.seen_direct();
+        assert(direct.size() == 5 && direct.back().size() == sizeof(DirectRoomMetadata) + ROOM_GAME_VERSION_SIZE);
+        assert(std::strcmp(reinterpret_cast<const char *>(direct.back().data() + sizeof(DirectRoomMetadata)), "3.0.5") == 0);
+        assert(le64(direct.back().data() + 112) == record.application_id);
         lanplay::hosted_room.epoch++;
+        assert(!GetHostGameVersionTarget().generation && PublishHostGameVersion(version) != 0);
         assert(ipc.GetRoomPasscodeHost({&description}) == 0 && description.status == RoomPasscodeUnavailable);
-        assert(SetRoomAccess({change, 0, 0}) == RoomPasscodeRoomUnavailable && directory.seen_direct().size() == 3);
+        assert(SetRoomAccess({change, 0, 0}) == RoomPasscodeRoomUnavailable && directory.seen_direct().size() == 5);
         lanplay::hosted_room = {};
         g_direct_session = false;
         fs::files.erase(GAME_CACHE_PATH);
@@ -363,6 +382,27 @@ int main() {
     }
     {
         PasscodeRelay relay;
+        host(relay.port);
+        std::array<u8,NetworkInfoSize> info{};
+        put64(info.data(), 42);
+        info[16] = 1;
+        constexpr u64 program = 0x01006fe013472000ULL;
+        Publish(info.data(), info.size(), program);
+        assert(!GetHostGameVersionTarget().generation); // Legacy relay has no version field.
+        g_capabilities |= ROOM_GAME_VERSION_CAPABILITY;
+        RoomGameVersionUpdate version{GetHostGameVersionTarget(), "3.0.5"};
+        assert(version.target.application_id == program && version.target.generation);
+        assert(PublishHostGameVersion(version) == 0 && std::strcmp(g_main_game_version.text,"3.0.5") == 0);
+        g_recovering = true;
+        assert(!GetHostGameVersionTarget().generation && PublishHostGameVersion(version) != 0);
+        g_recovering = false;
+        info[16]++;
+        Publish(info.data(), info.size(), program);
+        assert(!g_main_game_version.text[0] && PublishHostGameVersion(version) != 0);
+        version.target = GetHostGameVersionTarget();
+        assert(PublishHostGameVersion(version) == 0);
+        Publish(nullptr, 0, program);
+        assert(!GetHostGameVersionTarget().generation && PublishHostGameVersion(version) != 0);
         host(relay.port);
         std::strcpy(g_error, "unchanged");
         assert(ipc.GetRoomPasscodeHost({&description}) == 0);

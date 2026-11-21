@@ -5,6 +5,7 @@ const catalog = require('./node-catalog');
 const locator = require('./node-locator');
 const directRoomMetadata = require('./direct-room-metadata');
 const customNodes = require('./custom-node-registry');
+const roomGameVersion = require('./room-game-version');
 const CAPABILITY = 32768, CATALOG_REQUEST = 0x32, CATALOG_RESPONSE = 0xb2;
 const REQUEST = 0x33, RESPONSE = 0xb3, REALM_REQUEST = 0x35, REALM_RESPONSE = 0xb5;
 const ANNOTATED_REQUEST = 0x37, ANNOTATED_RESPONSE = 0xb7;
@@ -72,7 +73,7 @@ function create({ source, providerIds, communityDirect, nodes = catalog.nodes, h
             (id, hostIp, identity) => isLive(sources, id, hostIp, identity));
     }
 
-    function page(request, annotated = false) {
+    function page(request, annotated = false, withVersions = false) {
         if (!Buffer.isBuffer(request) || request.length !== 20) return null;
         const offset = request.readUInt32LE(), id = request.readUInt32LE(4), game = request.readBigUInt64LE(8);
         const mask = request.readUInt32LE(16);
@@ -123,11 +124,17 @@ function create({ source, providerIds, communityDirect, nodes = catalog.nodes, h
         if (offset + rows.length < snapshot.rows.length) header.writeUInt32LE(offset + rows.length, 4);
         if (!annotated) return Buffer.concat([header, ...rows]);
         const annotatedRows = rows.map(row => {
-            if (row.readUInt32LE(340) !== DIRECT) return row;
             const node = row.readUInt32LE(336), hostIp = row.readUInt32LE(384);
             const identity = row.subarray(344, 382);
             const endpoint = node >= customNodes.FIRST ? [...row.subarray(396, 400)].join('.') : null;
-            return isLive(sources, node, hostIp, identity, endpoint) ? metadata.decorate(row, node, hostIp, identity) : row;
+            const direct = row.readUInt32LE(340) === DIRECT && isLive(sources, node, hostIp, identity, endpoint);
+            const base = direct ? metadata.decorate(row, node, hostIp, identity) : row;
+            if (!withVersions) return base;
+            const version = Buffer.alloc(roomGameVersion.SIZE);
+            const text = direct ? metadata.gameVersion(node, hostIp, identity) : node === 0 ?
+                sources.get('self')?.find(item => item.summary.equals(row.subarray(0, 336)))?.gameVersion : null;
+            if (text) version.write(text, 0, roomGameVersion.SIZE - 1, 'ascii');
+            return Buffer.concat([base, version]);
         });
         return Buffer.concat([header, ...annotatedRows]);
     }

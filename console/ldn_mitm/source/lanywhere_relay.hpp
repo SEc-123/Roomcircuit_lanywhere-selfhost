@@ -18,6 +18,7 @@
 #include "../../../common/regional_relay.h"
 #include "../../../common/node_lobby.h"
 #include "../../../common/direct_room_metadata.h"
+#include "../../../common/room_game_version.h"
 
 namespace ams::mitm::ldn {
     struct NetworkInfo;
@@ -118,6 +119,9 @@ namespace ams::mitm::lanywhere {
     Result StartHostNodeTask(const NodeDynamicEntry &identity, u64 *task_id);
     NodeHostTaskStatus GetHostNodeTask(u64 task_id);
     void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity, bool annotate = false);
+    void FindVersionedNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, VersionedNodeRoomWire *groups, size_t capacity);
+    RoomGameVersionTarget GetHostGameVersionTarget();
+    Result PublishHostGameVersion(const RoomGameVersionUpdate &update);
     Result SelectNodeRoom(const NodeRoomSelection &request);
 
     struct GroupPageV2 { s32 count; u32 next, capabilities, reserved; };

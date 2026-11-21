@@ -112,6 +112,22 @@ namespace ams::mitm::lanywhere {
         std::atomic<bool> g_stream_ready{false};
         char g_room_provider[33] = "self";
         u64 g_host_program_id;
+        struct HostGameVersion {
+            RoomGameVersionTarget target;
+            char text[ROOM_GAME_VERSION_SIZE];
+        };
+        std::atomic<u64> g_game_version_generation{0};
+        HostGameVersion g_main_game_version{};
+        u8 g_main_game_network_id[32]{};
+        u64 g_main_game_version_sent{};
+        void BindGameVersionTarget(HostGameVersion &version, u64 program) {
+            if (version.target.application_id == program) return;
+            version = {};
+            if (!ncm::IsApplicationId(ncm::ProgramId{program})) return;
+            u64 generation;
+            do { generation = g_game_version_generation.fetch_add(1) + 1; } while (!generation);
+            version.target = {program, generation};
+        }
         GameIdentity g_last_metadata{};
         bool g_metadata_sent;
         bool g_public_group_sent;
@@ -202,6 +218,7 @@ namespace ams::mitm::lanywhere {
             u64 program;
             u8 proof[32];
             GameIdentity identity;
+            HostGameVersion version;
             RoomAccessMode mode;
             u8 length;
             char password[ROOM_PASSCODE_MAX];
@@ -1189,12 +1206,24 @@ namespace ams::mitm::lanywhere {
                 g_metadata_lcid = lcid;
                 g_metadata_checked = now;
             }
-            if (g_metadata_sent && std::memcmp(&identity, &g_last_metadata, sizeof(identity)) == 0) return;
-            static_assert(sizeof(GameIdentity) == 272);
-            if (SendFrame(T_SetMetadata, &identity, sizeof(identity))) {
-                g_last_metadata = identity; g_metadata_sent = true;
+            const bool have_version = g_public_group_sent && (g_capabilities & ROOM_GAME_VERSION_CAPABILITY) &&
+                g_main_game_version.target.application_id == program && g_main_game_version.text[0];
+            if (have_version && !identity.application_id) identity.application_id = program;
+            if (!g_metadata_sent || std::memcmp(&identity, &g_last_metadata, sizeof(identity))) {
+                static_assert(sizeof(GameIdentity) == 272);
+                if (!SendFrame(T_SetMetadata, &identity, sizeof(identity))) return;
+                g_last_metadata = identity;
+                g_metadata_sent = true;
                 Log("identity: program=%016lx lcid=%016lx application=%016lx names=%u", program, lcid,
                     identity.application_id, identity.english[0] ? 1u : 0u);
+            }
+            if (have_version && identity.application_id == program && g_stream_epoch.load() != g_main_game_version_sent) {
+                u8 update[40 + ROOM_GAME_VERSION_SIZE]{};
+                put64(update, program);
+                std::memcpy(update + 8, g_main_game_network_id, sizeof(g_main_game_network_id));
+                std::memcpy(update + 40, g_main_game_version.text, ROOM_GAME_VERSION_SIZE);
+                if (SendFrame(ROOM_GAME_VERSION_SET_REQUEST, update, sizeof(update)))
+                    g_main_game_version_sent = g_stream_epoch.load();
             }
         }
 
@@ -1368,6 +1397,9 @@ namespace ams::mitm::lanywhere {
                 g_recovering = false;
                 g_error[0] = '\0';
                 g_host_program_id = 0;
+                g_main_game_version = {};
+                g_main_game_version_sent = 0;
+                std::memset(g_main_game_network_id, 0, sizeof(g_main_game_network_id));
                 g_metadata_sent = false;
                 g_public_group_sent = false;
                 std::memset(g_room_ticket, 0, sizeof(g_room_ticket));
@@ -1933,8 +1965,13 @@ namespace ams::mitm::lanywhere {
             lanplay::HostedRoom host{};
             if (size && host_program_id && lanplay::GetHostedRoom(&host)) {
                 std::scoped_lock lock(g_direct_metadata_lock);
-                if (g_direct_registration.epoch == host.epoch)
+                if (g_direct_registration.epoch == host.epoch) {
                     g_direct_registration.program = host_program_id;
+                    BindGameVersionTarget(g_direct_registration.version, host_program_id);
+                }
+            } else if (!size) {
+                std::scoped_lock lock(g_direct_metadata_lock);
+                g_direct_registration.version = {};
             }
             return;
         }
@@ -1953,6 +1990,11 @@ namespace ams::mitm::lanywhere {
                 if (g_state != RelayState::InRoom || g_my_index != 0 ||
                     (size && le64(static_cast<const u8 *>(network_info)) != g_game_id)) return;
                 g_host_program_id = size ? host_program_id : 0;
+                if (!size || std::memcmp(g_main_game_network_id, network_info, sizeof(g_main_game_network_id))) {
+                    g_main_game_version = {};
+                    g_main_game_version_sent = 0;
+                    std::memset(g_main_game_network_id, 0, sizeof(g_main_game_network_id));
+                }
                 if (!size) {
                     g_metadata_sent = false;
                     g_public_group_sent = false;
@@ -1977,7 +2019,11 @@ namespace ams::mitm::lanywhere {
             // Zero is no new association; the server retains a valid binding
             // for this same game session until withdraw/session replacement.
             pushed = SendFrame(T_Publish, network_info, size, push_capable ? association : nullptr, push_capable ? sizeof(association) : 0);
-            if (pushed) g_public_group_sent = true;
+            if (pushed) {
+                g_public_group_sent = true;
+                std::memcpy(g_main_game_network_id, network_info, sizeof(g_main_game_network_id));
+                BindGameVersionTarget(g_main_game_version, host_program_id);
+            }
         }
         if (pushed) RefreshHostMetadata();
     }
@@ -2937,7 +2983,7 @@ namespace ams::mitm::lanywhere {
             return room.verified_at && DirectMetadataNow() - room.verified_at < DirectMetadataLeaseMs;
         }
 
-        DirectRoomMetadataReply ExchangeDirectMetadata(const DirectRoomMetadata &request) {
+        DirectRoomMetadataReply ExchangeDirectMetadata(const DirectRoomMetadata &request, const char *game_version = nullptr) {
             DirectRoomMetadataReply unavailable{};
             unavailable.status = RoomPasscodeUnavailable;
             DiscoveryRoute route{};
@@ -2953,8 +2999,12 @@ namespace ams::mitm::lanywhere {
             u8 type = 0;
             DirectRoomMetadataReply reply{};
             const size_t size = request.operation == DirectRoomRead ? offsetof(DirectRoomMetadata, password) : sizeof(request);
-            const bool ok = QueryCapabilities(fd, &caps, 700) && (caps & DIRECT_ROOM_CAPABILITY) &&
-                SendFrameTo(fd, DIRECT_ROOM_METADATA_REQUEST, &request, size, nullptr, 0) &&
+            const bool queried = QueryCapabilities(fd, &caps, 700);
+            const bool versioned = request.operation == DirectRoomPublish && game_version && game_version[0] &&
+                (caps & ROOM_GAME_VERSION_CAPABILITY);
+            const bool ok = queried && (caps & DIRECT_ROOM_CAPABILITY) &&
+                SendFrameTo(fd, DIRECT_ROOM_METADATA_REQUEST, &request, size,
+                            versioned ? game_version : nullptr, versioned ? ROOM_GAME_VERSION_SIZE : 0) &&
                 ReadListFrame(fd, &type, reinterpret_cast<u8 *>(&reply), sizeof(reply), 1000, &status) == static_cast<ssize_t>(sizeof(reply));
             ::close(fd);
             if (!ok || type != DIRECT_ROOM_METADATA_RESPONSE || !AppointmentBackendCurrent(route) ||
@@ -2992,7 +3042,10 @@ namespace ams::mitm::lanywhere {
             request.program_id = room.identity.program_id;
             std::memcpy(request.title_en, room.identity.english, sizeof(request.title_en));
             std::memcpy(request.title_zh, room.identity.chinese, sizeof(request.title_zh));
-            return ExchangeDirectMetadata(request);
+            const bool have_version = room.version.target.application_id == room.program && room.version.text[0] &&
+                (!request.application_id || request.application_id == room.program);
+            if (have_version) request.application_id = request.program_id = room.program;
+            return ExchangeDirectMetadata(request, have_version ? room.version.text : nullptr);
         }
 
         void RefreshDirectIdentity(DirectRegistration &room, u64 wire_id) {
@@ -3056,6 +3109,7 @@ namespace ams::mitm::lanywhere {
             std::scoped_lock lock(g_direct_metadata_lock);
             if (g_direct_registration.epoch != host.epoch) return RoomPasscodeRoomUnavailable;
             room.verified_at = DirectMetadataNow();
+            room.version = g_direct_registration.version;
             g_direct_registration = room;
             return RoomPasscodeOk;
         }
@@ -4361,6 +4415,50 @@ namespace ams::mitm::lanywhere {
         return result;
     }
 
+    RoomGameVersionTarget GetHostGameVersionTarget() {
+        if (g_direct_session.load()) {
+            lanplay::HostedRoom host{};
+            if (!lanplay::GetHostedRoom(&host)) return {};
+            std::scoped_lock lock(g_direct_metadata_lock);
+            return g_direct_session.load() && host.epoch == g_direct_registration.epoch ?
+                g_direct_registration.version.target : RoomGameVersionTarget{};
+        }
+        std::scoped_lock lock(g_lock);
+        if (g_direct_session.load() || g_state != RelayState::InRoom || g_my_index != 0 || !g_public_group_sent ||
+            g_recovering || !(g_capabilities & ROOM_GAME_VERSION_CAPABILITY) ||
+            std::strcmp(g_room_provider, "self") || g_main_game_version.target.application_id != g_host_program_id)
+            return {};
+        return g_main_game_version.target;
+    }
+
+    Result PublishHostGameVersion(const RoomGameVersionUpdate &update) {
+        if (!update.target.generation || !update.target.application_id ||
+            !room_game_version_valid(update.game_version, false)) return ResultRelayFailed();
+        const auto report = [&](HostGameVersion &state) {
+            if (state.target.generation != update.target.generation ||
+                state.target.application_id != update.target.application_id) return false;
+            std::memcpy(state.text, update.game_version, sizeof(state.text));
+            return true;
+        };
+        if (g_direct_session.load()) {
+            lanplay::HostedRoom host{};
+            if (!lanplay::GetHostedRoom(&host)) return ResultRelayFailed();
+            std::scoped_lock lock(g_direct_metadata_lock);
+            if (!g_direct_session.load() || host.epoch != g_direct_registration.epoch ||
+                !report(g_direct_registration.version)) return ResultRelayFailed();
+        } else {
+            std::scoped_lock lock(g_lock);
+            if (g_direct_session.load() || g_state != RelayState::InRoom || g_my_index != 0 || !g_public_group_sent ||
+                g_recovering || !(g_capabilities & ROOM_GAME_VERSION_CAPABILITY) ||
+                std::strcmp(g_room_provider, "self") || g_host_program_id != update.target.application_id)
+                return ResultRelayFailed();
+            const bool changed = std::memcmp(g_main_game_version.text, update.game_version, ROOM_GAME_VERSION_SIZE) != 0;
+            if (!report(g_main_game_version)) return ResultRelayFailed();
+            if (changed) g_main_game_version_sent = 0;
+        }
+        R_SUCCEED();
+    }
+
     RoomPasscodeReply LookupDirectRoomPasscode(const NodeRoomSelection &room) {
         RoomPasscodeReply result{};
         result.status = RoomPasscodeInvalid;
@@ -4397,11 +4495,13 @@ namespace ams::mitm::lanywhere {
         }
     }
 
-    void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity, bool annotate) {
+    static void FindNodeRoomPage(const NodeRoomsRequest &request, UnifiedPage *page, void *groups, size_t capacity,
+                                 bool annotate, bool include_versions) {
         *page = {-1, NODE_LOBBY_END, 0, 0, 0, ListStatusProtocol};
         if (!groups || capacity < NODE_LOBBY_PAGE_SIZE || request.reserved ||
             (request.node_mask >> NODE_SHARED_CAPACITY) || (request.offset && !request.snapshot)) return;
-        std::memset(groups, 0, sizeof(NodeRoomWire) * NODE_LOBBY_PAGE_SIZE);
+        const size_t output_stride = include_versions ? sizeof(VersionedNodeRoomWire) : sizeof(NodeRoomWire);
+        std::memset(groups, 0, output_stride * NODE_LOBBY_PAGE_SIZE);
         DiscoveryRoute route{};
         sockaddr_in endpoint{};
         char provider[33]{};
@@ -4435,11 +4535,15 @@ namespace ams::mitm::lanywhere {
         const bool dynamic = annotate && (caps & NODE_DYNAMIC_CAPABILITY) != 0;
         const u32 wire_mask = dynamic ? request.node_mask : request.node_mask & ((1u << NODE_CATALOG_COUNT) - 1);
         put64(body + 8, request.game_id); put32(body + 16, wire_mask);
-        u8 reply[16 + NODE_LOBBY_PAGE_SIZE * NODE_LOBBY_ROW_SIZE]{};
+        u8 reply[16 + NODE_LOBBY_PAGE_SIZE * sizeof(VersionedNodeRoomWire)]{};
         count = -1;
         const bool annotations = annotate && (caps & DIRECT_ROOM_CAPABILITY) != 0;
-        const u8 request_type = dynamic ? NODE_DYNAMIC_LOBBY_REQUEST : annotations ? DIRECT_ROOM_LIST_REQUEST : NODE_LOBBY_REQUEST;
-        const u8 response_type = dynamic ? NODE_DYNAMIC_LOBBY_RESPONSE : annotations ? DIRECT_ROOM_LIST_RESPONSE : NODE_LOBBY_RESPONSE;
+        const bool versioned = include_versions && dynamic && annotations && (caps & ROOM_GAME_VERSION_CAPABILITY);
+        const size_t wire_stride = versioned ? sizeof(VersionedNodeRoomWire) : sizeof(NodeRoomWire);
+        const u8 request_type = versioned ? ROOM_GAME_VERSION_LIST_REQUEST :
+            dynamic ? NODE_DYNAMIC_LOBBY_REQUEST : annotations ? DIRECT_ROOM_LIST_REQUEST : NODE_LOBBY_REQUEST;
+        const u8 response_type = versioned ? ROOM_GAME_VERSION_LIST_RESPONSE :
+            dynamic ? NODE_DYNAMIC_LOBBY_RESPONSE : annotations ? DIRECT_ROOM_LIST_RESPONSE : NODE_LOBBY_RESPONSE;
         if (SendFrameTo(fd, request_type, body, sizeof(body), nullptr, 0))
             count = ReadListFrame(fd, &type, reply, sizeof(reply), 3000, &page->status);
         ::close(fd);
@@ -4448,7 +4552,7 @@ namespace ams::mitm::lanywhere {
         if (type == T_Error && count >= 1) { page->status = lanywhere_list_error_status(reply[0]); return; }
         page->status = ListStatusProtocol;
         if (type != response_type || count < 16 || reply[8] > NODE_LOBBY_PAGE_SIZE ||
-            count != 16 + static_cast<ssize_t>(reply[8] * sizeof(NodeRoomWire)) || reply[9] > reply[10] ||
+            count != 16 + static_cast<ssize_t>(reply[8] * wire_stride) || reply[9] > reply[10] ||
             reply[10] > (dynamic ? NODE_SHARED_CAPACITY : NODE_CATALOG_COUNT) || le32(reply + 12)) return;
         if (reply[11] == 1 && !reply[8] && le32(reply + 4) == NODE_LOBBY_END) {
             page->status = UnifiedListStale; return;
@@ -4459,7 +4563,8 @@ namespace ams::mitm::lanywhere {
         VerifiedNodeRoom verified[NODE_LOBBY_PAGE_SIZE]{};
         for (size_t i = 0; i < reply[8]; i++) {
             NodeRoomWire row{}; GroupSummaryV2 summary{};
-            std::memcpy(&row, reply + 16 + i * sizeof(row), sizeof(row));
+            const u8 *source = reply + 16 + i * wire_stride;
+            std::memcpy(&row, source, sizeof(row));
             std::memcpy(&summary, row.group, sizeof(summary));
             if (row.node_id >= (dynamic ? NODE_SHARED_CAPACITY : NODE_CATALOG_COUNT) || !(wire_mask & (1u << row.node_id)) ||
                 (row.flags != NodeRoomDirect && row.flags != NodeRoomGateway) || !summary.game_id ||
@@ -4484,7 +4589,13 @@ namespace ams::mitm::lanywhere {
                 util::Strlcpy(summary.host, "Player", sizeof(summary.host));
             AddCachedIdentity(summary);
             std::memcpy(row.group, &summary, sizeof(summary));
-            groups[i] = row;
+            if (include_versions) {
+                auto &output = static_cast<VersionedNodeRoomWire *>(groups)[i];
+                output.room = row;
+                const auto *version = reinterpret_cast<const char *>(source + sizeof(row));
+                if (versioned && room_game_version_valid(version, false))
+                    std::memcpy(output.game_version, version, sizeof(output.game_version));
+            } else static_cast<NodeRoomWire *>(groups)[i] = row;
             if (dynamic && row.node_id >= NODE_CATALOG_COUNT && row.flags == NodeRoomDirect) {
                 if (!LookupNode(row.node_id, &verified[i].entry)) return;
                 verified[i].selection.game_id = summary.game_id;
@@ -4506,6 +4617,14 @@ namespace ams::mitm::lanywhere {
             }
         }
         *page = {static_cast<s32>(reply[8]), next, snapshot, reply[9], reply[10], ListStatusOk};
+    }
+
+    void FindNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, NodeRoomWire *groups, size_t capacity, bool annotate) {
+        FindNodeRoomPage(request, page, groups, capacity, annotate, false);
+    }
+
+    void FindVersionedNodeRooms(const NodeRoomsRequest &request, UnifiedPage *page, VersionedNodeRoomWire *groups, size_t capacity) {
+        FindNodeRoomPage(request, page, groups, capacity, true, true);
     }
 
 }

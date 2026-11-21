@@ -1,6 +1,7 @@
 'use strict';
 
 // Display-only host declarations. LCID and room admission never come from these fields.
+const roomGameVersion = require('./room-game-version');
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const PAYLOAD_BYTES = 272, RECORD_BYTES = 336;
 function title(bytes) {
@@ -20,7 +21,7 @@ function parse(body) {
     return { programId: body.readBigUInt64LE(0), applicationId: body.readBigUInt64LE(8), en, zh };
 }
 function create({ now = Date.now } = {}) {
-    const entries = new WeakMap(), limits = new WeakMap();
+    const entries = new WeakMap(), limits = new WeakMap(), versions = new WeakMap();
     function set(member, body) {
         const room = member?.room;
         if (!room || room.members[0] !== member || !member.socket || member.socket.destroyed || member.socket.writableEnded)
@@ -59,6 +60,26 @@ function create({ now = Date.now } = {}) {
         const entry = entries.get(room);
         return entry && entry.owner === room.members[0] ? entry.applicationId : 0n;
     }
-    return { set, summary, page, applicationId };
+    function setGameVersion(member, body) {
+        const room = member?.room;
+        if (!room?.published || room.members[0] !== member || !member.socket ||
+            member.socket.destroyed || member.socket.writableEnded || body.length !== 40 + roomGameVersion.SIZE)
+            return false;
+        const app = body.readBigUInt64LE();
+        const identity = body.subarray(8, 40);
+        const version = roomGameVersion.parse(body.subarray(40));
+        const host = entries.get(room);
+        if (!version || !app || app !== host?.programId || app !== host.applicationId ||
+            host.owner !== member || !identity.equals(room.published.info.subarray(0, 32))) return false;
+        versions.set(room, { app, owner: member, identity: Buffer.from(identity), version });
+        return true;
+    }
+    function gameVersion(room) {
+        const entry = versions.get(room);
+        return entry && entry.owner === room.members[0] && entry.app === applicationId(room) &&
+            room.published && entry.identity.equals(room.published.info.subarray(0, 32)) ? entry.version : '';
+    }
+    function clearGameVersion(room) { versions.delete(room); }
+    return { set, summary, page, applicationId, setGameVersion, gameVersion, clearGameVersion };
 }
 module.exports = { create, parse, PAYLOAD_BYTES, RECORD_BYTES };

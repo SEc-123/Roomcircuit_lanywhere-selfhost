@@ -9,6 +9,7 @@
 #include "../../common/node_lobby.h"
 #include "../../common/node_catalog.h"
 #include "../../common/direct_room_metadata.h"
+#include "../../common/room_game_version.h"
 
 #define LANYWHERE_IPC_MAJOR 5
 #define LANYWHERE_IPC_CAPABILITIES_COMMAND 10
@@ -34,6 +35,7 @@ _Static_assert(sizeof(LobbyGroup) == 336 && offsetof(LobbyGroup,application_id)=
                offsetof(LobbyGroup,title_en)==80 && offsetof(LobbyGroup,title_zh)==208, "GroupSummaryV2 IPC layout");
 
 typedef char LobbySource[UNIFIED_LOBBY_PROVIDER_SIZE];
+typedef char LobbyGameVersion[ROOM_GAME_VERSION_SIZE];
 typedef struct {
     LobbyGroup group;
     LobbySource provider;

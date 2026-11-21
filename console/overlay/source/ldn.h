@@ -2,7 +2,9 @@
 #pragma once
 #include <switch.h>
 #include "../../../common/room_passcode.h"
+#include "../../../common/room_game_version.h"
 #include "../../../common/node_lobby.h"
+#include "../../../common/unified_lobby.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -57,6 +59,22 @@ Result lanywhereOverlayGetNodeTask(Service *s, u64 task_id, NodeHostTaskStatus *
 #define OVERLAY_ROOM_ACCESS_UNKNOWN UINT32_MAX
 Result lanywhereOverlayGetPasscodeHostState(Service *s, RoomPasscodeHostState *out);
 Result lanywhereOverlaySetRoomAccess(Service *s, const RoomAccessChange *change, u32 *status);
+
+typedef struct {
+    NodeRoomSelection selection;
+    u64 application_id;
+    u32 flags;
+    u8 players, max_players, access;
+    char title_en[128], title_zh[128];
+    char game_version[ROOM_GAME_VERSION_SIZE];
+} OverlayPublicRoom;
+
+Result lanywhereOverlayListRooms(Service *s, const NodeRoomsRequest *request, UnifiedPage *page,
+                               OverlayPublicRoom rooms[NODE_LOBBY_PAGE_SIZE]);
+Result lanywhereOverlaySelectRoom(Service *s, const OverlayPublicRoom *room);
+Result lanywhereOverlayGetHostVersionTarget(Service *s, RoomGameVersionTarget *target);
+Result lanywhereOverlayPublishHostVersion(Service *s, const RoomGameVersionUpdate *update);
+bool lanywhereOverlayReadGameVersion(u64 application_id, u64 required_lcid, char version[ROOM_GAME_VERSION_SIZE]);
 
 #ifdef __cplusplus
 }

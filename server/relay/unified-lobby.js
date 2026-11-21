@@ -140,7 +140,7 @@ function create({ providerIds, queryProvider, selfRows, regional, community, now
         const time = now();
         refresh(time); refreshCommunity(time);
         const available = new Map();
-        available.set('self', selfRows().map(summary => ({ summary, locator: null })));
+        available.set('self', selfRows().map(summary => ({ summary, locator: null, gameVersion: summary.gameVersion })));
         for (const provider of providerIds) {
             const source = sources.get(provider);
             if (source && time - source.time <= SOURCE_MAX_AGE_MS) available.set(provider, source.nodeRows);

@@ -234,6 +234,12 @@ try {
         ['-std=c++17', '-Wall', '-Wextra', '-Werror', '-Iapp/tests/mock_horizon', 'app/tests/game_identity_cache_fs_test.cpp', '-o', cacheBinary]);
     if (cacheBuilt) await suite('Native title cache reader and fingerprint', cacheBinary, []);
     await suite('Actual title display and launch gate', process.env.PYTHON || 'python3', ['-B', 'app/tests/game_identity_ui_test.py']);
+    await suite('Host game version display, fresh reads and room selection', process.env.PYTHON || 'python3',
+        ['-B', 'app/tests/room_game_version_app_test.py']);
+    const updatePolicyBinary = path.join(temp, 'game-update-policy-test');
+    const updatePolicyBuilt = await suite('Game update compatibility policy build', process.env.CC || 'cc',
+        ['-std=c11', '-Wall', '-Wextra', '-Werror', 'compatibility/game-update-policy/test.c', '-o', updatePolicyBinary]);
+    if (updatePolicyBuilt) await suite('Game-specific incompatible and mixed update pairs', updatePolicyBinary, []);
     await suite('Offline title catalog and room/lobby recovery', process.env.PYTHON || 'python3', ['-B', 'app/tests/catalog_recovery_test.py']);
     await suite('Title catalog sources, scope and deterministic generation', process.env.PYTHON || 'python3', ['-B', 'compatibility/title-catalog/test_generator.py']);
     await suite('Actual local installation verification', process.env.PYTHON || 'python3', ['-B', 'app/tests/game_info_install_test.py']);

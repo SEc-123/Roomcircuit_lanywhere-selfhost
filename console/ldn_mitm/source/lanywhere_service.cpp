@@ -130,6 +130,24 @@ namespace ams::mitm::lanywhere {
         return ListNodeRoomPage(request, page, out, true);
     }
 
+    Result LanywhereService::ListVersionedNodeRooms(NodeRoomsRequest request, sf::Out<UnifiedPage> page, const sf::OutBuffer &out) {
+        UnifiedPage result{-1, NODE_LOBBY_END, 0, 0, 0, ListStatusProtocol};
+        if (out.GetPointer() && out.GetSize() == NODE_LOBBY_PAGE_SIZE * sizeof(VersionedNodeRoomWire))
+            lanywhere::FindVersionedNodeRooms(request, &result, reinterpret_cast<VersionedNodeRoomWire *>(out.GetPointer()),
+                                             NODE_LOBBY_PAGE_SIZE);
+        page.SetValue(result);
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::GetHostGameVersionTarget(sf::Out<RoomGameVersionTarget> out) {
+        out.SetValue(lanywhere::GetHostGameVersionTarget());
+        R_SUCCEED();
+    }
+
+    Result LanywhereService::PublishHostGameVersion(RoomGameVersionUpdate update) {
+        R_RETURN(lanywhere::PublishHostGameVersion(update));
+    }
+
     Result LanywhereService::GetDirectHostRoom(const sf::OutBuffer &out) {
         if (out.GetSize() != sizeof(DirectRoomHost)) return ResultRelayFailed();
         const auto host = DescribeDirectHost();

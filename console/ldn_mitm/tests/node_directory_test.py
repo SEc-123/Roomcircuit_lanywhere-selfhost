@@ -19,6 +19,7 @@ code=r'''
 #include "direct_room_metadata.h"
 #include "unified_lobby.h"
 #include "list_status.h"
+#include "room_game_version.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
@@ -32,6 +33,7 @@ constexpr u32 LanPlayNet=0x0a0d0000;constexpr u8 T_Error=0x85;constexpr size_t M
 namespace util {void Strlcpy(char *out,const char *in,size_t n){if(n)snprintf(out,n,"%s",in);}}
 '''+struct('DiscoveryRoute')+'\n'+struct('GroupSummaryV2')+'\n'+''.join(extract.function(source,s)+'\n' for s in ('u32 le32(', 'u64 le64(', 'void put32(', 'void put64('))+r'''
 static bool configured=true,current=true,capable=true,annotated=false,wants_annotations=false,bad_hash=false,dynamic=false;
+static bool versions=false,wants_versions=false;
 struct VerifiedNodeRoom {NodeRoomSelection selection;NodeDynamicEntry entry;u64 expires_at;};
 static std::mutex g_verified_rooms_lock;static VerifiedNodeRoom g_verified_rooms[48]{};
 static u32 g_verified_snapshot=0;static size_t g_verified_next=0;static constexpr u64 SelectionLifetimeMs=180000;
@@ -48,23 +50,26 @@ static bool ResolveDiscoveryRoute(const DiscoveryRoute&,sockaddr_in *out,char *p
 static bool AppointmentBackendCurrent(const DiscoveryRoute&){return current;}
 static int ConnectServer(sockaddr_in,const char**,int,const char*,u32*){return dup(STDOUT_FILENO);}
 static bool QueryCapabilities(int,u32 *caps,int,u32*){
- *caps=(capable?NODE_LOBBY_CAPABILITY:0)|(annotated?DIRECT_ROOM_CAPABILITY:0)|(dynamic?NODE_DYNAMIC_CAPABILITY:0);return true;
+ *caps=(capable?NODE_LOBBY_CAPABILITY:0)|(annotated?DIRECT_ROOM_CAPABILITY:0)|(dynamic?NODE_DYNAMIC_CAPABILITY:0)|
+  (versions?ROOM_GAME_VERSION_CAPABILITY:0);return true;
 }
 static bool SendFrameTo(int,u8 command,const void *data,size_t size,const void*,size_t){
  last_command=command;
- if(command==((dynamic&&wants_annotations)?NODE_DYNAMIC_LOBBY_REQUEST:(annotated&&wants_annotations)?DIRECT_ROOM_LIST_REQUEST:NODE_LOBBY_REQUEST)){assert(size==20);memcpy(&received,data,size);queries++;}
+ if(command==((dynamic&&annotated&&versions&&wants_versions)?ROOM_GAME_VERSION_LIST_REQUEST:
+  (dynamic&&wants_annotations)?NODE_DYNAMIC_LOBBY_REQUEST:(annotated&&wants_annotations)?DIRECT_ROOM_LIST_REQUEST:NODE_LOBBY_REQUEST)){assert(size==20);memcpy(&received,data,size);queries++;}
  else assert(command==NODE_CATALOG_REQUEST&&size==0);
  return true;
 }
 static ssize_t ReadListFrame(int,u8 *type,void *out,size_t capacity,int,u32*){
  if(last_command==NODE_CATALOG_REQUEST){assert(capacity>=40);auto*p=static_cast<u8*>(out);memcpy(p,LanywhereNodeCatalogHash,32);if(bad_hash)p[0]^=1;put32(p+32,0x1ffd);put32(p+36,0x1fff);*type=NODE_CATALOG_RESPONSE;return 40;}
- *type=response_override?response_override:last_command==NODE_DYNAMIC_LOBBY_REQUEST?NODE_DYNAMIC_LOBBY_RESPONSE:last_command==DIRECT_ROOM_LIST_REQUEST?DIRECT_ROOM_LIST_RESPONSE:NODE_LOBBY_RESPONSE;
+ *type=response_override?response_override:last_command==ROOM_GAME_VERSION_LIST_REQUEST?ROOM_GAME_VERSION_LIST_RESPONSE:
+  last_command==NODE_DYNAMIC_LOBBY_REQUEST?NODE_DYNAMIC_LOBBY_RESPONSE:last_command==DIRECT_ROOM_LIST_REQUEST?DIRECT_ROOM_LIST_RESPONSE:NODE_LOBBY_RESPONSE;
  assert(capacity>=wire.size());memcpy(out,wire.data(),wire.size());return wire.size();
 }
 static bool ValidCode(const char*code){return strlen(code)==6;}
 static bool CleanDisplayField(const char*field,size_t size,bool){return memchr(field,0,size)!=nullptr;}
 static void AddCachedIdentity(GroupSummaryV2&){}
-'''+extract.function(source,'void FindNodeRooms(')+r'''
+'''+''.join(extract.function(source,s)+'\n' for s in ('static void FindNodeRoomPage(', 'void FindNodeRooms(', 'void FindVersionedNodeRooms('))+r'''
 static NodeRoomWire room(){NodeRoomWire row{};row.node_id=2;row.flags=NodeRoomDirect;GroupSummaryV2 group{};
  strcpy(group.code,"ABC234");group.game_id=42;group.players=1;group.max_players=4;strcpy(group.host,"Player");memcpy(row.group,&group,sizeof(group));
  row.locator.host_ip=LanPlayNet|17;row.locator.flavor=NodeFlavorStandard;put64(row.locator.network_id,42);row.locator.bssid[0]=2;row.locator.network_id[16]=3;strcpy(row.locator.code,"ABC234");return row;}
@@ -109,6 +114,19 @@ int main(){NodeRoomsRequest req{};req.node_mask=0x1fff;UnifiedPage page{};NodeRo
  response(custom);wire[10]=14;FindNodeRooms(req,&page,rows,6,wants_annotations);
  assert(last_command==NODE_DYNAMIC_LOBBY_REQUEST&&page.count==1&&g_verified_rooms[0].selection.node_id==13);
  assert(g_verified_rooms[0].selection.locator.reserved[3]==8&&g_verified_rooms[0].entry.port==11451);
+ VersionedNodeRoomWire extended[6]{};
+ versions=true;wants_versions=true;response(custom);wire[10]=14;wire.resize(wire.size()+16);
+ std::memcpy(wire.data()+16+408,"3.0.5",5);
+ FindVersionedNodeRooms(req,&page,extended,6);
+ assert(page.status==ListStatusOk&&page.count==1&&extended[0].room.node_id==13);
+ assert(last_command==ROOM_GAME_VERSION_LIST_REQUEST&&!strcmp(extended[0].game_version,"3.0.5"));
+ wire.back()='x';FindVersionedNodeRooms(req,&page,extended,6);
+ assert(page.status==ListStatusOk&&page.count==1&&!extended[0].game_version[0]);
+ response(custom);wire[10]=14;
+ FindVersionedNodeRooms(req,&page,extended,6);assert(page.status==ListStatusProtocol);
+ versions=false;wants_versions=false;
+ FindVersionedNodeRooms(req,&page,extended,6);
+ assert(page.status==ListStatusOk&&page.count==1&&last_command==NODE_DYNAMIC_LOBBY_REQUEST&&!extended[0].game_version[0]);cases++;
  custom.locator.reserved[0]=10;response(custom);wire[10]=14;FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==ListStatusProtocol);
  dynamic=false;annotated=false;wants_annotations=false;req.node_mask=0x1fff;cases++;
  response(room());current=false;FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==ListStatusUnavailable);current=true;configured=false;FindNodeRooms(req,&page,rows,6,wants_annotations);assert(page.status==ListStatusConfig);cases++;

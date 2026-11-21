@@ -3,12 +3,16 @@
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 #include "ldn.h"
+#include "roomcircuit_ultra_thread.hpp"
+#include "../../../common/game_update_compatibility.h"
+#include "../../../common/list_status.h"
 #include "../../../common/system_language.h"
 #include "../../../common/roomcircuit_paths.h"
 #include <sys/stat.h>
 #include "model.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string_view>
@@ -31,6 +35,157 @@ namespace {
     std::string g_notice;
     u64 g_notice_until = 0;
     u64 g_last_poll = 0;
+
+    namespace ultra = roomcircuit::ultra;
+    enum class RoomAction { List, Select, PublishVersion };
+    enum class RoomReply { Ready, Busy, Changed, Full, Locked, Incompatible, Unavailable, UpdateRequired, Failed };
+    struct RoomJob {
+        RoomAction action{};
+        NodeRoomsRequest request{};
+        OverlayPublicRoom chosen{};
+        RoomReply reply{};
+        UnifiedPage page{};
+        std::array<OverlayPublicRoom, NODE_LOBBY_PAGE_SIZE> rooms{};
+        std::array<std::array<char, 48>, NODE_LOBBY_PAGE_SIZE> names{};
+    };
+    RoomJob g_room_job;
+    ultra::Worker g_room_worker;
+    std::atomic<bool> g_room_done{true};
+    struct HostVersionPublisher {
+        RoomGameVersionTarget target{};
+        unsigned attempts = 0;
+        bool published = false, unsupported = false;
+    };
+    HostVersionPublisher g_host_version;
+    u64 g_next_version_poll = 0;
+
+    bool roomJobRunning() {
+        return !g_room_done.load(std::memory_order_acquire);
+    }
+
+    bool roomSelectionAllowed(Service *service) {
+        overlay::Snapshot status{.config_ok = true};
+        NodeActiveRouteInfo route{};
+        status.relay_ok = R_SUCCEEDED(lanywhereOverlayGetStatus(service, &status.status)) &&
+            R_SUCCEEDED(lanywhereOverlayGetMatch(service, &status.match));
+        return overlay::canSelectHostNode(status) && R_SUCCEEDED(lanywhereOverlayGetActiveRoute(service, &route)) &&
+            (route.status == NodeRouteNone || route.status == NodeRouteSelected);
+    }
+
+    RoomReply roomListResult(Result rc, const UnifiedPage &page) {
+        if (rc == MAKERESULT(10, 221) || page.status == ListStatusUpdate) return RoomReply::UpdateRequired;
+        if (R_FAILED(rc)) return RoomReply::Unavailable;
+        if (page.status == UnifiedListStale) return RoomReply::Changed;
+        return page.count < 0 || !page.available ? RoomReply::Unavailable : RoomReply::Ready;
+    }
+
+    RoomReply listPublicRooms(Service *service, RoomJob &job) {
+        const Result rc = lanywhereOverlayListRooms(service, &job.request, &job.page, job.rooms.data());
+        const auto result = roomListResult(rc, job.page);
+        if (result != RoomReply::Ready) return result;
+        const bool has_custom = std::any_of(job.rooms.begin(), job.rooms.begin() + job.page.count,
+            [](const OverlayPublicRoom &room) { return room.selection.node_id >= NODE_CATALOG_COUNT; });
+        if (has_custom) {
+            NodeDynamicCatalog catalog{};
+            if (R_SUCCEEDED(lanywhereOverlayGetNodeCatalog(service, &catalog))) {
+                for (int32_t i = 0; i < job.page.count; ++i)
+                    for (u32 j = 0; j < catalog.count; ++j)
+                        if (catalog.nodes[j].id == job.rooms[i].selection.node_id)
+                            std::memcpy(job.names[i].data(), catalog.nodes[j].name, job.names[i].size());
+            }
+        }
+        return result;
+    }
+
+    RoomReply selectPublicRoom(Service *service, RoomJob &job) {
+        if (!roomSelectionAllowed(service)) return RoomReply::Busy;
+        const OverlayPublicRoom &chosen = job.chosen;
+        NodeRoomsRequest request{};
+        request.game_id = chosen.selection.game_id;
+        request.node_mask = 1u << chosen.selection.node_id;
+        // Check a fresh directory snapshot, filtered to this game and node.
+        // The locator pins its session even if a room code is reused.
+        const u64 deadline = armGetSystemTick() + 5 * armGetSystemTickFreq();
+        for (unsigned page_number = 0; page_number < 8 && armGetSystemTick() < deadline; ++page_number) {
+            UnifiedPage page{};
+            OverlayPublicRoom rooms[NODE_LOBBY_PAGE_SIZE]{};
+            const Result rc = lanywhereOverlayListRooms(service, &request, &page, rooms);
+            const auto result = roomListResult(rc, page);
+            if (result != RoomReply::Ready) return result;
+            for (int32_t i = 0; i < page.count; ++i) {
+                auto &current = rooms[i];
+                if (chosen.flags != current.flags ||
+                    std::memcmp(&chosen.selection, &current.selection, sizeof(NodeRoomSelection))) continue;
+                if (current.players >= current.max_players) return RoomReply::Full;
+                if (!current.selection.node_id && current.access == RoomAccessHidden) return RoomReply::Locked;
+                char local_version[ROOM_GAME_VERSION_SIZE]{};
+                if (current.application_id && current.game_version[0] &&
+                    lanywhereOverlayReadGameVersion(current.application_id, current.selection.game_id, local_version) &&
+                    room_game_updates_incompatible(current.application_id, current.game_version, local_version))
+                    return RoomReply::Incompatible;
+                if (!roomSelectionAllowed(service)) return RoomReply::Busy;
+                const Result selected = lanywhereOverlaySelectRoom(service, &current);
+                if (selected == MAKERESULT(10, 221)) return RoomReply::UpdateRequired;
+                if (R_FAILED(selected)) return RoomReply::Failed;
+                job.chosen = current;
+                return RoomReply::Ready;
+            }
+            if (page.next == NODE_LOBBY_END) break;
+            request.offset = page.next;
+            request.snapshot = page.snapshot;
+        }
+        return RoomReply::Changed;
+    }
+
+    void publishHostVersion(Service *service) {
+        RoomGameVersionTarget target{};
+        const Result rc = lanywhereOverlayGetHostVersionTarget(service, &target);
+        if (rc == MAKERESULT(10, 221)) g_host_version.unsupported = true;
+        if (R_FAILED(rc) || !target.generation || !target.application_id) return;
+        if (target.generation != g_host_version.target.generation ||
+            target.application_id != g_host_version.target.application_id)
+            g_host_version = {.target = target};
+        if (g_host_version.published || g_host_version.attempts >= 3) return;
+        ++g_host_version.attempts;
+        RoomGameVersionUpdate update{.target = target};
+        if (!lanywhereOverlayReadGameVersion(target.application_id, 0, update.game_version)) return;
+        const Result published = lanywhereOverlayPublishHostVersion(service, &update);
+        if (published == MAKERESULT(10, 221)) g_host_version.unsupported = true;
+        g_host_version.published = R_SUCCEEDED(published);
+    }
+
+    void runRoomJob(void *) {
+        Service service{};
+        const Result sm = smInitialize();
+        if (R_SUCCEEDED(sm)) {
+            bool present = false;
+            if (R_SUCCEEDED(lanywhereOverlayHasService(&present, false)) && present)
+                (void)smGetService(&service, "lanywhr");
+            smExit();
+        }
+        g_room_job.reply = RoomReply::Unavailable;
+        if (serviceIsActive(&service)) {
+            switch (g_room_job.action) {
+                case RoomAction::List: g_room_job.reply = listPublicRooms(&service, g_room_job); break;
+                case RoomAction::Select: g_room_job.reply = selectPublicRoom(&service, g_room_job); break;
+                case RoomAction::PublishVersion: publishHostVersion(&service); break;
+            }
+        }
+        serviceClose(&service);
+        g_room_done.store(true, std::memory_order_release);
+    }
+
+    bool startRoomJob(RoomAction action, const NodeRoomsRequest &request, const OverlayPublicRoom &chosen) {
+        if (roomJobRunning() || R_FAILED(ultra::release(g_room_worker))) return false;
+        g_room_job = {};
+        g_room_job.action = action;
+        g_room_job.request = request;
+        g_room_job.chosen = chosen;
+        g_room_done.store(false, std::memory_order_release);
+        if (R_SUCCEEDED(ultra::start(g_room_worker, runRoomJob, nullptr, 0x4000))) return true;
+        g_room_done.store(true, std::memory_order_release);
+        return false;
+    }
 
     struct NodeTask {
         u64 id = 0;
@@ -119,6 +274,9 @@ namespace {
     }
 
     void closeServices() {
+        ultra::releaseEventually(g_room_worker);
+        g_host_version = {};
+        g_next_version_poll = 0;
         serviceClose(&g_relay);
         serviceClose(&g_config.s);
         serviceClose(&g_ldnSrv);
@@ -166,6 +324,7 @@ namespace {
                 tr("On", "开启"), tr("Off", "关闭")), m_logging(logging) {}
         bool onClick(u64 keys) override {
             if (!(keys & HidNpadButton_A)) return false;
+            if (roomJobRunning()) return true;
             refresh();
             if (!g_snapshot.config_ok || (!m_logging && !overlay::canChangeEnabled(g_snapshot))) {
                 g_notice = !g_snapshot.config_ok ? tr("Module unavailable. Reconnect or restart the console.", "插件服务不可用，请重连或重启主机。") :
@@ -636,6 +795,196 @@ namespace {
         }
     };
 
+    class RoomJoinGui : public tsl::Gui {
+        tsl::elm::List *m_list{};
+        tsl::elm::ListItem *m_feedback{}, *m_previous{}, *m_next{};
+        std::array<tsl::elm::ListItem *, NODE_LOBBY_PAGE_SIZE> m_items{};
+        std::array<OverlayPublicRoom, NODE_LOBBY_PAGE_SIZE> m_rooms{};
+        bool m_pending = false, m_selected = false;
+        u32 m_offset = 0, m_snapshot = 0, m_next_offset = NODE_LOBBY_END;
+
+        void clearRows() {
+            const auto remove = [this](tsl::elm::ListItem *&item) {
+                if (!item) return;
+                if (getFocusedElement() == item) {
+                    removeFocus();
+                    restoreFocus();
+                }
+                m_list->removeItem(item);
+                item = nullptr;
+            };
+            for (auto &item : m_items) remove(item);
+            remove(m_previous);
+            remove(m_next);
+            m_rooms = {};
+            m_offset = m_snapshot = 0;
+            m_next_offset = NODE_LOBBY_END;
+        }
+
+        void load(u32 offset = 0, u32 snapshot = 0) {
+            if (m_pending) return;
+            m_selected = false;
+            NodeRoomsRequest request{};
+            request.offset = offset;
+            request.snapshot = snapshot;
+            request.node_mask = (1u << NODE_SHARED_CAPACITY) - 1;
+            m_pending = startRoomJob(RoomAction::List, request, {});
+            m_feedback->setText(m_pending ? tr("Loading rooms…", "正在加载房间…") :
+                tr("Could not load rooms.", "无法加载房间。"));
+        }
+
+        void select(const OverlayPublicRoom &room) {
+            if (m_pending || m_selected) return;
+            if (room.players >= room.max_players) {
+                m_feedback->setText(tr("Room is full.", "房间已满。"));
+                return;
+            }
+            if (!room.selection.node_id && room.access == RoomAccessHidden) {
+                m_feedback->setText(tr("Unlock this room in RoomCircuit.", "请在 RoomCircuit 中解锁此房间。"));
+                return;
+            }
+            if (!g_snapshot.config_ok || !g_snapshot.enabled) {
+                m_feedback->setText(tr("Enable the plugin first.", "请先开启联机插件。"));
+                return;
+            }
+            m_pending = startRoomJob(RoomAction::Select, {}, room);
+            m_feedback->setText(m_pending ? tr("Checking room…", "正在检查房间…") :
+                tr("Could not select room.", "无法选择房间。"));
+        }
+
+        const char *nodeLabel(u32 node, const char *custom) {
+            if (!node) return tr("Main server", "主服务器");
+            if (node < NODE_CATALOG_COUNT)
+                return tr(LanywhereNodes[node].name_en, LanywhereNodes[node].name_zh);
+            return *custom ? custom : tr("Custom node", "自定义节点");
+        }
+
+        void showRooms(const RoomJob &job) {
+            clearRows();
+            m_offset = job.request.offset;
+            m_snapshot = job.page.snapshot;
+            m_next_offset = job.page.next;
+            m_rooms = job.rooms;
+            m_feedback->setText(job.page.count ? tr("Public rooms", "公开房间") :
+                tr("No public rooms.", "暂无公开房间。"));
+            for (int32_t i = 0; i < job.page.count; ++i) {
+                const auto &room = m_rooms[i];
+                const char *title = g_chinese ? room.title_zh : room.title_en;
+                if (!*title) title = g_chinese ? room.title_en : room.title_zh;
+                char fallback[48]{};
+                if (!*title) {
+                    if (room.selection.game_id == UINT64_MAX)
+                        title = tr("Game information unavailable", "暂无游戏信息");
+                    else {
+                        std::snprintf(fallback, sizeof(fallback), tr("Game %016llX", "游戏 %016llX"),
+                            static_cast<unsigned long long>(room.selection.game_id));
+                        title = fallback;
+                    }
+                }
+                std::string label = title;
+                if (room.game_version[0]) label += std::string(" · ") + room.game_version;
+                auto *item = m_items[i] = new tsl::elm::ListItem(label);
+                char value[96]{};
+                std::snprintf(value, sizeof(value), "%s · %u/%u",
+                    nodeLabel(room.selection.node_id, job.names[i].data()), room.players, room.max_players);
+                item->setValue(value, room.players >= room.max_players);
+                item->setClickListener([this, i](u64 keys) {
+                    if (!(keys & HidNpadButton_A)) return false;
+                    select(m_rooms[i]);
+                    return true;
+                });
+                m_list->addItem(item, 0, i + 1);
+            }
+            int index = job.page.count + 1;
+            if (m_offset) {
+                m_previous = new tsl::elm::ListItem(tr("Previous page", "上一页"));
+                m_previous->setClickListener([this](u64 keys) {
+                    if (!(keys & HidNpadButton_A)) return false;
+                    load(m_offset >= NODE_LOBBY_PAGE_SIZE ? m_offset - NODE_LOBBY_PAGE_SIZE : 0, m_snapshot);
+                    return true;
+                });
+                m_list->addItem(m_previous, 0, index++);
+            }
+            if (m_next_offset != NODE_LOBBY_END) {
+                m_next = new tsl::elm::ListItem(tr("Next page", "下一页"));
+                m_next->setClickListener([this](u64 keys) {
+                    if (!(keys & HidNpadButton_A)) return false;
+                    load(m_next_offset, m_snapshot);
+                    return true;
+                });
+                m_list->addItem(m_next, 0, index);
+            }
+        }
+
+    public:
+        tsl::elm::Element *createUI() override {
+            auto *frame = new tsl::elm::OverlayFrame(tr("Join room", "加入房间"), GITDESCVER);
+            auto *list = m_list = new tsl::elm::List();
+            list->addItem(m_feedback = new tsl::elm::ListItem(""));
+            auto *refresh_rooms = new tsl::elm::ListItem(tr("Refresh rooms", "刷新房间"));
+            refresh_rooms->setClickListener([this](u64 keys) {
+                if (!(keys & HidNpadButton_A)) return false;
+                load();
+                return true;
+            });
+            list->addItem(refresh_rooms);
+            frame->setContent(list);
+            load();
+            return frame;
+        }
+
+        bool handleInput(u64 down, u64, const HidTouchState &, HidAnalogStickState, HidAnalogStickState) override {
+            // Browsing has no side effects and can leave the worker behind.
+            if (m_pending && g_room_job.action == RoomAction::Select && (down & HidNpadButton_B)) return true;
+            return false;
+        }
+
+        void update() override {
+            if (!m_pending || roomJobRunning() || R_FAILED(ultra::release(g_room_worker))) return;
+            m_pending = false;
+            switch (g_room_job.reply) {
+                case RoomReply::Ready:
+                    if (g_room_job.action == RoomAction::List) showRooms(g_room_job);
+                    else {
+                        m_selected = true;
+                        clearRows();
+                        m_feedback->setText(g_room_job.chosen.access ?
+                            tr("Search and enter the password in game.", "请在游戏内搜索并输入密码。") :
+                            tr("Search in Local Wireless.", "请在游戏内的本地联机中搜索。"));
+                        m_next = new tsl::elm::ListItem(tr("Return to game", "返回游戏"));
+                        m_next->setClickListener([](u64 keys) {
+                            if (!(keys & HidNpadButton_A)) return false;
+                            if (auto *overlay = tsl::Overlay::get()) overlay->hide();
+                            return true;
+                        });
+                        m_list->addItem(m_next, 0, 1);
+                    }
+                    break;
+                case RoomReply::Busy:
+                    m_feedback->setText(tr("Leave the room and stop matching first.", "请先退出房间并停止匹配。"));
+                    break;
+                case RoomReply::Changed:
+                    clearRows();
+                    m_feedback->setText(tr("Room list changed. Refresh rooms.", "房间列表已变化，请刷新房间。"));
+                    break;
+                case RoomReply::Full: m_feedback->setText(tr("Room is full.", "房间已满。")); break;
+                case RoomReply::Locked:
+                    m_feedback->setText(tr("Unlock this room in RoomCircuit.", "请在 RoomCircuit 中解锁此房间。"));
+                    break;
+                case RoomReply::Incompatible:
+                    m_feedback->setText(tr("Game updates incompatible.", "游戏更新版本不兼容。"));
+                    break;
+                case RoomReply::UpdateRequired:
+                    m_feedback->setText(tr("Update the background module.", "请更新后台模块。"));
+                    break;
+                case RoomReply::Unavailable:
+                    m_feedback->setText(tr("Could not load rooms.", "无法加载房间。"));
+                    break;
+                default: m_feedback->setText(tr("Could not select room.", "无法选择房间。")); break;
+            }
+        }
+    };
+
     class MainGui : public tsl::Gui {
         tsl::elm::List *m_list{};
         tsl::elm::ListItem *m_connection{}, *m_host_node{}, *m_active_route{}, *m_room{}, *m_players{}, *m_match{}, *m_notice{}, *m_password{};
@@ -646,6 +995,7 @@ namespace {
                 m_password = new tsl::elm::ListItem(tr("Game password", "游戏密码"));
                 m_password->setClickListener([](u64 keys) {
                     if (!(keys & HidNpadButton_A)) return false;
+                    if (roomJobRunning()) return true;
                     refresh();
                     if (hasPasscodeHost()) {
                         tsl::changeTo<PasscodeGui>(g_passcode_host);
@@ -682,6 +1032,7 @@ namespace {
             list->addItem(m_host_node = new tsl::elm::ListItem(tr("Hosting node", "建房节点")));
             m_host_node->setClickListener([](u64 keys) {
                 if (!(keys & HidNpadButton_A)) return false;
+                if (roomJobRunning()) return true;
                 refresh();
                 if (g_snapshot.relay_ok) tsl::changeTo<NodeSelectGui>();
                 else {
@@ -694,12 +1045,27 @@ namespace {
             list->addItem(m_room = new tsl::elm::ListItem(tr("Room", "房间")));
             list->addItem(m_players = new tsl::elm::ListItem(tr("Room members", "房间成员")));
             list->addItem(m_match = new tsl::elm::ListItem(tr("Match", "匹配")));
+            auto *join_room = new tsl::elm::ListItem(tr("Join room", "加入房间"));
+            join_room->setClickListener([](u64 keys) {
+                if (!(keys & HidNpadButton_A)) return false;
+                if (roomJobRunning()) {
+                    g_notice = tr("Checking room…", "正在检查房间…");
+                    g_notice_until = armGetSystemTick() + 3 * armGetSystemTickFreq();
+                } else if (g_snapshot.relay_ok) tsl::changeTo<RoomJoinGui>();
+                else {
+                    g_notice = tr("Module unavailable. Reconnect or restart the console.", "插件服务不可用，请重连或重启主机。");
+                    g_notice_until = armGetSystemTick() + 5 * armGetSystemTickFreq();
+                }
+                return true;
+            });
+            list->addItem(join_room);
             list->addItem(new tsl::elm::CategoryHeader(tr("Controls", "控制")));
             list->addItem(m_enabled = new SafeToggle(false));
             list->addItem(m_logging = new SafeToggle(true));
             auto *retry = new tsl::elm::ListItem(tr("Reconnect to module", "重新连接插件"));
             retry->setClickListener([](u64 keys) {
                 if (!(keys & HidNpadButton_A)) return false;
+                if (roomJobRunning()) return true;
                 connectServices();
                 return true;
             });
@@ -710,6 +1076,8 @@ namespace {
             return frame;
         }
         void update() override {
+            if (roomJobRunning()) return;
+            (void)ultra::release(g_room_worker);
             const bool due = armGetSystemTick() - g_last_poll >= armGetSystemTickFreq();
             if (due) refresh();
             if (due && g_node_task.tracked) {
@@ -762,6 +1130,11 @@ namespace {
                 !g_notice.empty() ? g_notice.c_str() :
                 tr("Plugin changes apply on the next local-wireless session.", "插件开关在下次本地联机时生效。");
             m_notice->setText(notice);
+            if (g_snapshot.relay_ok && g_snapshot.status.state == 2 && g_snapshot.status.my_index == 0 &&
+                g_snapshot.status.game_id && !g_host_version.unsupported && armGetSystemTick() >= g_next_version_poll) {
+                g_next_version_poll = armGetSystemTick() + 2 * armGetSystemTickFreq();
+                (void)startRoomJob(RoomAction::PublishVersion, {}, {});
+            }
         }
     };
 
@@ -773,6 +1146,9 @@ namespace {
         }
         void exitServices() override { closeServices(); }
         void onShow() override {
+            // A pending room list or selection can occupy the IPC service.
+            // Let its worker finish before re-polling from the GUI thread.
+            if (roomJobRunning()) return;
             const bool previous = g_chinese;
             refreshSystemLanguage();
             if (previous != g_chinese) tsl::swapTo<MainGui>(SwapDepth{UINT32_MAX});

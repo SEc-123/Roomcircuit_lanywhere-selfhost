@@ -25,7 +25,7 @@ Emulator crossplay is a preview. Use the same compatible game and update on each
 
 ## Install
 
-You need a Switch running Atmosphère, an internet connection, and a game with a compatible Local Wireless mode. Use the same game version as the other players.
+You need a Switch running Atmosphère, an internet connection, and a game with a compatible Local Wireless mode. See [game update compatibility](docs/GAME-VERSION-COMPATIBILITY.md).
 
 1. Download the **full SD ZIP** (`switch-online-*-sd.zip`) from the [latest release](https://github.com/SEc-123/Roomcircuit_lanywhere-selfhost/releases/latest).
 2. Extract it on a computer. Merge the ZIP's `atmosphere/` and `switch/` folders, and `config/` if present, into the root of your SD card. This installs RoomCircuit's version of the `ldn_mitm` module.
@@ -45,6 +45,8 @@ You can also choose the hosting node from the RoomCircuit overlay in Ultrahand. 
 
 1. Press **ZL + ZR** by the room list to filter by game and region. Select a room and press **A**. RoomCircuit checks your connection and selects the room's node.
 2. Open or return to the game, choose **Local Wireless**, and search for the room. Enter the game's password when prompted.
+
+While in a game, open **RoomCircuit → Join room** in Ultrahand and choose a public room. Return to the game's **Local Wireless** menu and search.
 
 If the game uses link codes instead of a room list, choose the same node, enter the same code in the game, and start local matchmaking on both consoles.
 

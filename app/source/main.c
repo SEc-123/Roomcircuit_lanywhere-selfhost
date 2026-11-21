@@ -30,6 +30,7 @@
 #include "update_ui.h"
 #include "nodes_ui.h"
 #include "roomcircuit_storage.h"
+#include "../../common/game_update_compatibility.h"
 #include "../../common/roomcircuit_paths.h"
 
 #define TOUCH_UPDATE (1ULL << 59)
@@ -321,18 +322,31 @@ static LobbyPage lanywhere_list_unified(UnifiedRoomsRequest request, LobbyGroup 
 }
 
 static LobbyPage lanywhere_list_nodes(NodeRoomsRequest request, LobbyGroup *groups, LobbySource *sources,
-                                      LobbyNodeRoom *rows, UnifiedPage *page, bool *supported)
+                                      LobbyNodeRoom *rows, LobbyGameVersion *versions, UnifiedPage *page, bool *supported)
 {
     *page = (UnifiedPage){.count=-1,.next=NODE_LOBBY_END,.status=ListStatusNetwork};
     memset(rows,0,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE);
-    Result result=serviceDispatchInOut(&g_lanywhere_list,DIRECT_ROOM_LIST_IPC,request,*page,
+    memset(versions, 0, sizeof(*versions) * NODE_LOBBY_PAGE_SIZE);
+    VersionedNodeRoomWire versioned[NODE_LOBBY_PAGE_SIZE] = {0};
+    Result result=serviceDispatchInOut(&g_lanywhere_list,ROOM_GAME_VERSION_LIST_IPC,request,*page,
         .buffer_attrs={SfBufferAttr_HipcMapAlias|SfBufferAttr_Out},
-        .buffers={{rows,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE}});
-    const bool annotated = !unified_ipc_missing(result);
-    if (!annotated)
-        result=serviceDispatchInOut(&g_lanywhere_list,37,request,*page,
+        .buffers={{versioned,sizeof(versioned)}});
+    const bool versioned_api = !unified_ipc_missing(result);
+    bool annotated = true;
+    if (versioned_api) {
+        if (R_SUCCEEDED(result))
+            for (unsigned i = 0; i < NODE_LOBBY_PAGE_SIZE; ++i)
+                memcpy(&rows[i], &versioned[i].room, sizeof(rows[i]));
+    } else {
+        result=serviceDispatchInOut(&g_lanywhere_list,DIRECT_ROOM_LIST_IPC,request,*page,
             .buffer_attrs={SfBufferAttr_HipcMapAlias|SfBufferAttr_Out},
             .buffers={{rows,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE}});
+        annotated = !unified_ipc_missing(result);
+        if (!annotated)
+            result=serviceDispatchInOut(&g_lanywhere_list,37,request,*page,
+                .buffer_attrs={SfBufferAttr_HipcMapAlias|SfBufferAttr_Out},
+                .buffers={{rows,sizeof(*rows)*NODE_LOBBY_PAGE_SIZE}});
+    }
     if(unified_ipc_missing(result) || (R_SUCCEEDED(result)&&page->count==-1&&page->status==ListStatusUpdate)){
         *supported=false;
         return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusUpdate};
@@ -364,6 +378,11 @@ static LobbyPage lanywhere_list_nodes(NodeRoomsRequest request, LobbyGroup *grou
             REGION_PROVIDER_COMMUNITY:nodes_ui_provider(rows[i].node_id));
         if(!lobby_room_id_on(&groups[i],sources[i]).game_id)
             return (LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=ListStatusProtocol};
+    }
+    if (versioned_api) {
+        for (int32_t i = 0; i < page->count; ++i)
+            if (room_game_version_valid(versioned[i].game_version, false))
+                memcpy(versions[i], versioned[i].game_version, sizeof(versions[i]));
     }
     return (LobbyPage){.count=page->count,.next=page->next,.reserved=0,
         .capabilities=UNIFIED_LOBBY_CAPABILITY|NODE_LOBBY_CAPABILITY|LOBBY_CAP_RESERVED_MATCH|ROOM_PASSCODE_CAPABILITY|ROOM_ACCESS_CAPABILITY};
@@ -544,6 +563,7 @@ static u32 g_list_request_snapshot;
 enum { ListUnavailable = -3, ListConnecting = -2, ListOffline = -1 };
 static LobbyPage g_list_page;
 static LobbyNodeRoom g_node_rows[LOBBY_PAGE_SIZE];
+static LobbyGameVersion g_list_versions[LOBBY_PAGE_SIZE];
 static bool g_nodes_directory;
 static u64 g_node_game_filter;
 static u32 g_node_mask=(1u<<NODE_SHARED_CAPACITY)-1;
@@ -613,6 +633,7 @@ static void list_thread(void *arg)
         LobbySource sources[LOBBY_PAGE_SIZE] = {{0}};
         UnifiedPage unified = {0};
         LobbyNodeRoom node_rows[LOBBY_PAGE_SIZE]={0};
+        LobbyGameVersion versions[LOBBY_PAGE_SIZE] = {{0}};
         LobbyPage page;
         if (game_id) {
             page = lanywhere_list_appointment_rooms(game_id, offset, groups, LOBBY_PAGE_SIZE);
@@ -620,7 +641,7 @@ static void list_thread(void *arg)
                 for (s32 i = 0; i < page.count; ++i) memcpy(sources[i], "self", sizeof("self"));
         } else if (node_directory) {
             page=lanywhere_list_nodes((NodeRoomsRequest){.offset=offset,.snapshot=snapshot,.game_id=node_game,.node_mask=node_mask},
-                groups,sources,node_rows,&unified,&node_directory);
+                groups,sources,node_rows,versions,&unified,&node_directory);
             if(!node_directory){
                 if(offset||snapshot)page=(LobbyPage){.count=-1,.next=LOBBY_PAGE_END,.reserved=UnifiedListStale};
                 else page=lanywhere_list_unified((UnifiedRoomsRequest){0},groups,sources,&unified,&discovery,&directory);
@@ -642,10 +663,12 @@ static void list_thread(void *arg)
                 page.capabilities != g_list_page.capabilities || page.reserved != g_list_page.reserved ||
                 g_list_discovery != discovery || memcmp(&unified, &g_list_unified, sizeof(unified)) != 0 ||
                 memcmp(sources, g_list_sources, sizeof(sources)) != 0 ||
+                memcmp(versions, g_list_versions, sizeof(versions)) != 0 ||
                 memcmp(groups, g_groups, sizeof(groups)) != 0)
                 g_list_changed = true;
             memcpy(g_groups, groups, sizeof(groups));
             memcpy(g_node_rows,node_rows,sizeof(node_rows));
+            memcpy(g_list_versions, versions, sizeof(versions));
             g_nodes_directory=node_directory;
             memcpy(g_list_sources, sources, sizeof(sources));
             g_list_discovery = discovery;
@@ -673,6 +696,7 @@ static void restart_group_query(u32 offset, u32 snapshot, bool available, const 
     g_list_response_ms = 0;
     memset(g_groups, 0, sizeof(g_groups));
     memset(g_node_rows,0,sizeof(g_node_rows));
+    memset(g_list_versions, 0, sizeof(g_list_versions));
     memset(g_list_sources, 0, sizeof(g_list_sources));
     g_list_changed = true;
     mutexUnlock(&g_list_lock);
@@ -798,6 +822,7 @@ typedef struct {
     LobbyMatch match;
     LobbyGroup groups[LOBBY_PAGE_SIZE];
     LobbyNodeRoom node_rows[LOBBY_PAGE_SIZE];
+    LobbyGameVersion room_versions[LOBBY_PAGE_SIZE];
     LobbyNodeSelection pinned_node;
     DirectRoomHost direct_host;
     bool node_picker_available, node_directory;
@@ -1814,8 +1839,9 @@ static void draw_room_board(const View *v)
 
     gfx_round_rect(X, Y, RIGHT - X, BOTTOM - Y, 12, C_LINE);
     gfx_round_rect(X + 1, Y + 1, RIGHT - X - 2, BOTTOM - Y - 2, 11, C_PANEL);
-    const int title_x = X + 20, col_node = 704, col_access = 971, col_players = 1135;
+    const int title_x = X + 20, col_version = 574, col_node = 724, col_access = 971, col_players = 1135;
     gfx_text(title_x, Y + 12, 18, C_DIM, ui_text("Game"));
+    gfx_text(col_version, Y + 12, 18, C_DIM, ui_text("Game version"));
     gfx_text(col_node, Y + 12, 18, C_DIM, ui_text("Node"));
     gfx_text(col_access, Y + 12, 18, C_DIM, ui_text("Password"));
     gfx_text(col_players, Y + 12, 18, C_DIM, ui_text("Players"));
@@ -1847,10 +1873,18 @@ static void draw_room_board(const View *v)
         if (info && info->icon.px) gfx_image(&info->icon, title_x, y + 13, 36, 36);
         const char *title = own ? direct_host_title(v) : NULL;
         if (!title) title = room_title(g, buffer, sizeof(buffer));
+        const int title_width = col_version - game_x - 16;
+        const char *version = v->room_versions[i];
+        char version_label[ROOM_GAME_VERSION_SIZE + 1] = "—";
+        if (version[0]) {
+            const char *prefix = version[0] == 'v' || version[0] == 'V' ? "" : "v";
+            snprintf(version_label, sizeof(version_label), "%s%s", prefix, version);
+        }
         if (selected)
-            g_board_title_animates |= gfx_text_marquee(game_x, y + 19, 23, C_TEXT, title, col_node - game_x - 16, title_elapsed);
+            g_board_title_animates |= gfx_text_marquee(game_x, y + 19, 23, C_TEXT, title, title_width, title_elapsed);
         else
-            gfx_text_fit(game_x, y + 19, 23, C_TEXT, title, col_node - game_x - 16);
+            gfx_text_fit(game_x, y + 19, 23, C_TEXT, title, title_width);
+        gfx_text_fit(col_version, y + 21, 19, C_DIM, version_label, col_node - col_version - 14);
 
         char node[120];
         snprintf(node, sizeof(node), "%s · %s", board_room_node(v, i), board_room_region(v, i));
@@ -2223,6 +2257,82 @@ static void poll_lanywhere(View *v)
     }
 }
 
+typedef struct {
+    RoomGameVersionTarget target;
+    u64 retry_at;
+    unsigned attempts;
+    bool published, unsupported;
+} HostGameVersionPublisher;
+
+static bool read_installed_game_version(u64 application_id, const LobbyGroup *room, LobbyGameVersion version)
+{
+    bool installed = false;
+    const u64 alternate = room ? room_game_update_alternate(application_id) : 0;
+    /* A shared LCID does not identify which installed edition the player will use. */
+    if (alternate && (R_FAILED(nsIsAnyApplicationEntityInstalled(alternate, &installed)) || installed))
+        return false;
+    if (R_FAILED(nsIsAnyApplicationEntityInstalled(application_id, &installed)) || !installed)
+        return false;
+    NsApplicationControlData *control = malloc(sizeof(*control));
+    if (!control) return false;
+    u64 size = 0;
+    const Result result = nsGetApplicationControlData(NsApplicationControlSource_StorageOnly,
+        application_id, control, sizeof(*control), &size);
+    memset(version, 0, ROOM_GAME_VERSION_SIZE);
+    if (R_SUCCEEDED(result) && size >= sizeof(control->nacp) && size <= sizeof(*control) &&
+        (!room || lobby_application_matches(room, application_id, control->nacp.local_communication_id))) {
+        const char *display_version = control->nacp.display_version;
+        const size_t length = strnlen(display_version, sizeof(control->nacp.display_version));
+        if (length < ROOM_GAME_VERSION_SIZE)
+            memcpy(version, display_version, length);
+    }
+    free(control);
+    return room_game_version_valid(version, false);
+}
+
+static bool publish_host_game_version(HostGameVersionPublisher *publisher, const View *v, u64 now)
+{
+    if (publisher->unsupported || !g_ns_ready || atomic_load(&g_inventory_running) ||
+        !v->status_valid || v->st.state != StateInRoom || v->st.my_index != 0 || !v->st.game_id ||
+        now < publisher->retry_at) return false;
+    publisher->retry_at = now + 1000;
+    RoomGameVersionTarget target = {0};
+    Result result = serviceDispatchOut(&g_lanywhere, ROOM_GAME_VERSION_HOST_IPC, target);
+    if (unified_ipc_missing(result)) publisher->unsupported = true;
+    if (R_FAILED(result) || !target.application_id || !target.generation) return false;
+    if (publisher->target.application_id != target.application_id ||
+        publisher->target.generation != target.generation) {
+        publisher->target = target;
+        publisher->attempts = 0;
+        publisher->published = false;
+    }
+    if (publisher->published || publisher->attempts >= 3) return false;
+    publisher->attempts++;
+    RoomGameVersionUpdate update = {.target = target};
+    if (!read_installed_game_version(target.application_id, NULL, update.game_version)) return false;
+    /* The background module rechecks the room generation after the NS read. */
+    result = serviceDispatchIn(&g_lanywhere, ROOM_GAME_VERSION_PUBLISH_IPC, update);
+    if (unified_ipc_missing(result)) publisher->unsupported = true;
+    publisher->published = R_SUCCEEDED(result);
+    return publisher->published;
+}
+
+static bool block_incompatible_game_update(View *v, int index)
+{
+    if (index < 0 || index >= v->count || index >= LOBBY_PAGE_SIZE ||
+        !g_ns_ready || atomic_load(&g_inventory_running)) return false;
+    const LobbyGroup *room = &v->groups[index];
+    const char *host = v->room_versions[index];
+    if ((room->metadata_flags & (LOBBY_META_HOST | LOBBY_META_LOCAL)) != LOBBY_META_HOST ||
+        !room->application_id || !room_game_version_valid(host, false)) return false;
+    LobbyGameVersion local = {0};
+    if (!read_installed_game_version(room->application_id, room, local) ||
+        !room_game_updates_incompatible(room->application_id, host, local)) return false;
+    snprintf(v->message, sizeof(v->message),
+        ui_text("Incompatible game versions · Yours %s · Host %s"), local, host);
+    return true;
+}
+
 static bool show_room_notice(const View *v, u64 now)
 {
     if (!v->status_valid || !v->st.error[0]) return false;
@@ -2466,6 +2576,7 @@ int main(int argc, char **argv)
     if (!g_ns_ready || !inventory_started) atomic_store(&g_inventory_finished, true);
 
     View v = {0};
+    HostGameVersionPublisher version_publisher = {0};
     v.storage_health = read_storage_health(&g_lanywhere);
     v.sel = -1;
     v.region_filter=255;
@@ -2542,6 +2653,8 @@ int main(int argc, char **argv)
             const NodeHostInfo previous_host = v.host_info;
             const bool previous_valid = v.host_info_valid;
             poll_lanywhere(&v);
+            if (publish_host_game_version(&version_publisher, &v, now))
+                ueventSignal(&g_refresh);
             if (previous_valid != v.host_info_valid || memcmp(&previous_host, &v.host_info, sizeof(previous_host))) dirty = true;
             next_status = now + STATUS_POLL_MS;
         }
@@ -2564,6 +2677,7 @@ int main(int argc, char **argv)
         memcpy(v.groups, g_groups, sizeof(v.groups));
         memcpy(v.sources, g_list_sources, sizeof(v.sources));
         memcpy(v.node_rows,g_node_rows,sizeof(v.node_rows));
+        memcpy(v.room_versions, g_list_versions, sizeof(v.room_versions));
         v.node_directory=g_nodes_directory;
         if (g_list_changed)
             dirty = true;
@@ -2885,10 +2999,11 @@ int main(int argc, char **argv)
             v.sel = -1;
         } else if (v.sel >= 0 && (down & HidNpadButton_A)) {
             if(v.selection.code[0]){
-                const int index=v.node_directory?lobby_room_index_on(v.selection,v.groups,v.sources,(size_t)v.count):-1;
+                const int index=v.node_directory&&v.count>0?lobby_room_index_on(v.selection,v.groups,v.sources,(size_t)v.count):-1;
                 const bool gateway=index>=0&&v.node_rows[index].flags==NodeRoomGateway;
-                if(index<0 || nodes_ui_check_room(&pad,gateway?0:v.node_rows[index].node_id,gateway,
-                                                   gateway ? NULL : &v.node_rows[index].locator))select_room(&v);
+                if(!block_incompatible_game_update(&v,index) &&
+                   (index<0 || nodes_ui_check_room(&pad,gateway?0:v.node_rows[index].node_id,gateway,
+                                                  gateway ? NULL : &v.node_rows[index].locator)))select_room(&v);
                 g_zh=ui_chinese();dirty=true;next_status=0;
             }
         } else if (v.private_room && (down & HidNpadButton_B)) {

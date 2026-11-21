@@ -55,7 +55,18 @@ def main():
     ])
     start = source.index('    namespace {\n        constexpr int RoomPasscodeTimeoutMs')
     passcode = source[start:source.index('    int FindGroupSummaries(', start)]
-    direct_state = function(source, 'struct DirectRegistration {') + ';\n'
+    direct_state = function(source, 'struct HostGameVersion {') + ';\n'
+    direct_state += '''
+static std::atomic<u64> g_game_version_generation{0};
+static HostGameVersion g_main_game_version{};
+static u8 g_main_game_network_id[32]{};
+static u64 g_main_game_version_sent{};
+namespace ncm {
+struct ProgramId { u64 value; };
+bool IsApplicationId(const ProgramId &p) { return p.value >= 0x0100000000010000ULL && p.value <= 0x01FFFFFFFFFFFFFFULL; }
+}
+''' + function(source, 'void BindGameVersionTarget(') + '\n'
+    direct_state += function(source, 'struct DirectRegistration {') + ';\n'
     direct_state += '\n'.join(
         line.strip() for line in source.splitlines() if 'DirectMetadataLeaseMs =' in line
     )
@@ -71,6 +82,7 @@ def main():
         'DirectRoomMetadataReply PublishDirectMetadata(', 'void RefreshDirectIdentity(',
         'u32 SetDirectRoomAccess(const RoomAccessChange &access, size_t length) {',
         'DirectRoomHost DescribeDirectHost(', 'RoomPasscodeReply LookupDirectRoomPasscode(',
+        'RoomGameVersionTarget GetHostGameVersionTarget(', 'Result PublishHostGameVersion(',
     ])
     service = (SOURCE.parent / 'lanywhere_service.cpp').read_text()
     service_header = (SOURCE.parent / 'lanywhere_service.hpp').read_text()
