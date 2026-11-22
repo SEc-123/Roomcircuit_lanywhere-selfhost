@@ -1,0 +1,36 @@
+{
+  "firmware": "19.0.1",
+  "device": {
+    "challenge_path": "/v7/challenge",
+    "token_path": "/v7/device_auth_token",
+    "form_encoding": "application/x-www-form-urlencoded",
+    "user_agent_absent": true,
+    "token_response_keys": ["device_auth_token", "expires_in"]
+  },
+  "application": {
+    "token_path": "/v5/application_auth_token",
+    "form_encoding": "application/x-www-form-urlencoded",
+    "host_generation": "pre-20",
+    "user_agent_absent": true
+  },
+  "baas": {
+    "sdk_version": "19.3.0.0",
+    "anonymous_path": "/1.0.0/application/token",
+    "anonymous_response_keys": ["accessToken", "expiresIn", "tokenType"],
+    "register_path": "/1.0.0/users",
+    "login_path": "/1.0.0/login",
+    "federation_path": "/1.0.0/federation",
+    "country_field": "naCountry",
+    "optional_penne_field": "penneId"
+  },
+  "oauth": {
+    "authorize_path": "/connect/1.0.0/authorize",
+    "authorize_scope": "nx",
+    "token_path": "/connect/1.0.0/api/token",
+    "userinfo_path": "/2.0.0/users/me",
+    "profile_scopes": [
+      "openid", "offline", "napps", "urn:oauth:init-sso", "user", "user.birthday",
+      "user.email", "user.links", "user.links[].id", "user.loginId", "user.screenName", "user.terms"
+    ]
+  }
+}

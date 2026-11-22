@@ -1,0 +1,269 @@
+diff --git a/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_host_redirection.cpp b/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_host_redirection.cpp
+index d7364fa..2633153 100644
+--- a/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_host_redirection.cpp
++++ b/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_host_redirection.cpp
+@@ -18,6 +18,7 @@
+ #include "dnsmitm_debug.hpp"
+ #include "dnsmitm_host_redirection.hpp"
+ #include "socket_allocator.hpp"
++#include "private_dns_profile.hpp"
+ 
+ namespace ams::mitm::socket::resolver {
+ 
+@@ -86,6 +87,36 @@ namespace ams::mitm::socket::resolver {
+         }
+ 
+         constinit char g_specific_emummc_hosts_path[0x40] = {};
++        constinit roomcircuit::private_dns::Profile g_private_dns_profile = 0;
++
++        roomcircuit::private_dns::Profile LoadPrivateDnsProfile() {
++            u64 emummc = 0;
++            if (spl::smc::GetConfig(std::addressof(emummc), 1, spl::ConfigItem::ExosphereEmummcType) != spl::smc::Result::Success ||
++                emummc != 1 || hos::GetVersion() != hos::Version_19_0_1) {
++                return 0;
++            }
++
++            ::FsFile file;
++            if (R_FAILED(mitm::fs::OpenAtmosphereSdFile(std::addressof(file),
++                         "/roomcircuit-native/DNS/profile.txt", ams::fs::OpenMode_Read))) {
++                return 0;
++            }
++            ON_SCOPE_EXIT { ::fsFileClose(std::addressof(file)); };
++
++            s64 length = 0;
++            char data[roomcircuit::private_dns::MaxBytes];
++            if (R_FAILED(::fsFileGetSize(std::addressof(file), std::addressof(length))) ||
++                length <= 0 || length > static_cast<s64>(sizeof(data))) {
++                return 0;
++            }
++
++            u64 read_count = 0;
++            if (R_FAILED(::fsFileRead(std::addressof(file), 0, data, length, ::FsReadOption_None,
++                                     std::addressof(read_count))) || read_count != static_cast<u64>(length)) {
++                return 0;
++            }
++            return roomcircuit::private_dns::Parse(std::string_view(data, static_cast<size_t>(length)));
++        }
+ 
+         void ParseHostsFile(const char *file_data) {
+             /* Get the environment identifier from settings. */
+@@ -376,6 +407,8 @@ namespace ams::mitm::socket::resolver {
+             ParseHostsFile(hosts_file_data);
+         }
+ 
++        g_private_dns_profile = LoadPrivateDnsProfile();
++
+         /* Print the redirections. */
+         Log(log_file, "Redirections:\n");
+         for (const auto &[host, address] : g_redirection_list) {
+@@ -383,8 +416,18 @@ namespace ams::mitm::socket::resolver {
+         }
+     }
+ 
+-    bool GetRedirectedHostByName(ams::socket::InAddrT *out, const char *hostname) {
++    bool GetRedirectedHostByName(ams::socket::InAddrT *out, bool *private_redirect, const char *hostname, size_t hostname_size) {
+         std::scoped_lock lk(g_redirection_lock);
++        if (hostname == nullptr || std::memchr(hostname, '\0', hostname_size) == nullptr) {
++            *private_redirect = false;
++            return false;
++        }
++
++        *private_redirect = roomcircuit::private_dns::Matches(g_private_dns_profile, hostname, hostname_size);
++        if (*private_redirect) {
++            *out = g_private_dns_profile.endpoint;
++            return true;
++        }
+ 
+         for (const auto &[host, address] : g_redirection_list) {
+             if (wildcardcmp(host.c_str(), hostname)) {
+diff --git a/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_host_redirection.hpp b/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_host_redirection.hpp
+index 51fb632..dfd20f0 100644
+--- a/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_host_redirection.hpp
++++ b/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_host_redirection.hpp
+@@ -20,6 +20,6 @@ namespace ams::mitm::socket::resolver {
+ 
+     void InitializeResolverRedirections();
+ 
+-    bool GetRedirectedHostByName(ams::socket::InAddrT *out, const char *hostname);
++    bool GetRedirectedHostByName(ams::socket::InAddrT *out, bool *private_redirect, const char *hostname, size_t hostname_size);
+ 
+ }
+diff --git a/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_resolver_impl.cpp b/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_resolver_impl.cpp
+index 5daf642..a192cbd 100644
+--- a/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_resolver_impl.cpp
++++ b/stratosphere/ams_mitm/source/dns_mitm/dnsmitm_resolver_impl.cpp
+@@ -17,12 +17,16 @@
+ #include "dnsmitm_resolver_impl.hpp"
+ #include "dnsmitm_debug.hpp"
+ #include "dnsmitm_host_redirection.hpp"
++#include "private_dns_profile.hpp"
+ #include "serializer/serializer.hpp"
+ #include "sfdnsres_shim.h"
+ 
+ namespace ams::mitm::socket::resolver {
+ 
+-    ssize_t SerializeRedirectedHostEnt(u8 * const dst, size_t dst_size, const char *hostname, ams::socket::InAddrT redirect_addr) {
++    ssize_t SerializeRedirectedHostEnt(u8 * const dst, size_t dst_size, const char *hostname, ams::socket::InAddrT redirect_addr, bool strict) {
++        if (!strict && (dst == nullptr || dst_size == 0)) {
++            return -1;
++        }
+         struct in_addr addr = { .s_addr = redirect_addr };
+         struct in_addr *addr_list[2] = { std::addressof(addr), nullptr };
+ 
+@@ -35,11 +39,13 @@ namespace ams::mitm::socket::resolver {
+         };
+ 
+         const auto result = serializer::DNSSerializer::ToBuffer(dst, dst_size, ent);
+-        AMS_ABORT_UNLESS(result >= 0);
++        if (strict) {
++            AMS_ABORT_UNLESS(result >= 0);
++        }
+         return result;
+     }
+ 
+-    ssize_t SerializeRedirectedAddrInfo(u8 * const dst, size_t dst_size, const char *hostname, ams::socket::InAddrT redirect_addr, u16 redirect_port, const struct addrinfo *hint) {
++    ssize_t SerializeRedirectedAddrInfo(u8 * const dst, size_t dst_size, const char *hostname, ams::socket::InAddrT redirect_addr, u16 redirect_port, const struct addrinfo *hint, bool strict = true) {
+         AMS_UNUSED(hostname);
+ 
+         struct addrinfo ai = {
+@@ -82,10 +88,52 @@ namespace ams::mitm::socket::resolver {
+         ai.ai_addr    = (struct sockaddr *)(std::addressof(sin));
+ 
+         const auto result = serializer::DNSSerializer::ToBuffer(dst, dst_size, ai);
+-        AMS_ABORT_UNLESS(result >= 0);
++        if (strict) {
++            AMS_ABORT_UNLESS(result >= 0);
++        }
+         return result;
+     }
+ 
++    s32 SerializePrivateAddrInfo(u32 *written, const char *hostname, ams::socket::InAddrT address,
++                                 const char *service, size_t service_size, const u8 *encoded_hint,
++                                 size_t hint_size, u8 *output, size_t output_size) {
++        u16 port = 0;
++        if (service != nullptr) {
++            const auto bounded_size = std::min(service_size, size_t(6));
++            const auto *end = static_cast<const char *>(std::memchr(service, '\0', bounded_size));
++            if (end == nullptr || !roomcircuit::private_dns::ParseService(std::string_view(service, end - service), port)) {
++                return EAI_SERVICE;
++            }
++        }
++
++        struct addrinfo hint = {};
++        const bool has_hint = encoded_hint != nullptr;
++        if (has_hint) {
++            roomcircuit::private_dns::AddrInfoHint fields{};
++            if (!roomcircuit::private_dns::ParseAddrInfoHint(
++                    std::string_view(reinterpret_cast<const char *>(encoded_hint), hint_size), fields)) {
++                return EAI_FAIL;
++            }
++            if (fields.family != AF_UNSPEC && fields.family != AF_INET) {
++                return EAI_NONAME;
++            }
++            hint.ai_flags = static_cast<int>(fields.flags);
++            hint.ai_family = static_cast<int>(fields.family);
++            hint.ai_socktype = static_cast<int>(fields.socket_type);
++            hint.ai_protocol = static_cast<int>(fields.protocol);
++        }
++        if (output == nullptr || output_size == 0) {
++            return EAI_MEMORY;
++        }
++        const auto size = SerializeRedirectedAddrInfo(output, output_size, hostname, address, port,
++                                                     has_hint ? std::addressof(hint) : nullptr, false);
++        if (size < 0) {
++            return EAI_MEMORY;
++        }
++        *written = static_cast<u32>(size);
++        return 0;
++    }
++
+     Result ResolverImpl::GetHostByNameRequest(u32 cancel_handle, const sf::ClientProcessId &client_pid, bool use_nsd_resolve, const sf::InBuffer &name, sf::Out<u32> out_host_error, sf::Out<u32> out_errno, const sf::OutBuffer &out_hostent, sf::Out<u32> out_size) {
+         AMS_UNUSED(cancel_handle, client_pid, use_nsd_resolve);
+ 
+@@ -96,10 +144,18 @@ namespace ams::mitm::socket::resolver {
+         R_UNLESS(hostname != nullptr, sm::mitm::ResultShouldForwardToSession());
+ 
+         ams::socket::InAddrT redirect_addr = {};
+-        R_UNLESS(GetRedirectedHostByName(std::addressof(redirect_addr), hostname), sm::mitm::ResultShouldForwardToSession());
++        bool private_redirect = false;
++        R_UNLESS(GetRedirectedHostByName(std::addressof(redirect_addr), std::addressof(private_redirect), hostname, name.GetSize()),
++                 sm::mitm::ResultShouldForwardToSession());
+ 
+         LogDebug("[%016lx]: Redirecting %s to %u.%u.%u.%u\n", m_client_info.program_id.value, hostname, (redirect_addr >> 0) & 0xFF, (redirect_addr >> 8) & 0xFF, (redirect_addr >> 16) & 0xFF, (redirect_addr >> 24) & 0xFF);
+-        const auto size = SerializeRedirectedHostEnt(out_hostent.GetPointer(), out_hostent.GetSize(), hostname, redirect_addr);
++        const auto size = SerializeRedirectedHostEnt(out_hostent.GetPointer(), out_hostent.GetSize(), hostname, redirect_addr, !private_redirect);
++        if (size < 0) {
++            *out_host_error = NO_RECOVERY;
++            *out_errno = 0;
++            *out_size = 0;
++            R_SUCCEED();
++        }
+ 
+         *out_host_error = 0;
+         *out_errno      = 0;
+@@ -118,7 +174,20 @@ namespace ams::mitm::socket::resolver {
+         R_UNLESS(hostname != nullptr, sm::mitm::ResultShouldForwardToSession());
+ 
+         ams::socket::InAddrT redirect_addr = {};
+-        R_UNLESS(GetRedirectedHostByName(std::addressof(redirect_addr), hostname), sm::mitm::ResultShouldForwardToSession());
++        bool private_redirect = false;
++        R_UNLESS(GetRedirectedHostByName(std::addressof(redirect_addr), std::addressof(private_redirect), hostname, node.GetSize()),
++                 sm::mitm::ResultShouldForwardToSession());
++
++        if (private_redirect) {
++            u32 written = 0;
++            *out_retval = SerializePrivateAddrInfo(std::addressof(written), hostname, redirect_addr,
++                               reinterpret_cast<const char *>(srv.GetPointer()), srv.GetSize(),
++                               serialized_hint.GetPointer(), serialized_hint.GetSize(),
++                               out_addrinfo.GetPointer(), out_addrinfo.GetSize());
++            *out_errno = 0;
++            *out_size = written;
++            R_SUCCEED();
++        }
+ 
+         u16 port = 0;
+         if (srv.GetPointer() != nullptr) {
+@@ -157,10 +226,18 @@ namespace ams::mitm::socket::resolver {
+         R_UNLESS(hostname != nullptr, sm::mitm::ResultShouldForwardToSession());
+ 
+         ams::socket::InAddrT redirect_addr = {};
+-        R_UNLESS(GetRedirectedHostByName(std::addressof(redirect_addr), hostname), sm::mitm::ResultShouldForwardToSession());
++        bool private_redirect = false;
++        R_UNLESS(GetRedirectedHostByName(std::addressof(redirect_addr), std::addressof(private_redirect), hostname, name.GetSize()),
++                 sm::mitm::ResultShouldForwardToSession());
+ 
+         LogDebug("[%016lx]: Redirecting %s to %u.%u.%u.%u\n", m_client_info.program_id.value, hostname, (redirect_addr >> 0) & 0xFF, (redirect_addr >> 8) & 0xFF, (redirect_addr >> 16) & 0xFF, (redirect_addr >> 24) & 0xFF);
+-        const auto size = SerializeRedirectedHostEnt(out_hostent.GetPointer(), out_hostent.GetSize(), hostname, redirect_addr);
++        const auto size = SerializeRedirectedHostEnt(out_hostent.GetPointer(), out_hostent.GetSize(), hostname, redirect_addr, !private_redirect);
++        if (size < 0) {
++            *out_host_error = NO_RECOVERY;
++            *out_errno = 0;
++            *out_size = 0;
++            R_SUCCEED();
++        }
+ 
+         *out_host_error = 0;
+         *out_errno      = 0;
+@@ -179,7 +256,21 @@ namespace ams::mitm::socket::resolver {
+         R_UNLESS(hostname != nullptr, sm::mitm::ResultShouldForwardToSession());
+ 
+         ams::socket::InAddrT redirect_addr = {};
+-        R_UNLESS(GetRedirectedHostByName(std::addressof(redirect_addr), hostname), sm::mitm::ResultShouldForwardToSession());
++        bool private_redirect = false;
++        R_UNLESS(GetRedirectedHostByName(std::addressof(redirect_addr), std::addressof(private_redirect), hostname, node.GetSize()),
++                 sm::mitm::ResultShouldForwardToSession());
++
++        if (private_redirect) {
++            u32 written = 0;
++            *out_retval = SerializePrivateAddrInfo(std::addressof(written), hostname, redirect_addr,
++                               reinterpret_cast<const char *>(srv.GetPointer()), srv.GetSize(),
++                               serialized_hint.GetPointer(), serialized_hint.GetSize(),
++                               out_addrinfo.GetPointer(), out_addrinfo.GetSize());
++            *out_host_error = 0;
++            *out_errno = 0;
++            *out_size = written;
++            R_SUCCEED();
++        }
+ 
+         u16 port = 0;
+         if (srv.GetPointer() != nullptr) {

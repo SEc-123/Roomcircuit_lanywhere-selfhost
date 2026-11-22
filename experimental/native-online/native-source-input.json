@@ -1,0 +1,18 @@
+{
+  "device": "disk5s1",
+  "console_target": {
+    "confirmed_by": "User-provided System Settings photo",
+    "confirmed_date": "2026-11-16",
+    "hos_version": "19.0.1",
+    "atmosphere_version": "1.12.0",
+    "mmc_mode": "emuMMC",
+    "display_marker": "E",
+    "firmware_upgrade_authorized": false,
+    "stock_system_write_authorized": false,
+    "client_target": "native Internet-mode independent service on the existing emuMMC"
+  },
+  "package3_size": 8388608,
+  "package3_sha256": "3cc9d6ca5688e403c36974bced1089397ef8b36a4252f720207ae3d41a6eb557",
+  "active_roomcircuit_sysmodule_sha256": "c0484f8c945a61ec05674937c1ae747ca55e837a92c8ff359f5d3db4142cbf6e",
+  "write_operations": 0
+}

@@ -1,0 +1,64 @@
+services:
+  db:
+    image: ${RC_POSTGRES_IMAGE:-postgres:16}
+    environment:
+      POSTGRES_USER: account
+      POSTGRES_DB: account
+      POSTGRES_PASSWORD: ${RC_DB_PASSWORD:?generate the lab environment first}
+    command: ["postgres", "-c", "shared_buffers=24MB", "-c", "max_connections=20"]
+    volumes:
+      - account-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U account -d account"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  account:
+    image: alpine:3.22
+    user: "65532:65532"
+    entrypoint: ["/app/account"]
+    read_only: true
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ACCOUNT_DATABASE_URL: postgres://account:${RC_DB_PASSWORD}@db:5432/account?sslmode=disable
+      ACCOUNT_ENVIRONMENT: development
+      ACCOUNT_HTTP_ADDR: :20000
+      ACCOUNT_GRPC_ADDR: :20001
+      ACCOUNT_SESSION_SECRET: ${RC_SESSION_SECRET:?generate the lab environment first}
+      ACCOUNT_INTERNAL_KEY: ${RC_CORE_KEY:?generate the lab environment first}
+      ACCOUNT_SESSION_TTL: 2h
+      GOMEMLIMIT: 96MiB
+    ports:
+      - "127.0.0.1:${RC_ACCOUNT_PORT:-39170}:20000"
+      - "127.0.0.1:${RC_ACCOUNT_GRPC_PORT:-39172}:20001"
+    networks: [default, host-access]
+    volumes:
+      - ./.bin/account:/app/account:ro
+  identity:
+    image: alpine:3.22
+    user: "65532:65532"
+    entrypoint: ["/app/identity"]
+    read_only: true
+    depends_on: [account]
+    environment:
+      RC_CORE_HTTP: http://account:20000
+      RC_CORE_GRPC: account:20001
+      RC_CORE_KEY: ${RC_CORE_KEY:?generate the lab environment first}
+      RC_IDENTITY_KEY: ${RC_IDENTITY_KEY:?generate the lab environment first}
+      RC_IDENTITY_LISTEN: :20070
+      GOMEMLIMIT: 32MiB
+    ports:
+      - "127.0.0.1:${RC_IDENTITY_PORT:-39171}:20070"
+    networks: [default, host-access]
+    volumes:
+      - ./.bin/identity:/app/identity:ro
+networks:
+  default:
+    name: ${COMPOSE_PROJECT_NAME:-roomcircuit-native-account-lab}
+    internal: true
+  host-access:
+    driver: bridge
+volumes:
+  account-db:
