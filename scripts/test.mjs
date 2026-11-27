@@ -213,6 +213,7 @@ try {
     await suite('Public game password relay ownership and lifecycle', process.execPath, ['--test', 'server/relay/test-game-code-e2e.js']);
     await suite('Native open-room alert and Ultrahand payload', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/notifier_behavior_test.py']);
     await suite('Native typed listing failures over loopback', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/list_status_test.py']);
+    await suite('Native control ownership and bounded queue dispatch', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/control_delivery_test.py']);
     await suite('Native TCP relay epochs, failure shutdown and negotiation', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/tcp_relay_glue_test.py']);
     await suite('Native relay reconnect identity, deadlines and cancellation', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/transport_recovery_test.py']);
     await suite('Native relay worker after Wi-Fi and path failures', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/relay_recovery_worker_test.py']);

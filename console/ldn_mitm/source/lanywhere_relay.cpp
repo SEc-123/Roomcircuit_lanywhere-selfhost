@@ -2896,25 +2896,30 @@ namespace ams::mitm::lanywhere {
         return SendFrame(T_Relay, head, sizeof(head), data, size);
     }
 
-    ssize_t TakeControl(u8 *from, LdnMsg *msg, void *buffer, size_t size) {
+    ssize_t TakeControl(u8 *from, LdnMsg *msg, void *buffer, size_t size,
+                        ControlSelector select, const void *context) {
         if (g_direct_session.load()) {
             u8 kind = 0;
-            const ssize_t result = lanplay::TakeControl(from, &kind, buffer, size);
+            const ssize_t result = lanplay::TakeControl(from, &kind, buffer, size, select, context);
             if (result >= 0) *msg = static_cast<LdnMsg>(kind);
             return result;
         }
         std::scoped_lock lk(g_queue_lock);
-        if (g_control_count == 0) {
-            return -1;
+        for (size_t offset = 0; offset < g_control_count; ++offset) {
+            const Control &control = g_controls[(g_control_head + offset) % ControlQueueSize];
+            if (select && !select(control.from, static_cast<u8>(control.msg), control.data, control.size, context)) continue;
+            *from = control.from;
+            *msg = control.msg;
+            const size_t copied = std::min<size_t>(control.size, size);
+            const ssize_t result = control.size;
+            std::memcpy(buffer, control.data, copied);
+            // Keep unmatched messages for their own active game or scanner, in FIFO order.
+            for (size_t next = offset + 1; next < g_control_count; ++next)
+                g_controls[(g_control_head + next - 1) % ControlQueueSize] = g_controls[(g_control_head + next) % ControlQueueSize];
+            --g_control_count;
+            return result;
         }
-        const Control &c = g_controls[g_control_head];
-        g_control_head = (g_control_head + 1) % ControlQueueSize;
-        g_control_count--;
-        *from = c.from;
-        *msg = c.msg;
-        const size_t n = std::min<size_t>(c.size, size);
-        std::memcpy(buffer, c.data, n);
-        return static_cast<ssize_t>(c.size);
+        return -1;
     }
 
     ssize_t ReceiveData(u16 port, void *buffer, size_t size, u32 *src_ip, u16 *src_port, bool peek, u32 peer_ip, u16 peer_port) {

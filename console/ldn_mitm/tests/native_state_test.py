@@ -17,6 +17,7 @@ code=r'''
 #include <mutex>
 #include <memory>
 #include "ldn_types.hpp"
+#include "control_selector.hpp"
 #include "public_scan_pages.hpp"
 using Result=int;
 #define MAKERESULT(m,d) ((m)*1000+(d))
@@ -28,7 +29,7 @@ enum class LdnMsg{Scan,ScanResp,Connect,Sync,Disconnect,MemberLeft};
 struct Status{RelayState state;};static RelayState state=RelayState::InRoom;
 bool InRoom(){return state==RelayState::InRoom||state==RelayState::Connecting;}
 void GetStatus(Status*out){out->state=state;}
-ssize_t TakeControl(u8*,LdnMsg*,void*,size_t){return -1;}
+ssize_t TakeControl(u8*,LdnMsg*,void*,size_t,ControlSelector=nullptr,const void* =nullptr){return -1;}
 void Log(const char*,...){}
 bool SendControl(u8,LdnMsg,const void*,size_t){return true;}
 int MemberOfIp(u32){return 0;}
@@ -46,9 +47,9 @@ struct Less {bool operator()(const MacAddress&a,const MacAddress&b)const{return 
 struct Udp {std::map<MacAddress,NetworkInfo,Less>scanResults;};
 class LANDiscovery {public:
  static constexpr size_t MaxScanResults=8;
- std::recursive_mutex pollMutex,scanResultsMutex;
+ std::recursive_mutex pollMutex,scanResultsMutex,tcpBindingLock;
  bool initialized=true,onlineGame=true,autoRoom=true,roomScanActive=false;
- u8 controlBuffer[lanywhere::MaxControl]{};int hostMember=0;
+ u8 controlBuffer[lanywhere::MaxControl]{},tcpNetworkId[32]{};int hostMember=0;
  CommState state=CommState::AccessPointCreated;DisconnectReason disconnect_reason=DisconnectReason::None;
  ScanFilter activeScanFilter{};NetworkInfo networkInfo{};std::array<NodeLatestUpdate,8>nodeChanges{};
  LanStation stations[7];std::unique_ptr<Udp>udp{new Udp};unsigned notifications=0,leaves=0,bindings=0;
@@ -91,7 +92,8 @@ int main(){
  puts("PASS actual LDN state: final transport loss reaches game, recovery preserves state, unsolicited/bounded scans and zeroed outputs");
 }
 '''
-functions='\n'.join(extract.function(source,s) for s in ['void LANDiscovery::pollRoom(', 'void LANDiscovery::onRoomMessage(', 'Result LANDiscovery::getNetworkInfo(NetworkInfo *pOutNetwork) {', 'Result LANDiscovery::getNetworkInfo(NetworkInfo *pOutNetwork,'])
+selector=source[source.index('    struct ControlRequest {'):source.index('    // LANywhere: con una sala activa,',source.index('    struct ControlRequest {'))]
+functions=selector+'\n'+'\n'.join(extract.function(source,s) for s in ['void LANDiscovery::pollRoom(', 'void LANDiscovery::onRoomMessage(', 'Result LANDiscovery::getNetworkInfo(NetworkInfo *pOutNetwork) {', 'Result LANDiscovery::getNetworkInfo(NetworkInfo *pOutNetwork,'])
 with tempfile.TemporaryDirectory(prefix='native-state-') as tmp:
  tmp=Path(tmp);cpp=tmp/'test.cpp';cpp.write_text(code.replace('/* FILTER */',extract.function(source, 'static bool MatchesScanFilter(')).replace('/* FUNCTIONS */',functions));binary=tmp/'test'
  (tmp/'stratosphere.hpp').write_text('#pragma once\n#include <cstdint>\nusing u8=uint8_t;using u16=uint16_t;using u32=uint32_t;using u64=uint64_t;using s64=int64_t;namespace ams::sf{struct LargeData{};struct PrefersPointerTransferMode{};}\n')

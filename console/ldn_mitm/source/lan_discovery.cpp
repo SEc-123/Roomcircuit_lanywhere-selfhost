@@ -654,6 +654,40 @@ namespace ams::mitm::ldn {
         return rc;
     }
 
+    struct ControlRequest {
+        bool online, scanning;
+        CommState state;
+        int host;
+        NetworkId network;
+        ScanFilter filter;
+    };
+
+    static bool SelectControl(u8 from, u8 kind, const void *data, size_t size, const void *context) {
+        const auto &request = *static_cast<const ControlRequest *>(context);
+        const bool host = request.online && request.state == CommState::AccessPointCreated;
+        const bool visitor = request.online && request.host >= 0 && from == request.host &&
+            (request.state == CommState::Station || request.state == CommState::StationConnected);
+        switch (static_cast<lanywhere::LdnMsg>(kind)) {
+            case lanywhere::LdnMsg::ScanResp: {
+                if (!request.scanning) return false;
+                if (size != sizeof(NetworkInfo)) return true;
+                NetworkInfo info;
+                std::memcpy(&info, data, sizeof(info));
+                return MatchesScanFilter(request.filter, info);
+            }
+            case lanywhere::LdnMsg::Scan:
+            case lanywhere::LdnMsg::Connect:
+                return host;
+            case lanywhere::LdnMsg::Sync:
+                return visitor && (size != sizeof(NetworkInfo) ||
+                    std::memcmp(&request.network, data, sizeof(NetworkId)) == 0);
+            case lanywhere::LdnMsg::Disconnect:
+            case lanywhere::LdnMsg::MemberLeft:
+                return host || visitor;
+        }
+        return false;
+    }
+
     // LANywhere: con una sala activa, la búsqueda, la unión y la sincronización del grupo van entre miembros
     // de la sala por el servidor en lugar de por broadcast UDP y TCP en la red local.
     void LANDiscovery::pollRoom() {
@@ -675,10 +709,27 @@ namespace ams::mitm::ldn {
                 return;
             }
         }
-        u8 from;
-        lanywhere::LdnMsg msg;
-        ssize_t size;
-        while ((size = lanywhere::TakeControl(&from, &msg, buffer, sizeof(this->controlBuffer))) >= 0) {
+        // One worker must not consume another service object's control traffic.
+        // Bound each pass even if the relay continuously refills its queue.
+        for (unsigned processed = 0; processed < 24; ++processed) {
+            ControlRequest request{};
+            request.online = this->onlineGame;
+            request.state = this->state;
+            request.host = this->hostMember;
+            {
+                std::scoped_lock binding_lock(this->tcpBindingLock);
+                std::memcpy(&request.network, this->tcpNetworkId, sizeof(request.network));
+            }
+            {
+                std::scoped_lock scan_lock(this->scanResultsMutex);
+                request.scanning = this->roomScanActive;
+                request.filter = this->activeScanFilter;
+            }
+            u8 from;
+            lanywhere::LdnMsg msg;
+            const ssize_t size = lanywhere::TakeControl(&from, &msg, buffer,
+                sizeof(this->controlBuffer), &SelectControl, &request);
+            if (size < 0) break;
             if (static_cast<size_t>(size) <= sizeof(this->controlBuffer)) {
                 this->onRoomMessage(from, static_cast<u8>(msg), buffer, size);
             }
@@ -1296,11 +1347,12 @@ namespace ams::mitm::ldn {
         {
             std::scoped_lock lock(this->tcpBindingLock);
             tcpstream::GameSession pending{};pending.owner={this->callerProcessId,this->hostProgramId};pending.binding_id=this->tcpBindingId;
+            // The pending LDN session identity also filters synchronization packets.
+            std::memcpy(this->tcpNetworkId, &networkInfo->networkId, sizeof(NetworkId));
             u64 epoch=0;u32 capabilities=0,self_ip=0;
             if(lanywhere::CaptureTcpTransport(&epoch,&capabilities,&self_ip)){
                 do {os::GenerateRandomBytes(&this->tcpSessionNonce,sizeof(this->tcpSessionNonce));}while(!this->tcpSessionNonce);
                 this->tcpTransportEpoch=epoch;this->tcpSelfIp=self_ip;
-                std::memcpy(this->tcpNetworkId,&networkInfo->networkId,32);
                 pending.transport_epoch=epoch;pending.capabilities=capabilities;pending.self_ip=self_ip;pending.session_nonce=this->tcpSessionNonce;
                 std::memcpy(pending.network_id,&networkInfo->networkId,32);
             }

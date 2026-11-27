@@ -414,8 +414,12 @@ struct Impl {
         return -1;
     }
     void Queue(uint8_t from, uint8_t kind, const void *data, size_t size) {
-        if (size > 0x500 || control_count == controls.size())
+        if (size > 0x500)
             return;
+        if (control_count == controls.size()) {
+            control_head = (control_head + 1) % controls.size();
+            --control_count;
+        }
         auto &entry = controls[(control_head + control_count++) % controls.size()];
         entry.from = from;
         entry.kind = kind;
@@ -1983,23 +1987,26 @@ bool SendControl(uint8_t destination, uint8_t kind, const void *data, size_t siz
     }
     return false;
 }
-ssize_t TakeControl(uint8_t *from, uint8_t *kind, void *out, size_t capacity) {
+ssize_t TakeControl(uint8_t *from, uint8_t *kind, void *out, size_t capacity,
+                    ControlSelector select, const void *context) {
     auto *impl = Peek();
     if (!impl)
         return -1;
     std::scoped_lock lock(impl->mutex);
-    if (!impl->control_count)
-        return -1;
-    auto &entry = impl->controls[impl->control_head];
-    if (capacity < entry.size)
-        return -1;
-    *from = entry.from;
-    *kind = entry.kind;
-    std::memcpy(out, entry.bytes, entry.size);
-    const size_t size = entry.size;
-    impl->control_head = (impl->control_head + 1) % impl->controls.size();
-    impl->control_count--;
-    return size;
+    for (size_t offset = 0; offset < impl->control_count; ++offset) {
+        const auto &entry = impl->controls[(impl->control_head + offset) % impl->controls.size()];
+        if (select && !select(entry.from, entry.kind, entry.bytes, entry.size, context)) continue;
+        if (capacity < entry.size) return -1;
+        *from = entry.from;
+        *kind = entry.kind;
+        std::memcpy(out, entry.bytes, entry.size);
+        const size_t size = entry.size;
+        for (size_t next = offset + 1; next < impl->control_count; ++next)
+            impl->controls[(impl->control_head + next - 1) % impl->controls.size()] = impl->controls[(impl->control_head + next) % impl->controls.size()];
+        --impl->control_count;
+        return size;
+    }
+    return -1;
 }
 int MemberOfIp(uint32_t ip) {
     auto *impl = Peek();

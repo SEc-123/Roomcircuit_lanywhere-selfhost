@@ -58,6 +58,8 @@ prelude = r'''
 #include <arpa/inet.h>
 #include <poll.h>
 #include "tcp_stream_proxy.hpp"
+#include "control_selector.hpp"
+using ams::mitm::ControlSelector;
 #include "list_status.h"
 #include "regional_relay.h"
 using u8=uint8_t;using u16=uint16_t;using u32=uint32_t;using u64=uint64_t;using s32=int32_t;using s64=int64_t;
@@ -70,7 +72,7 @@ struct Snapshot { bool active=false; u64 epoch=0; u32 address=0; };
 inline Snapshot State() { assert(false); return {}; }
 inline bool SendStream(u64,const void*,size_t) { assert(false); return false; }
 inline int MemberOfIp(u32) { assert(false); return -1; }
-inline ssize_t TakeControl(u8*,u8*,void*,size_t) { assert(false); return -1; }
+inline ssize_t TakeControl(u8*,u8*,void*,size_t,ControlSelector,const void*) { assert(false); return -1; }
 }
 
 namespace os {
@@ -111,6 +113,7 @@ constexpr u8 Features=1,T_Create=1,T_Join=2,T_Leave=3,T_Resume=6,T_Caps=11,T_Cap
  U_Register=1,U_RegisterV2=4,U_Registered=0x81,U_RegisteredV2=0x84;
 /* ACTUAL_RELAY_STATE */
 /* ACTUAL_LDN_MESSAGE */
+ssize_t TakeControl(u8*,LdnMsg*,void*,size_t,ControlSelector=nullptr,const void* =nullptr);
 struct Control{u8 from;LdnMsg msg;u16 size;u8 data[MaxControl];};
 static std::mutex g_lock,g_send_lock,g_queue_lock;
 static RelayState g_state=RelayState::InRoom;
@@ -402,6 +405,6 @@ with tempfile.TemporaryDirectory(prefix='tcp-relay-glue-') as temporary:
         (tmp/name).write_text(sources[name])
     cpp=tmp/'glue.cpp';exe=tmp/'glue';cpp.write_text('\n'.join(pieces))
     subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror',
-        '-Wno-unused-function','-pthread','-I'+str(ROOT/'common'),'-I'+str(ROOT/'console/ldn_mitm/tests'),str(cpp),str(tmp/'tcp_stream_proxy.cpp'),'-o',str(exe)],check=True,timeout=45)
+        '-Wno-unused-function','-pthread','-I'+str(NATIVE),'-I'+str(ROOT/'common'),'-I'+str(ROOT/'console/ldn_mitm/tests'),str(cpp),str(tmp/'tcp_stream_proxy.cpp'),'-o',str(exe)],check=True,timeout=45)
     subprocess.run([str(exe)],check=True,timeout=20)
 print('Host ABI mocks plus exact production functions and Proxy; no Switch or commercial-game acceptance.')

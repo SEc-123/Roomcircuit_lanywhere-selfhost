@@ -1,5 +1,6 @@
 /* Direct LAN Play IPv4 transport. GPL-2.0-only. */
 #pragma once
+#include "control_selector.hpp"
 #include "selection_trace.hpp"
 #include "../../../common/node_lobby.h"
 #include <cstddef>
@@ -37,7 +38,8 @@ Snapshot State();
 bool GetHostedRoom(HostedRoom *out);
 void Publish(const void *info, size_t size);
 bool SendControl(uint8_t destination, uint8_t kind, const void *data, size_t size);
-ssize_t TakeControl(uint8_t *from, uint8_t *kind, void *out, size_t capacity);
+ssize_t TakeControl(uint8_t *from, uint8_t *kind, void *out, size_t capacity,
+                    ControlSelector select = nullptr, const void *context = nullptr);
 int MemberOfIp(uint32_t ip);
 bool SendData(uint32_t destination, uint16_t source_port, uint16_t destination_port, const void *data,
               size_t size);

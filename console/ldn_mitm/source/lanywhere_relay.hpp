@@ -10,6 +10,7 @@
  * the GNU General Public License, version 2, as published by the Free Software Foundation.
  */
 #pragma once
+#include "control_selector.hpp"
 #include <stratosphere.hpp>
 #include "../../../common/list_status.h"
 #include "../../../common/appointments.h"
@@ -264,7 +265,8 @@ namespace ams::mitm::lanywhere {
 
     bool SendControl(u8 dest, LdnMsg msg, const void *data, size_t size, const MatchJoinAttempt *match = nullptr);
     // Saca el siguiente mensaje de control: tamaño de los datos (sin el LdnMsg) o -1 si no hay.
-    ssize_t TakeControl(u8 *from, LdnMsg *msg, void *buffer, size_t size);
+    ssize_t TakeControl(u8 *from, LdnMsg *msg, void *buffer, size_t size,
+                        ControlSelector select = nullptr, const void *context = nullptr);
 
     // Índice del miembro con esa IP virtual, o -1.
     int MemberOfIp(u32 ip);
