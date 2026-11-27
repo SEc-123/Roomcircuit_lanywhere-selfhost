@@ -34,7 +34,7 @@ namespace ams::mitm::ldn {
 
     Result LdnMitMService::CreateUserLocalCommunicationService(sf::Out<sf::SharedPointer<ICommunicationInterface>> out) {
         const bool enabled = LdnConfig::getEnabled();
-        LogFormat("ldn child.begin pid=%" PRIu64 " enabled=%u", m_client_info.process_id.value, static_cast<u32>(enabled));
+        LogFormat("ldn child.begin cmd=0 pid=%" PRIu64 " enabled=%u", m_client_info.process_id.value, static_cast<u32>(enabled));
 
         if (enabled) {
             // Bind identity to this accepted ldn:u session, not a mutable global
@@ -49,7 +49,7 @@ namespace ams::mitm::ldn {
     }
 
     Result LdnMitMService::CreateClientProcessMonitor(sf::Out<sf::SharedPointer<IClientProcessMonitorInterface>> out) {
-        LogFormat("CreateClientProcessMonitor called");
+        LogFormat("ldn monitor.begin cmd=1 pid=%" PRIu64, m_client_info.process_id.value);
 
         // Always create the monitor, regardless of ldn_mitm being enabled
         // This is required for firmware 18.0.0+ compatibility (lo necesitan algunos juegos)
@@ -58,6 +58,7 @@ namespace ams::mitm::ldn {
     }
 
     Result LdnMitMService::CreateLdnMitmConfigService(sf::Out<sf::SharedPointer<ILdnConfig>> out) {
+        LogFormat("ldn config.begin cmd=65000 pid=%" PRIu64, m_client_info.process_id.value);
         out.SetValue(sf::CreateSharedObjectEmplaced<ILdnConfig, LdnConfig>());
         return 0;
     }

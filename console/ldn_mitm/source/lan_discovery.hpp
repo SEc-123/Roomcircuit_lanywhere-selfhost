@@ -147,6 +147,7 @@ namespace ams::mitm::ldn {
             std::array<u8, NodeCountMax> nodeLastStates;
             static void Worker(void* args);
             NifmRequest request{};
+            bool nifmAcquired = false;
             bool requestCreated = false, threadCreated = false;
             std::atomic<bool> stop{false}, initialized{false};
             u8 controlBuffer[lanywhere::MaxControl]{};

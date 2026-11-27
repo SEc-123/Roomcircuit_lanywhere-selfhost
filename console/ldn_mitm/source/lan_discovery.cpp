@@ -1336,6 +1336,10 @@ namespace ams::mitm::ldn {
             this->requestCreated = false;
             this->request = {};
         }
+        if (this->nifmAcquired) {
+            nifmExit();
+            this->nifmAcquired = false;
+        }
         return result;
     }
 
@@ -1385,6 +1389,12 @@ namespace ams::mitm::ldn {
 
         // The virtual transports fragment their own datagrams and TCP uses
         // the kernel path MTU. Keep the existing shared Wi-Fi profile.
+        // libnx shares the admin service across active users and closes it on the last exit.
+        LogFormat("ldn init.nifm.acquire.begin");
+        const Result acquire = nifmInitialize(NifmServiceType_Admin);
+        LogFormat("ldn init.nifm.acquire.done rc=%#x", acquire.GetValue());
+        R_TRY(acquire);
+        this->nifmAcquired = true;
         LogFormat("ldn init.nifm.create");
         R_TRY(nifmCreateRequest(&this->request, true));
         this->requestCreated = true;

@@ -111,22 +111,29 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::GetIpv4Address(sf::Out<u32> address, sf::Out<u32> netmask) {
-        u32 gateway = 0, primary_dns = 0, secondary_dns = 0;
-        address.SetValue(0);
-        netmask.SetValue(0);
-        Result rc = nifmGetCurrentIpConfigInfo(address.GetPointer(), netmask.GetPointer(), &gateway, &primary_dns, &secondary_dns);
-
-        address.SetValue(ntohl(address.GetValue()));
-        netmask.SetValue(ntohl(netmask.GetValue()));
-        // LANywhere: en una sala, el juego vive en la red virtual.
-        if (lanywhere::InRoom()) {
+        const auto useRoomAddress = [&] {
+            if (!lanywhere::InRoom()) return false;
             address.SetValue(lanywhere::MyIp());
             netmask.SetValue(lanywhere::Netmask());
-            rc = 0;
+            return true;
+        };
+        if (useRoomAddress()) return ResultSuccess();
+
+        address.SetValue(0);
+        netmask.SetValue(0);
+        // The game can query its physical address before initializing LDN.
+        Result rc = nifmInitialize(NifmServiceType_Admin);
+        if (R_SUCCEEDED(rc)) {
+            ON_SCOPE_EXIT { nifmExit(); };
+            u32 ip = 0, mask = 0, gateway = 0, primary_dns = 0, secondary_dns = 0;
+            rc = nifmGetCurrentIpConfigInfo(&ip, &mask, &gateway, &primary_dns, &secondary_dns);
+            if (R_SUCCEEDED(rc)) {
+                address.SetValue(ntohl(ip));
+                netmask.SetValue(ntohl(mask));
+            }
         }
-
-        LogFormat("get_ipv4_address %x %x", address.GetValue(), netmask.GetValue());
-
+        // Entering a room during the physical lookup makes its result obsolete.
+        if (useRoomAddress()) return ResultSuccess();
         return rc;
     }
 

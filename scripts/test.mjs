@@ -116,6 +116,7 @@ try {
     if (await suite('App storage choice build', process.env.CC || 'cc', ['-std=c11', '-D_DEFAULT_SOURCE', '-Wall', '-Wextra', '-Werror', 'app/tests/roomcircuit_storage_test.c', '-o', storageBinary]))
         await suite('App storage choice snapshot', storageBinary, []);
     await suite('Game-facing LDN protocol selection and event lifecycle', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/native_event_test.py']);
+    await suite('LDN discovery worker and NIFM session lifetime', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/native_lifecycle_test.py']);
     await suite('LDN scan fields and pre-creation advertisements', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/ldn_input_contract_test.py']);
     await suite('Online update delivery and game isolation', process.execPath, ['--test', 'server/relay/test-update-distribution.js']);
     await suite('Signed updater transaction and interrupted recovery', process.env.PYTHON || 'python3', ['-B', 'app/tests/update_core_test.py']);

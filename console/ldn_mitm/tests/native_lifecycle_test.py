@@ -19,7 +19,11 @@ assert 'this->stop = false' not in extract.function(source, 'void LANDiscovery::
 assert 'std::scoped_lock lock(this->pollMutex)' in extract.function(source, 'Result LANDiscovery::getNetworkInfo(NetworkInfo *pOutNetwork,')
 assert 'this->roomScanActive && this->udp->scanResults.size() < MaxScanResults' in source
 assert 'this->scanResults.size() >= LANDiscovery::MaxScanResults' in source
+entry=(ROOT/'console/ldn_mitm/source/ldnmitm_main.cpp').read_text()
+assert 'nifmInitialize(' not in extract.function(entry, 'void InitializeSystemModule()'), 'LDN must not reserve a NIFM session at boot'
+communication=(ROOT/'console/ldn_mitm/source/ldn_icommunication.cpp').read_text()
 harness = r'''
+#include <arpa/inet.h>
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -31,7 +35,9 @@ harness = r'''
 #include <thread>
 #include <utility>
 #include <cstdio>
-using Result=int;using u8=uint8_t;
+using Result=int;using u8=uint8_t;using u32=uint32_t;
+Result ResultSuccess(){return 0;}
+#define R_SUCCEEDED(v) ((v)==0)
 #define R_FAILED(v) ((v)!=0)
 #define R_TRY(v) do{auto rc=(v);if(rc)return rc;}while(0)
 #define MAKERESULT(m,d) ((m)*1000+(d))
@@ -60,9 +66,33 @@ void WaitThread(ThreadType*t){t->thread.join();}void DestroyThread(ThreadType*){
 }
 namespace util {uintptr_t AlignUp(uintptr_t value,size_t alignment){return(value+alignment-1)&~(alignment-1);}}
 void svcSleepThread(long long ns){clock_ns+=ns;std::this_thread::yield();}
+enum NifmServiceType {NifmServiceType_Admin};
+namespace lanywhere { extern bool room; }
+static bool enter_room_during_query=false;
+static int admin_refs, admin_opens, admin_closes, physical_queries, last_query_refs;
+Result nifmInitialize(NifmServiceType type) {
+ assert(type==NifmServiceType_Admin);
+ if(fault==9&&!admin_refs)return 9;
+ if(!admin_refs)++admin_opens;
+ ++admin_refs;
+ return 0;
+}
+void nifmExit() {
+ assert(admin_refs>0);
+ if(--admin_refs==0){assert(!live_requests);++admin_closes;}
+}
+Result nifmGetCurrentIpConfigInfo(u32 *ip,u32 *mask,u32*,u32*,u32*) {
+ assert(admin_refs>0);last_query_refs=admin_refs;++physical_queries;
+ if(enter_room_during_query)lanywhere::room=true;
+ if(fault==10)return 10;
+ *ip=htonl(0xc0a80102);*mask=htonl(0xffffff00);return 0;
+}
+namespace sf {
+ template<class T>struct Out{T*p;void SetValue(T v)const{*p=v;}T GetValue()const{return *p;}T*GetPointer()const{return p;}};
+}
 struct NifmRequest {bool live=false;};
 enum NifmRequestState {NifmRequestState_Available,NifmRequestState_OnHold};
-Result nifmCreateRequest(NifmRequest*r,bool){if(fault==1)return 1;r->live=true;live_requests++;created++;return 0;}
+Result nifmCreateRequest(NifmRequest*r,bool){assert(admin_refs>0);if(fault==1)return 1;r->live=true;live_requests++;created++;return 0;}
 Result nifmSetLocalNetworkMode(NifmRequest*r,bool){assert(r->live);return fault==2?2:0;}
 Result nifmRequestSubmit(NifmRequest*r){assert(r->live);return fault==3?3:0;}
 Result nifmGetRequestState(NifmRequest*r,NifmRequestState*s){assert(r->live);*s=fault==6?NifmRequestState_OnHold:NifmRequestState_Available;return fault==7?7:0;}
@@ -70,7 +100,7 @@ Result nifmGetResult(NifmRequest*r){assert(r->live);return fault==8?8:0;}
 Result nifmRequestCancel(NifmRequest*r){assert(r->live);cancelled++;return 0;}
 void nifmRequestClose(NifmRequest*r){assert(r->live);r->live=false;closed++;live_requests--;}
 namespace tcpstream {struct Proxy{void EndBinding(uint64_t){}};Proxy&Global(){static Proxy p;return p;}}
-namespace lanywhere {void PollMatch(){}}
+namespace lanywhere {void PollMatch(){} bool room=false;bool InRoom(){return room;}u32 MyIp(){return 0x0a0d0102;}u32 Netmask(){return 0xffff0000;}}
 namespace ams::mitm::ldn {
 constexpr int ModuleID=253,StackSize=0x8000,StationCountMax=7;
 enum class CommState{None,Initialized,Error};enum class DisconnectReason{None,SignalLost};
@@ -91,7 +121,7 @@ class LANDiscovery {public:
  static inline const LanEventFunc EmptyFunc=[]{};
  std::recursive_mutex lifecycleMutex,pollMutex,scanResultsMutex;
  std::atomic<bool>initialized{false},stop{false};
- bool threadCreated=false,requestCreated=false,physicalScanActive=false,roomScanActive=false,haveScanRoute=false;
+ bool nifmAcquired=false,threadCreated=false,requestCreated=false,physicalScanActive=false,roomScanActive=false,haveScanRoute=false;
  size_t publicGroupCount=0;uint64_t tcpBindingId=1;
  NifmRequest request{};os::ThreadType workerThread{};
  std::unique_ptr<Socket>udp,tcp;
@@ -108,17 +138,45 @@ class LANDiscovery {public:
  void pollRoom(){}
  ~LANDiscovery(){finalize();}
 };
+struct ICommunicationService {Result GetIpv4Address(sf::Out<u32>,sf::Out<u32>);};
 /* FUNCTIONS */
 }
 int main(){
  using namespace ams::mitm::ldn;
  {LANDiscovery game;assert(game.finalize()==0&&game.state==CommState::None);}
- for(int failure=1;failure<=8;failure++){
+ for(int failure=1;failure<=9;failure++){
   fault=failure;clock_ns=0;LANDiscovery game;unsigned signals=0;
   assert(game.initialize([&]{signals++;})!=0);assert(game.state==CommState::None);
   assert(!game.initialized&&!game.requestCreated&&!game.threadCreated&&!game.udp&&live_requests==0&&sockets==0);
-  assert(game.finalize()==0);fault=0;assert(game.initialize([&]{signals++;})==0);
+  assert(!admin_refs&&!game.nifmAcquired);assert(game.finalize()==0);fault=0;assert(game.initialize([&]{signals++;})==0);
   assert(game.finalize()==0&&signals>=2&&live_requests==0&&sockets==0&&threads==0);
+ }
+ // A physical IPv4 query can arrive before Initialize. It must release its
+ // temporary reference on success and failure. Virtual addresses do not need NIFM.
+ ICommunicationService api;
+ u32 ip=123,mask=123;fault=9;
+ assert(api.GetIpv4Address({&ip},{&mask})==9&&!ip&&!mask&&!admin_refs&&!physical_queries);
+ fault=10;
+ assert(api.GetIpv4Address({&ip},{&mask})==10&&!ip&&!mask&&!admin_refs&&physical_queries==1);
+ fault=0;
+ assert(api.GetIpv4Address({&ip},{&mask})==0&&ip==0xc0a80102&&mask==0xffffff00&&!admin_refs);
+ lanywhere::room=true;fault=9;
+ assert(api.GetIpv4Address({&ip},{&mask})==0&&ip==lanywhere::MyIp()&&mask==lanywhere::Netmask());
+ assert(physical_queries==2&&!admin_refs);
+ enter_room_during_query=true;
+ for (int physical_fault : {0,10}) {
+  lanywhere::room=false;fault=physical_fault;
+  assert(api.GetIpv4Address({&ip},{&mask})==0&&ip==lanywhere::MyIp()&&mask==lanywhere::Netmask());
+  assert(!admin_refs);
+ }
+ enter_room_during_query=false;lanywhere::room=false;fault=0;
+ {
+  LANDiscovery first,second;const int initial_opens=admin_opens;
+  assert(first.initialize([]{})==0&&first.initialize([]{})==0&&admin_refs==1);
+  assert(second.initialize([]{})==0&&admin_refs==2&&admin_opens==initial_opens+1);
+  assert(api.GetIpv4Address({&ip},{&mask})==0&&last_query_refs==3&&admin_refs==2);
+  assert(first.finalize()==0&&admin_refs==1&&live_requests==1);
+  assert(second.finalize()==0&&!admin_refs&&!live_requests);
  }
  // Worker may be scheduled only after Finalize has already requested stop.
  permit_thread=false;fault=0;LANDiscovery delayed;loops=0;
@@ -161,10 +219,13 @@ int main(){
  }
  puts("PASS terminal discovery error wakes the game once, reinitializes cleanly and ignores requested stop");
  assert(created==closed&&created==cancelled);
+ assert(!admin_refs&&admin_opens==admin_closes);
+ puts("PASS NIFM releases on faults and last session, overlapping sessions share one service, pre-init IPv4 and virtual route");
  puts("PASS actual LDN initialize/finalize: all service failures unwind, request handles close, bounded hold and delayed-start stop survives");
 }
 '''
 functions='\n'.join(extract.function(source,s) for s in ['Result LANDiscovery::restoreNetworkResources(', 'Result LANDiscovery::finalize(', 'Result LANDiscovery::initialize(', 'void LANDiscovery::worker(', 'int LANDiscovery::loopPoll('])
+functions += '\n' + extract.function(communication, 'Result ICommunicationService::GetIpv4Address(')
 with tempfile.TemporaryDirectory(prefix='native-lifecycle-') as tmp:
     cpp=Path(tmp)/'test.cpp';cpp.write_text(harness.replace('/* FUNCTIONS */',functions));binary=Path(tmp)/'test'
     subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-pthread',str(cpp),'-o',str(binary)],check=True)
