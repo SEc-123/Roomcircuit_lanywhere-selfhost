@@ -26,7 +26,8 @@ int Pollable::Poll(Pollable *fds[], size_t nfds, int timeout) {
     }
     int rc = poll(pfds.data(), nfds, timeout);
     if (rc < 0) {
-        LogFormat("Pollable::Poll failed %d", rc);
+        if (errno == EINTR) return 0;
+        LogFormat("Pollable::Poll failed, errno=%d", errno);
         return -1;
     }
     if (rc == 0) {

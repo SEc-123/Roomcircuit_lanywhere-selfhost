@@ -35,10 +35,17 @@ ssize_t test_sendto(int,const void *data,size_t count,int,const sockaddr*,sockle
  const size_t n=std::min<size_t>(count,3);
  const auto *bytes=static_cast<const u8*>(data);sent.insert(sent.end(),bytes,bytes+n);return n;
 }
+static int poll_error;
+int test_poll(pollfd *fds,nfds_t n,int timeout){
+ if(poll_error){errno=poll_error;return -1;}
+ return ::poll(fds,n,timeout);
+}
+#define poll test_poll
 #define sendto test_sendto
 /* HEADER */
 /* SOURCE */
 #undef sendto
+#undef poll
 class Stream:public LanSocket {public:
  std::vector<u8> incoming;unsigned receives=0;
  Stream():LanSocket(-1){}
@@ -56,6 +63,9 @@ std::vector<u8> frame(const std::vector<u8>&body){
  std::vector<u8>b(sizeof(h)+body.size());std::memcpy(b.data(),&h,sizeof(h));std::memcpy(b.data()+sizeof(h),body.data(),body.size());return b;
 }
 int main(){
+ poll_error=EINTR;assert(Pollable::Poll(nullptr,0,0)==0);
+ poll_error=EIO;assert(Pollable::Poll(nullptr,0,0)<0);
+ poll_error=0;assert(Pollable::Poll(nullptr,0,0)==0);
  Stream socket;
  for(size_t n:{size_t(1),size_t(2),size_t(256),size_t(1152)}){
   auto input=std::make_unique<u8[]>(n);std::memset(input.get(),0,n);

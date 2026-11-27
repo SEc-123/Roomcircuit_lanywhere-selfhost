@@ -28,6 +28,7 @@ namespace ams::mitm::ldn {
     class ICommunicationService {
         private:
             LANDiscovery lanDiscovery;
+            std::atomic<bool> tracedScan{false};
             os::SystemEvent *state_event;
             os::Mutex lifecycle_mutex{false};
             os::Mutex event_mutex{false};

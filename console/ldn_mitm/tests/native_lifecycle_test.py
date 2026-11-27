@@ -20,6 +20,7 @@ assert 'std::scoped_lock lock(this->pollMutex)' in extract.function(source, 'Res
 assert 'this->roomScanActive && this->udp->scanResults.size() < MaxScanResults' in source
 assert 'this->scanResults.size() >= LANDiscovery::MaxScanResults' in source
 harness = r'''
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -71,11 +72,20 @@ void nifmRequestClose(NifmRequest*r){assert(r->live);r->live=false;closed++;live
 namespace tcpstream {struct Proxy{void EndBinding(uint64_t){}};Proxy&Global(){static Proxy p;return p;}}
 namespace lanywhere {void PollMatch(){}}
 namespace ams::mitm::ldn {
-constexpr int ModuleID=253,StackSize=0x8000;
-enum class CommState{None,Initialized};enum class DisconnectReason{None};
-struct Socket{Socket(){sockets++;}~Socket(){sockets--;}};
+constexpr int ModuleID=253,StackSize=0x8000,StationCountMax=7;
+enum class CommState{None,Initialized,Error};enum class DisconnectReason{None,SignalLost};
+std::atomic<bool> fail_poll{false}, hold_poll{false}, poll_entered{false}, worker_exited{false};
+struct Pollable {
+ static int Poll(Pollable **,size_t) {
+  ++loops;
+  poll_entered=true;
+  while(hold_poll.load())std::this_thread::yield();
+  return fail_poll.load()?-1:0;
+ }
+};
+struct Socket : Pollable {Socket(){sockets++;}~Socket(){sockets--;}};
 struct NodeInfo{};struct Network{struct{NodeInfo nodes[8];}ldn;};
-struct Station {NodeInfo *nodeInfo=nullptr;int nodeId=1;void reset(){}};
+struct Station : Pollable {NodeInfo *nodeInfo=nullptr;int nodeId=1;void reset(){}};
 class LANDiscovery {public:
  using LanEventFunc=std::function<void()>;
  static inline const LanEventFunc EmptyFunc=[]{};
@@ -86,14 +96,16 @@ class LANDiscovery {public:
  NifmRequest request{};os::ThreadType workerThread{};
  std::unique_ptr<Socket>udp,tcp;
  std::unique_ptr<u8[]>stack{new u8[StackSize+os::ThreadStackAlignment]};
- Station stations[7];Network networkInfo{};LanEventFunc lanEvent=EmptyFunc;
+ std::array<Station,7> stations{};Network networkInfo{};LanEventFunc lanEvent=EmptyFunc;
  DisconnectReason disconnect_reason=DisconnectReason::None;CommState state=CommState::None;
- static void Worker(void*p){static_cast<LANDiscovery*>(p)->worker();}
+ static void Worker(void*p){static_cast<LANDiscovery*>(p)->worker();worker_exited=true;}
  Result initialize(LanEventFunc,bool listening=true);Result finalize();Result restoreNetworkResources();void worker();
  Result initUdp(bool){if(fault==4)return 4;udp=std::make_unique<Socket>();return 0;}
  void setState(CommState v){std::scoped_lock l(pollMutex);state=v;if(lanEvent)lanEvent();}
- void roomCloseStations(){}void leaveAutoRoom(){}void resetStations(){}
- int loopPoll(){loops++;return 0;}
+ bool owns_room=false;
+ void roomCloseStations(){}void leaveAutoRoom(){owns_room=false;}void resetStations(){}
+ int loopPoll();
+ void pollRoom(){}
  ~LANDiscovery(){finalize();}
 };
 /* FUNCTIONS */
@@ -115,11 +127,44 @@ int main(){
  while(!delayed.stop.load())std::this_thread::yield();
  permit_thread=true;exit.join();
  assert(loops==0&&live_requests==0&&sockets==0&&threads==0);
+ // A permanent polling error ends the session, wakes waiters once, and permits a clean retry.
+ permit_thread=true;
+ for (const bool retry : {false, true}) {
+  LANDiscovery failing;
+  std::atomic<unsigned> error_events{0};
+  fail_poll=true;worker_exited=false;loops=0;
+  failing.owns_room=true;
+  const auto observe=[&]{if(failing.state==CommState::Error)++error_events;};
+  assert(failing.initialize(observe)==0);
+  while(!worker_exited.load())std::this_thread::yield();
+  assert(error_events==1&&loops==1&&!failing.initialized);
+  assert(failing.state==CommState::Error&&failing.disconnect_reason==DisconnectReason::SignalLost);
+  fail_poll=false;
+  if(retry) {
+   assert(failing.initialize(observe)==0);
+   assert(failing.initialized&&!failing.owns_room&&failing.state==CommState::Initialized);
+  }
+  assert(failing.finalize()==0&&!failing.owns_room&&error_events==1);
+  assert(!threads&&!sockets&&!live_requests);
+ }
+ // Finalize may request a stop while poll is outstanding.
+ {
+  LANDiscovery ending;
+  std::atomic<unsigned> error_events{0};
+  poll_entered=false;fail_poll=true;hold_poll=true;
+  assert(ending.initialize([&]{if(ending.state==CommState::Error)++error_events;})==0);
+  while(!poll_entered.load())std::this_thread::yield();
+  std::thread finish([&]{assert(ending.finalize()==0);});
+  while(!ending.stop.load())std::this_thread::yield();
+  hold_poll=false;finish.join();fail_poll=false;
+  assert(!error_events&&!ending.initialized&&!threads&&!sockets&&!live_requests);
+ }
+ puts("PASS terminal discovery error wakes the game once, reinitializes cleanly and ignores requested stop");
  assert(created==closed&&created==cancelled);
  puts("PASS actual LDN initialize/finalize: all service failures unwind, request handles close, bounded hold and delayed-start stop survives");
 }
 '''
-functions='\n'.join(extract.function(source,s) for s in ['Result LANDiscovery::restoreNetworkResources(', 'Result LANDiscovery::finalize(', 'Result LANDiscovery::initialize(', 'void LANDiscovery::worker('])
+functions='\n'.join(extract.function(source,s) for s in ['Result LANDiscovery::restoreNetworkResources(', 'Result LANDiscovery::finalize(', 'Result LANDiscovery::initialize(', 'void LANDiscovery::worker(', 'int LANDiscovery::loopPoll('])
 with tempfile.TemporaryDirectory(prefix='native-lifecycle-') as tmp:
     cpp=Path(tmp)/'test.cpp';cpp.write_text(harness.replace('/* FUNCTIONS */',functions));binary=Path(tmp)/'test'
     subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-pthread',str(cpp),'-o',str(binary)],check=True)

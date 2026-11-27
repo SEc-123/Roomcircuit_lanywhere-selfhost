@@ -24,11 +24,13 @@ using namespace ams::mitm;
 #define AMS_ASSERT(x) assert(x)
 static int NativeError(){switch(errno){case EAGAIN:return 11;case EINPROGRESS:return 115;case EALREADY:return 114;case EISCONN:return 106;case ENOTCONN:return 107;case ECONNRESET:return 104;case ECONNREFUSED:return 111;case ETIMEDOUT:return 110;case EBADF:return 9;default:return 22;}}
 struct GameNamespace {
+ std::function<void(u32)> before_dispatch;
  std::map<int,int> sockets;int next=1000,virtual_connects=0,command_count[32]{};
  ~GameNamespace(){for(auto [id,fd]:sockets){(void)id;::close(fd);}}
  int Real(int id){auto it=sockets.find(id);if(it==sockets.end()){errno=EBADF;return -1;}return it->second;}
  static u32 Dispatch(void *ctx,u32 command,const void *input,size_t input_size,void *output,size_t output_size,const tcpstream::IpcBuffer *buffers,size_t count){
   auto &self=*static_cast<GameNamespace*>(ctx);assert(command<32);self.command_count[command]++;
+  if(self.before_dispatch) self.before_dispatch(command);
   struct Raw{int32_t ret,error;uint32_t length;} out{-1,0,0};assert(output_size==8||output_size==12);
   const auto *ints=static_cast<const int32_t*>(input);const int id=input_size>=4?ints[0]:-1;const int fd=(command==2||command==3||command==5||command==6||command==23)?-1:self.Real(id);
   auto endpoint=[&](size_t index){tcpstream::Endpoint e{};assert(index<count&&buffers[index].size>=16&&tcpstream::ReadAddress(buffers[index].data,16,&e));return e;};

@@ -43,6 +43,8 @@ namespace ams::mitm::bsd {
             u64 sent_bytes;
             Destination dest[MaxDestinations];
             size_t dest_count;
+
+            bool watchesRoomPort() const { return used && bound_port && !physical_peer; }
         };
 
         constinit os::SdkMutex g_lock;
@@ -186,8 +188,9 @@ namespace ams::mitm::bsd {
 
         bool UdpReadable(tcpstream::Owner owner, s32 fd) {
             const auto socket = UdpSocket(owner, fd);
-            if (!socket.used || !socket.bound_port || socket.physical_peer) return false;
-            return socket.read_shutdown || lanywhere::HasData(socket.bound_port, socket.peer_ip, socket.peer_port);
+            if (!socket.watchesRoomPort()) return false;
+            return socket.read_shutdown ||
+                (lanywhere::InRoom() && lanywhere::HasData(socket.bound_port, socket.peer_ip, socket.peer_port));
         }
 
         void Summary(const SocketStats &s, const char *why) {
@@ -323,19 +326,15 @@ namespace ams::mitm::bsd {
         const size_t n = nfds;
         const PollFd *in_fds = reinterpret_cast<const PollFd *>(fds_in.GetPointer());
         const auto owner=TcpOwner(m_client_info);
-        u16 ports[MaxPollFds] = {};
-        bool room = false;
-        for (size_t i = 0; i < n; i++)
-            room = room || tcpstream::NeedsPollSlices(tcpstream::Global(), owner, in_fds[i].fd) ||
-                UdpSocket(owner, in_fds[i].fd).peer_ip;
-        if (lanywhere::InRoom()) {
-            std::scoped_lock lk(g_lock);
-            for (size_t i = 0; i < n; i++) {
-                if (!(in_fds[i].events & (PollIn | PollRdNorm))) continue;
-                if (auto *s = Find(in_fds[i].fd, owner, false); s != nullptr && s->type==2 && s->bound_port) {
-                    ports[i] = s->bound_port;
-                    room = true;
-                }
+        // A game may bind its UDP socket and begin waiting before LDN joins the room.
+        // Native readiness alone cannot wake that wait when relay data arrives.
+        bool sliced = false;
+        for (size_t i = 0; i < n; ++i) {
+            const auto udp = UdpSocket(owner, in_fds[i].fd);
+            if (tcpstream::NeedsPollSlices(tcpstream::Global(), owner, in_fds[i].fd) || udp.peer_ip ||
+                ((in_fds[i].events & (PollIn | PollRdNorm)) && udp.watchesRoomPort())) {
+                sliced = true;
+                break;
             }
         }
 
@@ -343,7 +342,7 @@ namespace ams::mitm::bsd {
         Out out = {};
         for (;;) {
             s32 slice = timeout;
-            if (room && timeout != 0) {
+            if (sliced && timeout != 0) {
                 const s64 elapsed = (os::GetSystemTick() - start).ToTimeSpan().GetMilliSeconds();
                 slice = timeout < 0 ? PollSliceMs : static_cast<s32>(std::clamp<s64>(timeout - elapsed, 0, PollSliceMs));
             }
@@ -359,7 +358,7 @@ namespace ams::mitm::bsd {
                 .buffer_attrs = { SfBufferAttr_HipcAutoSelect | SfBufferAttr_In, SfBufferAttr_HipcAutoSelect | SfBufferAttr_Out },
                 .buffers = { { request, n*sizeof(PollFd) }, { fds_out.GetPointer(), n*sizeof(PollFd) } },
             ));
-            if (!room || out.ret < 0) break;
+            if (!sliced || out.ret < 0) break;
             PollFd *out_fds = reinterpret_cast<PollFd *>(fds_out.GetPointer());
             s32 ready = 0;
             for (size_t i = 0; i < n; i++) {
@@ -368,7 +367,7 @@ namespace ams::mitm::bsd {
                     out_fds[i].revents &= ~(PollIn | PollRdNorm);
                     if (!lanywhere::InRoom()) out_fds[i].revents |= 0x008; // POLLERR; Recv reports no route.
                 }
-                if (ports[i] && UdpReadable(owner, in_fds[i].fd)) {
+                if ((in_fds[i].events & (PollIn | PollRdNorm)) && UdpReadable(owner, in_fds[i].fd)) {
                     out_fds[i].revents |= in_fds[i].events & (PollIn | PollRdNorm);
                 }
                 if (out_fds[i].revents) ready++;
@@ -408,9 +407,17 @@ namespace ams::mitm::bsd {
         }
         auto bit=[](const u8 *set,int fd){return (set[fd/8]&(1u<<(fd%8)))!=0;};
         auto put=[](u8 *set,int fd,bool value){if(value)set[fd/8]|=1u<<(fd%8);else set[fd/8]&=~(1u<<(fd%8));};
-        const auto owner=TcpOwner(m_client_info);bool sliced=lanywhere::InRoom();
-        for(int fd=0;fd<input.nfds;fd++)if((bit(original[0],fd)||bit(original[1],fd)||bit(original[2],fd))&&
-            (tcpstream::NeedsPollSlices(tcpstream::Global(),owner,fd)||UdpSocket(owner,fd).peer_ip))sliced=true;
+        const auto owner = TcpOwner(m_client_info);
+        bool sliced = false;
+        for (int fd = 0; fd < input.nfds; ++fd) {
+            if (!bit(original[0],fd) && !bit(original[1],fd) && !bit(original[2],fd)) continue;
+            const auto udp = UdpSocket(owner, fd);
+            if (tcpstream::NeedsPollSlices(tcpstream::Global(), owner, fd) || udp.peer_ip ||
+                (bit(original[0], fd) && udp.watchesRoomPort())) {
+                sliced = true;
+                break;
+            }
+        }
         const s64 duration=input.null_timeout?-1:input.seconds*1000000+input.microseconds;
         const auto start=os::GetSystemTick();tcpstream::Forward forward(m_forward_service.get(),TcpDispatch);
         for(;;){
@@ -429,7 +436,7 @@ namespace ams::mitm::bsd {
             for(int fd=0;fd<input.nfds;fd++){
                 const auto status=tcpstream::Global().GetStatus(owner,fd);
                 bool udp_ready=false;
-                if(sizes[0]&&bit(original[0],fd)&&lanywhere::InRoom()){
+                if(sizes[0]&&bit(original[0],fd)){
                     udp_ready = UdpReadable(owner, fd);
                 }
                 if (UdpSocket(owner, fd).peer_ip && !lanywhere::InRoom()) udp_ready = true;
@@ -551,13 +558,13 @@ namespace ams::mitm::bsd {
                                         const sf::OutAutoSelectBuffer *addr, bool *handled, s32 *ret, s32 *err, u32 *addrlen) {
         *handled = false;
         if(tcpstream::Global().IsStreamSocket(TcpOwner(m_client_info),fd))R_SUCCEED();
-        const auto socket = UdpSocket(TcpOwner(m_client_info), fd);
-        if (!socket.used || !socket.bound_port || socket.physical_peer) R_SUCCEED();
-        if (!lanywhere::InRoom()) {
-            if (socket.peer_ip) { *handled = true; *ret = -1; *err = ErrnoHost; *addrlen = 0; }
-            R_SUCCEED();
-        }
+        const auto owner = TcpOwner(m_client_info);
+        const auto socket = UdpSocket(owner, fd);
+        if (!socket.watchesRoomPort()) R_SUCCEED();
         *handled = true;
+        if (socket.peer_ip && !lanywhere::InRoom()) {
+            *ret = -1; *err = ErrnoHost; *addrlen = 0; R_SUCCEED();
+        }
         if (socket.read_shutdown) { *ret = 0; *err = 0; *addrlen = 0; R_SUCCEED(); }
         const struct { s32 fd, cmd, arg; } fcntl_in = {fd, BsdGetFl, 0};
         Out fcntl_out{};
@@ -574,9 +581,9 @@ namespace ams::mitm::bsd {
         const s64 timeout_ms = static_cast<s64>(timeout.tv_sec) * 1000 + (timeout.tv_usec + 999) / 1000;
         Result ipc_result = 0;
         ReceiveResult result{};
-        *handled = WaitVirtualReceive(nonblocking, timeout_ms, ErrnoAgain,
+        const bool completed = WaitVirtualReceive(nonblocking, timeout_ms, ErrnoAgain,
             [] { return os::GetSystemTick().ToTimeSpan().GetMilliSeconds(); },
-            [] { return lanywhere::InRoom(); },
+            [&] { return UdpSocket(owner, fd).identity == socket.identity; },
             [&](ReceiveResult *out) {
                 sockaddr_in from{};
                 const ssize_t room = TakeRoomPacket(fd, TcpOwner(m_client_info), data.GetPointer(), data.GetSize(), addr ? &from : nullptr, flags);
@@ -593,7 +600,7 @@ namespace ams::mitm::bsd {
                 const auto current = UdpSocket(TcpOwner(m_client_info), fd);
                 if (!current.used) return {-1, 9, 0};
                 if (current.read_shutdown) return {0, 0, 0};
-                if (current.peer_ip) return {-1, ErrnoAgain, 0};
+                if (current.peer_ip) return {-1, lanywhere::InRoom() ? ErrnoAgain : ErrnoHost, 0};
                 const struct { s32 fd, flags; } in = {fd, flags | BsdDontWait};
                 struct { s32 ret, err; u32 addrlen; } recv{};
                 if (addr) {
@@ -625,10 +632,7 @@ namespace ams::mitm::bsd {
                 return R_FAILED(ipc_result) ? ErrnoIo : (polled.ret < 0 ? polled.err : 0);
             }, &result);
         R_TRY(ipc_result);
-        if (!*handled && socket.peer_ip) {
-            *handled = true;
-            result = {-1, ErrnoHost, 0};
-        }
+        if (!completed) result = {-1, 9, 0};  // The waiting descriptor was closed or reused.
         *ret = result.ret; *err = result.error; *addrlen = result.addrlen;
         R_SUCCEED();
     }

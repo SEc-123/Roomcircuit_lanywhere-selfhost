@@ -641,6 +641,14 @@ namespace ams::mitm::ldn {
             fds[2 + i] = this->stations.data() + i;
         }
         rc = Pollable::Poll(fds, nfds);
+        if (rc < 0) {
+            if (!this->stop) {
+                this->initialized = false;
+                this->disconnect_reason = DisconnectReason::SignalLost;
+                if (this->state != CommState::Error) this->setState(CommState::Error);
+            }
+            return rc;
+        }
         this->pollRoom();
 
         return rc;
@@ -1334,7 +1342,8 @@ namespace ams::mitm::ldn {
     Result LANDiscovery::finalize() {
         std::scoped_lock lifecycle(this->lifecycleMutex);
         this->stop = true;
-        if (this->threadCreated) {
+        const bool had_worker = this->threadCreated;
+        if (had_worker) {
             // Never wait with pollMutex held: the worker may be leaving a callback.
             os::WaitThread(&this->workerThread);
             os::DestroyThread(&this->workerThread);
@@ -1342,7 +1351,7 @@ namespace ams::mitm::ldn {
         }
         std::scoped_lock state_lock(this->pollMutex);
         tcpstream::Global().EndBinding(this->tcpBindingId);
-        if (this->initialized) {
+        if (had_worker) {
             this->roomCloseStations();
             this->leaveAutoRoom();
         }
@@ -1364,8 +1373,10 @@ namespace ams::mitm::ldn {
 
     Result LANDiscovery::initialize(LanEventFunc lanEvent, bool listening) {
         std::scoped_lock lifecycle(this->lifecycleMutex);
-        std::scoped_lock state_lock(this->pollMutex);
         if (this->initialized) return 0;
+        // Reap a failed worker and release its room before reusing the session.
+        if (this->threadCreated) R_TRY(this->finalize());
+        std::scoped_lock state_lock(this->pollMutex);
         if (!this->stack) return MAKERESULT(ModuleID, 10);
         bool complete = false;
         ON_SCOPE_EXIT { if (!complete) static_cast<void>(this->finalize()); };
@@ -1374,10 +1385,14 @@ namespace ams::mitm::ldn {
 
         // The virtual transports fragment their own datagrams and TCP uses
         // the kernel path MTU. Keep the existing shared Wi-Fi profile.
+        LogFormat("ldn init.nifm.create");
         R_TRY(nifmCreateRequest(&this->request, true));
         this->requestCreated = true;
+        LogFormat("ldn init.nifm.local_mode");
         R_TRY(nifmSetLocalNetworkMode(&this->request, true));
+        LogFormat("ldn init.nifm.submit");
         R_TRY(nifmRequestSubmit(&this->request));
+        LogFormat("ldn init.nifm.wait");
         const auto began = os::GetSystemTick();
         for (;;) {
             NifmRequestState state{};
@@ -1387,13 +1402,16 @@ namespace ams::mitm::ldn {
                 return MAKERESULT(ModuleID, 20);
             svcSleepThread(10000000L);
         }
+        LogFormat("ldn init.nifm.result");
         R_TRY(nifmGetResult(&this->request));
         for (auto &station : this->stations) {
             station.nodeInfo = &this->networkInfo.ldn.nodes[station.nodeId];
             station.reset();
         }
+        LogFormat("ldn init.udp.open");
         R_TRY(this->initUdp(listening));
         this->stop = false;
+        LogFormat("ldn init.worker.create");
         R_TRY(os::CreateThread(&this->workerThread, &Worker, this,
             reinterpret_cast<void *>(util::AlignUp(reinterpret_cast<uintptr_t>(this->stack.get()), os::ThreadStackAlignment)),
             StackSize, 0x15, 2));

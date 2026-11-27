@@ -28,19 +28,23 @@ namespace ams::mitm::ldn {
 
     LdnMitMService::LdnMitMService(std::shared_ptr<::Service> &&s, const sm::MitmProcessInfo &c) : sf::MitmServiceImplBase(std::forward<std::shared_ptr<::Service>>(s), c)
     {
-        LogFormat("LdnMitMService created");
+        LogFormat("ldn service.created pid=%" PRIu64 " title=%016" PRIx64,
+                  c.process_id.value, c.program_id.value);
     }
 
     Result LdnMitMService::CreateUserLocalCommunicationService(sf::Out<sf::SharedPointer<ICommunicationInterface>> out) {
-        LogFormat("CreateUserLocalCommunicationService: enabled %d", static_cast<u32>(LdnConfig::getEnabled()));
+        const bool enabled = LdnConfig::getEnabled();
+        LogFormat("ldn child.begin pid=%" PRIu64 " enabled=%u", m_client_info.process_id.value, static_cast<u32>(enabled));
 
-        if (LdnConfig::getEnabled()) {
+        if (enabled) {
             // Bind identity to this accepted ldn:u session, not a mutable global
             // or the unrelated local-communication identifier supplied by a game.
             out.SetValue(sf::CreateSharedObjectEmplaced<ICommunicationInterface, ICommunicationService>(m_client_info.program_id.value,m_client_info.process_id.value));
+            LogFormat("ldn child.ready pid=%" PRIu64, m_client_info.process_id.value);
             return 0;
         }
 
+        LogFormat("ldn child.forward pid=%" PRIu64, m_client_info.process_id.value);
         return sm::mitm::ResultShouldForwardToSession();
     }
 

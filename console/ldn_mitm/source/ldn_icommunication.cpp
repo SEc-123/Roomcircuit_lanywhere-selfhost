@@ -31,11 +31,12 @@ namespace ams::mitm::ldn {
             }
         }
 
-        R_TRY(lanDiscovery.initialize([&](){
+        LogFormat("ldn init.event.ready");
+        const Result rc = lanDiscovery.initialize([&](){
             this->onEventFired();
-        }));
-
-        return ResultSuccess();
+        });
+        LogFormat("ldn init.done rc=%#x", rc.GetValue());
+        return rc;
     }
 
     Result ICommunicationService::InitializeSystem2(u64 unk, const sf::ClientProcessId &client_process_id) {
@@ -56,7 +57,10 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::OpenAccessPoint() {
-        return this->lanDiscovery.openAccessPoint();
+        LogFormat("ldn ap.open.begin");
+        const Result rc = this->lanDiscovery.openAccessPoint();
+        LogFormat("ldn ap.open.done rc=%#x", rc.GetValue());
+        return rc;
     }
 
     Result ICommunicationService::CloseAccessPoint() {
@@ -68,7 +72,10 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::OpenStation() {
-        return this->lanDiscovery.openStation();
+        LogFormat("ldn station.open.begin");
+        const Result rc = this->lanDiscovery.openStation();
+        LogFormat("ldn station.open.done rc=%#x", rc.GetValue());
+        return rc;
     }
 
     Result ICommunicationService::CloseStation() {
@@ -80,7 +87,10 @@ namespace ams::mitm::ldn {
     }
 
     Result ICommunicationService::CreateNetwork(CreateNetworkConfig data) {
-        return this->lanDiscovery.createNetwork(&data.securityConfig, &data.userConfig, &data.networkConfig);;
+        LogFormat("ldn ap.create.begin");
+        const Result rc = this->lanDiscovery.createNetwork(&data.securityConfig, &data.userConfig, &data.networkConfig);
+        LogFormat("ldn ap.create.done rc=%#x", rc.GetValue());
+        return rc;
     }
 
     Result ICommunicationService::SetAdvertiseData(sf::InAutoSelectBuffer data) {
@@ -182,10 +192,11 @@ namespace ams::mitm::ldn {
         if (buffer.GetSize() > UINT16_MAX) return MAKERESULT(0xCB, 32);
         u16 count = static_cast<u16>(buffer.GetSize());
 
+        if (!this->tracedScan.exchange(true, std::memory_order_relaxed)) LogFormat("ldn station.scan.first");
         rc = lanDiscovery.scan(buffer.GetPointer(), &count, filter);
         outCount.SetValue(count);
 
-        LogFormat("scan %d %d", count, rc);
+        LogFormat("ldn station.scan.done count=%u rc=%#x", static_cast<unsigned>(count), rc.GetValue());
 
         return rc;
     }

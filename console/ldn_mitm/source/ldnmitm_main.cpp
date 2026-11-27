@@ -162,11 +162,16 @@ namespace ams {
                 /* Acknowledge the mitm session. */
                 std::shared_ptr<::Service> fsrv;
                 sm::MitmProcessInfo client_info;
+                if (port_index == PortIndex_Ldn) LogFormat("ldn-diag-20261127 accept.ack.begin version=%s", GITDESCVER);
                 server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
                 if (port_index == PortIndex_Bsd) {
                     return this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::bsd::IBsdSpy, mitm::bsd::BsdSpyService>(decltype(fsrv)(fsrv), client_info), fsrv);
                 }
-                return this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::ldn::ILdnMitMService, mitm::ldn::LdnMitMService>(decltype(fsrv)(fsrv), client_info), fsrv);
+                LogFormat("ldn accept.ack.done pid=%" PRIu64 " title=%016" PRIx64,
+                          client_info.process_id.value, client_info.program_id.value);
+                const Result rc = this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::ldn::ILdnMitMService, mitm::ldn::LdnMitMService>(decltype(fsrv)(fsrv), client_info), fsrv);
+                LogFormat("ldn accept.done pid=%" PRIu64 " rc=%#x", client_info.process_id.value, rc.GetValue());
+                return rc;
             }
 
             alignas(os::MemoryPageSize) u8 g_extra_thread_stacks[NumExtraThreads][ThreadStackSize];

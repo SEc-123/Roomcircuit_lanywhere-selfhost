@@ -2,12 +2,95 @@ using ams::mitm::bsd::BsdSpyService;
 using namespace ams;
 static sf::InAutoSelectBuffer Input(const void *p,size_t n){return {static_cast<const u8*>(p),n};}
 static sf::OutAutoSelectBuffer Output(void *p,size_t n){return {static_cast<u8*>(p),n};}
+
+// The game can start its socket wait before the LDN IPC thread completes room entry.
+static void testRoomEntryDuringWait(BsdSpyService &service, GameNamespace &kernel) {
+    int result = -1, error = -1;
+    u32 address_size = 0;
+    lanywhere::room = false;
+    assert(service.Socket({&result}, {&error}, AF_INET, SOCK_DGRAM, 0) == 0 && result >= 0);
+    const int fd = result;
+    const auto local = tcpstream::MakeAddress({0, 0});
+    assert(service.Bind({&result}, {&error}, fd, Input(&local, sizeof(local))) == 0 && result == 0);
+    u8 address[16]{}, data[4]{};
+    assert(service.GetSockName({&result}, {&error}, {&address_size}, fd, Output(address, sizeof(address))) == 0 && result == 0);
+    tcpstream::Endpoint bound{};
+    assert(tcpstream::ReadAddress(address, sizeof(address), &bound) && bound.port);
+
+    const u8 payload = 0x51;
+    auto enterOn = [&](u32 command) {
+        lanywhere::room = false;
+        kernel.before_dispatch = [&, command](u32 current) {
+            if (current == command && !lanywhere::room) {
+                assert(lanywhere::queue.Push(0x0a0d4321, 33333, bound.port, &payload, 1));
+                lanywhere::room = true;
+            }
+        };
+    };
+    auto consume = [&] {
+        assert(service.Recv({&result}, {&error}, fd, 0x80, Output(data, sizeof(data))) == 0);
+        assert(result == 1 && data[0] == payload && !lanywhere::queue.Has(bound.port));
+    };
+
+    tcpstream::NativePollFd in{fd, POLLIN, 0}, polled{};
+    u8 input[128]{}, output[128]{};
+    assert(fd >= 0 && fd < 1024);
+    input[fd / 8] |= 1u << (fd % 8);
+    for (bool indefinite : {false, true}) {
+        enterOn(6);
+        assert(service.Poll({&result}, {&error}, 1, indefinite ? -1 : 100, Input(&in, sizeof(in)), Output(&polled, sizeof(polled))) == 0);
+        assert(result == 1 && (polled.revents & POLLIN));
+        consume();
+
+        tcpstream::NativeSelectData timeout{};
+        timeout.nfds = fd + 1;
+        timeout.null_timeout = indefinite;
+        timeout.microseconds = indefinite ? 0 : 100000;
+        enterOn(5);
+        assert(service.Select({&result}, {&error}, timeout, Input(input, sizeof(input)), Input(nullptr, 0), Input(nullptr, 0),
+                              Output(output, sizeof(output)), Output(nullptr, 0), Output(nullptr, 0)) == 0);
+        assert(result == 1 && (output[fd / 8] & (1u << (fd % 8))));
+        consume();
+    }
+
+    timeval receive_timeout{};
+    receive_timeout.tv_usec = 100000;
+    assert(::setsockopt(kernel.Real(fd), SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof(receive_timeout)) == 0);
+    enterOn(8);
+    assert(service.Recv({&result}, {&error}, fd, 0, Output(data, sizeof(data))) == 0);
+    assert(result == 1 && data[0] == payload && !lanywhere::queue.Has(bound.port));
+    enterOn(9);
+    assert(service.RecvFrom({&result}, {&error}, {&address_size}, fd, 0, Output(data, sizeof(data)), Output(address, sizeof(address))) == 0);
+    tcpstream::Endpoint sender{};
+    assert(result == 1 && data[0] == payload && address_size == sizeof(address));
+    assert(tcpstream::ReadAddress(address, sizeof(address), &sender) && sender.ip == 0x0a0d4321 && sender.port == 33333);
+    kernel.before_dispatch = {};
+    // Outside a room a bound socket must still receive physical UDP, respect
+    // MSG_DONTWAIT, and keep one receive deadline across all short waits.
+    lanywhere::room = false;
+    sockaddr_in loopback{};
+    loopback.sin_family = AF_INET;
+    loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    loopback.sin_port = htons(bound.port);
+    assert(::sendto(kernel.Real(fd), &payload, 1, 0, reinterpret_cast<sockaddr*>(&loopback), sizeof(loopback)) == 1);
+    assert(service.Recv({&result}, {&error}, fd, 0, Output(data, sizeof(data))) == 0 && result == 1 && data[0] == payload);
+    const int poll_count = kernel.command_count[6];
+    assert(service.Recv({&result}, {&error}, fd, 0x80, Output(data, sizeof(data))) == 0 && result == -1 && error == 11);
+    assert(kernel.command_count[6] == poll_count);
+    const auto start = std::chrono::steady_clock::now();
+    assert(service.Recv({&result}, {&error}, fd, 0, Output(data, sizeof(data))) == 0 && result == -1 && error == 11);
+    assert(std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(90));
+    lanywhere::room = true;
+    assert(service.Close({&result}, {&error}, fd) == 0 && result == 0);
+    std::cout << "PASS bound UDP waits started before room entry: poll, select, recv and recvfrom" << std::endl;
+}
 int main(){
  tcpstream::Proxy proxy(nullptr,nullptr);tcpstream::selected=&proxy;
  GameNamespace kernel;
  const sm::MitmProcessInfo owner{{333},{0x0100000000011111}};
  auto make=[&](const sm::MitmProcessInfo &id){return std::make_unique<BsdSpyService>(std::make_shared<Service>(Service{&kernel}),id);};
  auto service=make(owner),another=make(owner);
+ testRoomEntryDuringWait(*service, kernel);
  int ret=-1,error=-1;u32 length=0;
  assert(service->Socket({&ret},{&error},AF_INET,SOCK_DGRAM,0)==0&&ret>=0);const int fd=ret;
  const auto peer=tcpstream::MakeAddress({0x0a0d4321,45601});
