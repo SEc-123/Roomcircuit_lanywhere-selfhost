@@ -26,7 +26,8 @@ namespace ams::log
 {
     void LogFormatImpl(const char *fmt, ...);
     void LogHexImpl(const void *data, int size);
-    Result Initialize();
+    u64 LoggingSession();
+    void LogFormatForSession(u64 session, const char *format, ...);
     void Finalize();
 
 #define LogFormat(fmt, ...) ams::log::LogFormatImpl(fmt "\n", ##__VA_ARGS__)

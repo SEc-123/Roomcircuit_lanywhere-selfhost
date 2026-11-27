@@ -292,7 +292,6 @@ namespace ams {
             // usable; a reboot retries after the SD issue has been resolved.
             while (true) os::SleepThread(TimeSpan::FromSeconds(60));
         }
-        R_ABORT_UNLESS(log::Initialize());
         LogFormat("main");
         mitm::lanywhere::InitializeAppointmentSubscriptions();
 

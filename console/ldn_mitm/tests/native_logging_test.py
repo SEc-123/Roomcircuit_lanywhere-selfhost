@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run actual diagnostic logging with failed SD operations and concurrent callers."""
 from pathlib import Path
-import importlib.util,os,shlex,subprocess,tempfile
+import importlib.util,os,re,shlex,subprocess,tempfile
 ROOT=Path(__file__).resolve().parents[3]
 spec=importlib.util.spec_from_file_location('extract',Path(__file__).with_name('discovery_route_test.py'))
 extract=importlib.util.module_from_spec(spec);spec.loader.exec_module(extract)
@@ -13,7 +13,11 @@ accept_source = (ROOT/'console/ldn_mitm/source/ldn_accept_trace.cpp').read_text(
 accept = '\n'.join(line for line in (accept_header + '\n' + accept_source).splitlines()
                   if not line.startswith(('#include', '#pragma once')))
 root_service = (ROOT/'console/ldn_mitm/source/ldnmitm_service.hpp').read_text()
-assert 'LogFormat' not in extract.function(root_service, 'static bool ShouldMitm(')
+query = extract.function(root_service, 'static bool ShouldMitm(')
+assert 'LogFormat' not in query
+sdk_ids = (ROOT/'console/Atmosphere-libs/libstratosphere/include/stratosphere/ncm/ncm_content_meta_id.hpp').read_text()
+application_check = extract.function(sdk_ids, 'inline constexpr bool IsApplicationId(const ProgramId &')
+first_app, last_app = re.findall(r'ApplicationId::(?:Start|End)\s*=\s*\{\s*(0x[0-9a-fA-F]+)', sdk_ids)[:2]
 code=r'''
 #include <algorithm>
 #include <atomic>
@@ -31,6 +35,8 @@ code=r'''
 #include <thread>
 #include <vector>
 using u64=uint64_t;using u8=uint8_t;using u32=uint32_t;using s64=int64_t;
+#define GITDESCVER "test"
+#define MAKERESULT(m,d) (((m)&0x1ff)|((d)<<9))
 #define R_TRY(v) do{auto result=(v);if(result)return result;}while(0)
 #define R_FAILED(v) ((v)!=0)
 #define R_SUCCEEDED(v) ((v)==0)
@@ -46,7 +52,14 @@ namespace ams {
 using Result=int;
 struct TimeSpan {static int FromSeconds(int s){return s;}};
 namespace os {
-using SdkMutex=std::mutex;
+// Rendezvous immediately before a blocking lock, or immediately after try_lock.
+thread_local std::atomic<bool> *observed_lock=nullptr;
+struct SdkMutex {
+ std::mutex mutex;
+ void lock(){if(observed_lock)observed_lock->store(true);mutex.lock();}
+ void unlock(){mutex.unlock();}
+ bool try_lock(){const bool acquired=mutex.try_lock();if(observed_lock)observed_lock->store(true);return acquired;}
+};
 struct SdkConditionVariable {
  std::condition_variable_any cv;
  void TimedWait(SdkMutex &m,int){cv.wait_for(m,std::chrono::milliseconds(5));}
@@ -91,15 +104,31 @@ static const char*LogPath(){return "sdmc:/lanywhere/bsd.log";}
 static bool DebugEnabled(){return true;}
 /* BSD */
 #define constinit
-#define GITDESCVER "test"
 #define LogFormat(fmt,...) ::ams::log::LogFormatImpl(fmt "\n", ##__VA_ARGS__)
 /* ACCEPT TRACE */
+namespace ams::ncm {
+struct ProgramId { u64 value; constexpr operator u64() const {return value;} };
+struct ApplicationId { static constexpr u64 Start=/* FIRST APP */, End=/* LAST APP */; };
+/* APPLICATION CHECK */
+}
+namespace ams::sm {
+struct MitmProcessInfo {struct {u64 value;} process_id; ncm::ProgramId program_id;};
+}
+namespace ams::mitm::ldn {
+struct QueryRoot { /* SHOULD MITM */ };
+}
 int main(){
  for(int failure=1;failure<=6;failure++) {
   exists=false;file.clear();fault=failure;
-  if(failure<=3)assert(SetLogging(1)!=0);else {assert(SetLogging(1)==0);if(failure==5)file.resize(256*1024);ams::log::LogFormatImpl("line");}
+  if(failure==5)file.assign(256*1024,'x');
+  assert(SetLogging(1)!=0);
   u32 enabled=9;GetLogging(&enabled);assert(!enabled&&opened==closed);
  }
+ // Successful enable writes the actual build to the retained log before returning.
+ fault=0;file="old trace\n";assert(SetLogging(1)==0);
+ assert(file.find("old trace\n")==0 && file.find("ldn.logging version=test session=1 enabled=1")!=std::string::npos);
+ const auto first_marker=file;assert(SetLogging(1)==0 && file==first_marker);
+ fault=6;ams::log::LogFormatImpl("write failure");u32 disabled{};GetLogging(&disabled);assert(disabled==0);
  fault=0;file.assign(256*1024,'x');assert(SetLogging(1)==0);
  std::vector<u8> bytes(100,0x5a);
  std::thread a([&]{for(int i=0;i<30;i++)ams::log::LogHexImpl(bytes.data(),bytes.size());});
@@ -115,20 +144,62 @@ int main(){
  ams::log::LdnAcceptInfo info{143,0x01006f8002326000ull,128,4096,48};
  ams::log::RecordLdnAccept("disabled",info);
  assert(SetLogging(1)==0);
+ {
+  const char *stages[]={"ack.done","object.ready","slot.reserved","kernel.accepted","wait.registering","accept.done"};
+  ams::log::RecordLdnAccept("ack.begin",info);
+  for(const auto *stage:stages){
+   std::atomic<bool> attempted{false};
+   std::unique_lock consumer(ams::log::g_lock);
+   std::thread producer([&]{
+    ams::os::observed_lock=&attempted;
+    ams::log::RecordLdnAccept(stage,info);
+   });
+   while(!attempted.load())std::this_thread::yield();
+   consumer.unlock();producer.join();
+  }
+  ams::os::ThreadType finished{};finished.stopped=true;
+  ams::log::DrainLdnAcceptTraceUntilExit(&finished);
+  for(const auto *stage:stages){
+   if(file.find(std::string("stage=")+stage+" ")==std::string::npos)std::fprintf(stderr,"%s",file.c_str());
+   assert(file.find(std::string("stage=")+stage+" ")!=std::string::npos);
+  }
+  assert(file.find("dropped=6")==std::string::npos);
+  puts("PASS six contended RAM writes preserve complete LDN accept trace");
+  file.clear();
+ }
+ // Undrained records from a previous enable period must not follow a fresh marker.
+ ams::log::RecordLdnAccept("stale",info);
+ assert(SetLogging(0)==0 && SetLogging(1)==0);
  fs::block_close=true;
  ams::log::RecordLdnAccept("ack.begin",info);
  std::thread writer([&]{ams::log::DrainLdnAcceptTraceUntilExit(&server);});
  while(!fs::close_entered)std::this_thread::yield();
- assert(file.find("stage=ack.begin")!=std::string::npos && file.find("stage=disabled")==std::string::npos);
+ assert(file.find("stage=ack.begin")!=std::string::npos && file.find("stage=disabled")==std::string::npos && file.find("stage=stale")==std::string::npos);
  for(int i=0;i<72;i++)ams::log::RecordLdnAccept("kernel.accepted",info);
  ams::log::RecordLdnAccept("accept.done",info,0xfeed);
  server.stopped=true;fs::release_close=true;writer.join();
  assert(file.find("stage=accept.done pid=143 title=01006f8002326000 rc=0000feed pointer=128/4096 max_sessions=48")!=std::string::npos);
  assert(file.find("dropped=9")!=std::string::npos);
  puts("PASS accept worker records progress/returned error during stalled SD close; bounded queue retains last stage");
+ // Observers never see a mixed pair when multiple queries precede the next writer turn.
+ file.clear();
+ server.stopped=true;
+ assert(SetLogging(0)==0);
+ auto request=[](u64 pid,u64 title){assert(ams::mitm::ldn::QueryRoot::ShouldMitm({{pid},{title}}));};
+ request(1,0x01006f8002326000ULL);
+ assert(SetLogging(1)==0);
+ request(142,0x010047700d540000ULL);  // Clubhouse Games
+ request(143,0x01006f8002326000ULL);  // Animal Crossing
+ request(144,0x010000000000100dULL);  // Album
+ request(145,0x420000000007e51aULL);  // Overlay loader
+ ams::log::DrainLdnAcceptTraceUntilExit(&server);
+ assert(file.find("ldn.query version=test seq=2 pid=143 title=01006f8002326000 skipped=1")!=std::string::npos);
+ assert(file.find("pid=142")==std::string::npos);
  puts("PASS actual diagnostic logger: SD failure disables logging, handles close, concurrent hex/text and bounded file");
 }
 '''.replace('/* SOURCE */',source).replace('/* BSD */',bsd).replace('/* ACCEPT TRACE */',accept)
+code=code.replace('/* FIRST APP */',first_app).replace('/* LAST APP */',last_app)
+code=code.replace('/* APPLICATION CHECK */',application_check).replace('/* SHOULD MITM */',query)
 with tempfile.TemporaryDirectory(prefix='native-logging-') as tmp:
  cpp=Path(tmp)/'test.cpp';cpp.write_text(code);binary=Path(tmp)/'test'
  subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-pthread',str(cpp),'-o',str(binary)],check=True)

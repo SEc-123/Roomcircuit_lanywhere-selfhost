@@ -6,7 +6,7 @@
 #include "ldn_icommunication.hpp"
 #include "ldn_client_process_monitor.hpp"
 #include "ldnmitm_config.hpp"
-#include "debug.hpp"
+#include "ldn_accept_trace.hpp"
 #include "interfaces/iservice.hpp"
 
 namespace ams::mitm::ldn {
@@ -18,7 +18,10 @@ namespace ams::mitm::ldn {
             LdnMitMService(std::shared_ptr<::Service> &&s, const sm::MitmProcessInfo &c);
             
             // SM waits for this answer while holding its global service registry lock.
-            static bool ShouldMitm(const sm::MitmProcessInfo &) {
+            static bool ShouldMitm(const sm::MitmProcessInfo &client) {
+                if (ncm::IsApplicationId(client.program_id)) {
+                    log::RecordLdnQuery(client.process_id.value, client.program_id.value);
+                }
                 return true;
             }
         // protected:
