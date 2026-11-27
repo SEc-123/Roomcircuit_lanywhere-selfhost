@@ -24,9 +24,16 @@ namespace ams::sf::cmif {
                 std::scoped_lock lk(m_manager->m_entry_owner_lock);
                 AMS_ABORT_UNLESS(entry->owner == this);
                 entry->owner = nullptr;
+                entry->id = InvalidDomainObjectId;
             }
             entry->object.Reset();
             m_entries.pop_front();
+            m_manager->m_entry_manager.FreeEntry(entry);
+        }
+        while (!m_reserved.empty()) {
+            Entry *entry = std::addressof(m_reserved.front());
+            m_reserved.pop_front();
+            entry->id = InvalidDomainObjectId;
             m_manager->m_entry_manager.FreeEntry(entry);
         }
     }
@@ -37,53 +44,90 @@ namespace ams::sf::cmif {
         manager->FreeDomain(this);
     }
 
+    ServerDomainManager::Entry *ServerDomainManager::Domain::FindEntryLocked(DomainObjectId id) {
+        for (Entry &entry : m_entries) {
+            if (entry.id == id) return std::addressof(entry);
+        }
+        for (Entry &entry : m_reserved) {
+            if (entry.id == id) return std::addressof(entry);
+        }
+        return nullptr;
+    }
+
     Result ServerDomainManager::Domain::ReserveIds(DomainObjectId *out_ids, size_t count) {
+        std::scoped_lock lk(m_manager->m_entry_owner_lock);
         for (size_t i = 0; i < count; i++) {
             Entry *entry = m_manager->m_entry_manager.AllocateEntry();
-            R_UNLESS(entry != nullptr, sf::cmif::ResultOutOfDomainEntries());
-            AMS_ABORT_UNLESS(entry->owner == nullptr);
-            out_ids[i] = m_manager->m_entry_manager.GetId(entry);
+            if (!entry) {
+                this->UnreserveIdsLocked(out_ids, i);
+                std::fill_n(out_ids, i, InvalidDomainObjectId);
+                return sf::cmif::ResultOutOfDomainEntries();
+            }
+
+            /* Allocate a new ID within this domain without reusing a mirrored ID. */
+            DomainObjectId id;
+            do {
+                id = DomainObjectId{m_next_id++};
+            } while (id == InvalidDomainObjectId || this->FindEntryLocked(id));
+            entry->id = id;
+            m_reserved.push_back(*entry);
+            out_ids[i] = id;
         }
         R_SUCCEED();
     }
 
     void ServerDomainManager::Domain::ReserveSpecificIds(const DomainObjectId *ids, size_t count) {
-        m_manager->m_entry_manager.AllocateSpecificEntries(ids, count);
+        std::scoped_lock lk(m_manager->m_entry_owner_lock);
+        for (size_t i = 0; i < count; i++) {
+            const DomainObjectId id = ids[i];
+            if (id == InvalidDomainObjectId) continue;
+            AMS_ABORT_UNLESS(this->FindEntryLocked(id) == nullptr);
+
+            Entry *entry = m_manager->m_entry_manager.AllocateEntry();
+            AMS_ABORT_UNLESS(entry != nullptr);
+            entry->id = id;
+            m_reserved.push_back(*entry);
+        }
     }
 
-    void ServerDomainManager::Domain::UnreserveIds(const DomainObjectId *ids, size_t count) {
+    void ServerDomainManager::Domain::UnreserveIdsLocked(const DomainObjectId *ids, size_t count) {
         for (size_t i = 0; i < count; i++) {
-            Entry *entry = m_manager->m_entry_manager.GetEntry(ids[i]);
+            Entry *entry = this->FindEntryLocked(ids[i]);
             AMS_ABORT_UNLESS(entry != nullptr);
             AMS_ABORT_UNLESS(entry->owner == nullptr);
+            m_reserved.erase(m_reserved.iterator_to(*entry));
+            entry->id = InvalidDomainObjectId;
             m_manager->m_entry_manager.FreeEntry(entry);
         }
     }
 
+    void ServerDomainManager::Domain::UnreserveIds(const DomainObjectId *ids, size_t count) {
+        std::scoped_lock lk(m_manager->m_entry_owner_lock);
+        this->UnreserveIdsLocked(ids, count);
+    }
+
     void ServerDomainManager::Domain::RegisterObject(DomainObjectId id, ServiceObjectHolder &&obj) {
-        Entry *entry = m_manager->m_entry_manager.GetEntry(id);
+        std::scoped_lock lk(m_manager->m_entry_owner_lock);
+        Entry *entry = this->FindEntryLocked(id);
         AMS_ABORT_UNLESS(entry != nullptr);
-        {
-            std::scoped_lock lk(m_manager->m_entry_owner_lock);
-            AMS_ABORT_UNLESS(entry->owner == nullptr);
-            entry->owner = this;
-            m_entries.push_back(*entry);
-        }
+        AMS_ABORT_UNLESS(entry->owner == nullptr);
+        m_reserved.erase(m_reserved.iterator_to(*entry));
+        entry->owner = this;
         entry->object = std::move(obj);
+        m_entries.push_back(*entry);
     }
 
     ServiceObjectHolder ServerDomainManager::Domain::UnregisterObject(DomainObjectId id) {
         ServiceObjectHolder obj;
-        Entry *entry = m_manager->m_entry_manager.GetEntry(id);
-        if (entry == nullptr) {
-            return ServiceObjectHolder();
-        }
+        Entry *entry;
         {
             std::scoped_lock lk(m_manager->m_entry_owner_lock);
-            if (entry->owner != this) {
+            entry = this->FindEntryLocked(id);
+            if (!entry || entry->owner != this) {
                 return ServiceObjectHolder();
             }
             entry->owner = nullptr;
+            entry->id = InvalidDomainObjectId;
             obj = std::move(entry->object);
             m_entries.erase(m_entries.iterator_to(*entry));
         }
@@ -92,16 +136,10 @@ namespace ams::sf::cmif {
     }
 
     ServiceObjectHolder ServerDomainManager::Domain::GetObject(DomainObjectId id) {
-        Entry *entry = m_manager->m_entry_manager.GetEntry(id);
-        if (entry == nullptr) {
+        std::scoped_lock lk(m_manager->m_entry_owner_lock);
+        Entry *entry = this->FindEntryLocked(id);
+        if (!entry || entry->owner != this) {
             return ServiceObjectHolder();
-        }
-
-        {
-            std::scoped_lock lk(m_manager->m_entry_owner_lock);
-            if (entry->owner != this) {
-                return ServiceObjectHolder();
-            }
         }
         return entry->object.Clone();
     }
@@ -135,23 +173,9 @@ namespace ams::sf::cmif {
     void ServerDomainManager::EntryManager::FreeEntry(Entry *entry) {
         std::scoped_lock lk(m_lock);
         AMS_ABORT_UNLESS(entry->owner == nullptr);
+        AMS_ABORT_UNLESS(entry->id == InvalidDomainObjectId);
         AMS_ABORT_UNLESS(!entry->object);
         m_free_list.push_front(*entry);
-    }
-
-    void ServerDomainManager::EntryManager::AllocateSpecificEntries(const DomainObjectId *ids, size_t count) {
-        std::scoped_lock lk(m_lock);
-
-        /* Allocate new IDs. */
-        for (size_t i = 0; i < count; i++) {
-            const auto id = ids[i];
-            Entry *entry = this->GetEntry(id);
-            if (id != InvalidDomainObjectId) {
-                AMS_ABORT_UNLESS(entry != nullptr);
-                AMS_ABORT_UNLESS(entry->owner == nullptr);
-                m_free_list.erase(m_free_list.iterator_to(*entry));
-            }
-        }
     }
 
 }

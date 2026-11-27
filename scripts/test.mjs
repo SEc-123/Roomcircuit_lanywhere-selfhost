@@ -86,6 +86,7 @@ try {
     await suite('Node selection sysmodule diagnostic I/O', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/selection_trace_test.py']);
     await suite('Native node probe with hostile replies and interrupted sockets', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/lanplay_probe_test.py']);
     await suite('HIPC accept cleanup and next-client recovery', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/hipc_accept_lifetime_test.py']);
+    await suite('CMIF mirrored object namespaces and reservation recovery', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/cmif_domain_namespace_test.py']);
     await suite('LDN accept trace with a stalled SD writer', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/native_logging_test.py']);
     await suite('Pinned thread creation resource boundaries', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/thread_resource_boundary_test.py']);
     await suite('Startup worker resource ordering', process.env.PYTHON || 'python3', ['-B', 'console/ldn_mitm/tests/startup_node_threads_test.py']);

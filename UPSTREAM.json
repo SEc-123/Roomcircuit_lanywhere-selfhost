@@ -63,9 +63,11 @@
         "libstratosphere/include/stratosphere/sf/hipc/sf_hipc_server_manager.hpp",
         "libstratosphere/include/stratosphere/sf/hipc/sf_hipc_server_session_manager.hpp",
         "libstratosphere/source/sf/hipc/sf_hipc_server_manager.cpp",
-        "libstratosphere/source/sf/hipc/sf_hipc_server_session_manager.cpp"
+        "libstratosphere/source/sf/hipc/sf_hipc_server_session_manager.cpp",
+        "libstratosphere/include/stratosphere/sf/cmif/sf_cmif_domain_manager.hpp",
+        "libstratosphere/source/sf/cmif/sf_cmif_domain_manager.cpp"
       ],
-      "reason": "Return recoverable thread resource errors. Preserve session-slot lifetime on failed accepts, reject clients that exceed listener capacity, and expose optional accept-stage diagnostics."
+      "reason": "Return recoverable thread resource errors. Preserve session-slot lifetime on failed accepts, reject clients that exceed listener capacity, and expose optional accept-stage diagnostics. Scope mirrored CMIF object IDs to each domain and roll back incomplete reservations."
     },
     {
       "component": "console/libultrahand",

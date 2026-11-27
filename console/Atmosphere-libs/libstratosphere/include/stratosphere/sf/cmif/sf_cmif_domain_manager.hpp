@@ -35,9 +35,10 @@ namespace ams::sf::cmif {
                 util::IntrusiveListNode free_list_node;
                 util::IntrusiveListNode domain_list_node;
                 Domain *owner;
+                DomainObjectId id;
                 ServiceObjectHolder object;
 
-                explicit Entry() : owner(nullptr) { /* ... */ }
+                explicit Entry() : owner(nullptr), id(InvalidDomainObjectId) { /* ... */ }
             };
 
             class Domain final : public DomainServiceObject, private sf::impl::ServiceObjectImplBase2 {
@@ -48,6 +49,12 @@ namespace ams::sf::cmif {
                 private:
                     ServerDomainManager *m_manager;
                     EntryList m_entries;
+                    EntryList m_reserved;
+                    u32 m_next_id = 1;
+
+                    /* Callers hold m_entry_owner_lock. IDs are local to this domain. */
+                    Entry *FindEntryLocked(DomainObjectId id);
+                    void UnreserveIdsLocked(const DomainObjectId *ids, size_t count);
                 public:
                     explicit Domain(ServerDomainManager *m) : m_manager(m) { /* ... */ }
                     ~Domain();
@@ -94,24 +101,6 @@ namespace ams::sf::cmif {
                     Entry *AllocateEntry();
                     void   FreeEntry(Entry *);
 
-                    void AllocateSpecificEntries(const DomainObjectId *ids, size_t count);
-
-                    inline DomainObjectId GetId(Entry *e) {
-                        const size_t index = e - m_entries;
-                        AMS_ABORT_UNLESS(index < m_num_entries);
-                        return DomainObjectId{ u32(index + 1) };
-                    }
-
-                    inline Entry *GetEntry(DomainObjectId id) {
-                        if (id == InvalidDomainObjectId) {
-                            return nullptr;
-                        }
-                        const size_t index = id.value - 1;
-                        if (!(index < m_num_entries)) {
-                            return nullptr;
-                        }
-                        return m_entries + index;
-                    }
             };
         private:
             os::SdkMutex m_entry_owner_lock;
