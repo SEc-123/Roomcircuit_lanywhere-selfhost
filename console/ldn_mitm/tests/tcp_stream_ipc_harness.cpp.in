@@ -79,6 +79,7 @@ static u32 serviceDispatchImpl(Service *service,u32 command,const void *in,u32 i
 namespace ams {
 struct TimeSpan{int64_t us;TimeSpan ToTimeSpan()const{return *this;}static TimeSpan FromMilliSeconds(int64_t n){return {n*1000};}int64_t GetMicroSeconds()const{return us;}int64_t GetMilliSeconds()const{return us/1000;}};
 namespace os {using SdkMutex=std::mutex;struct Tick{std::chrono::steady_clock::time_point at;};static Tick GetSystemTick(){return {std::chrono::steady_clock::now()};}static TimeSpan operator-(Tick a,Tick b){return {std::chrono::duration_cast<std::chrono::microseconds>(a.at-b.at).count()};}static void SleepThread(TimeSpan t){std::this_thread::sleep_for(std::chrono::microseconds(t.us));}}
+namespace log {inline void RecordBsdQuery(u64, u64) {}}
 namespace sm {struct Number{u64 value;};struct MitmProcessInfo{Number process_id,program_id;};}
 namespace ncm {using ProgramId=sm::Number;struct ApplicationId{u64 value;static const ApplicationId Start,End;};constexpr bool operator<=(ApplicationId a,ProgramId p){return a.value<=p.value;}constexpr bool operator<=(ProgramId p,ApplicationId a){return p.value<=a.value;}
 /* SDK_PREDICATE */

@@ -14,6 +14,8 @@ accept = '\n'.join(line for line in (accept_header + '\n' + accept_source).split
                   if not line.startswith(('#include', '#pragma once')))
 root_service = (ROOT/'console/ldn_mitm/source/ldnmitm_service.hpp').read_text()
 query = extract.function(root_service, 'static bool ShouldMitm(')
+bsd_service = (ROOT/'console/ldn_mitm/source/bsd_spy.hpp').read_text()
+bsd_query = extract.function(bsd_service, 'static bool ShouldMitm(')
 assert 'LogFormat' not in query
 sdk_ids = (ROOT/'console/Atmosphere-libs/libstratosphere/include/stratosphere/ncm/ncm_content_meta_id.hpp').read_text()
 application_check = extract.function(sdk_ids, 'inline constexpr bool IsApplicationId(const ProgramId &')
@@ -32,6 +34,7 @@ code=r'''
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 using u64=uint64_t;using u8=uint8_t;using u32=uint32_t;using s64=int64_t;
@@ -67,8 +70,12 @@ struct SdkConditionVariable {
 };
 struct Mutex:std::recursive_mutex{Mutex(bool){}};
 struct ThreadType{std::atomic<bool> stopped{false};}; bool TryWaitThread(ThreadType *t){return t->stopped.load();} ThreadType*GetCurrentThread(){static ThreadType thread;return &thread;}
-unsigned long GetThreadId(const ThreadType*){return 7;}
-struct Tick{Tick ToTimeSpan(){return{};}s64 GetMilliSeconds()const{return 1;}};
+thread_local unsigned long test_tid=7;
+unsigned long GetThreadId(const ThreadType*){return test_tid;}
+std::atomic<s64> test_ms{1}, writer_observed_ms{-1};
+struct Tick{Tick ToTimeSpan(){return{};}s64 GetMilliSeconds()const{
+ const auto n=test_ms.load();if(test_tid==19)writer_observed_ms.store(n);return n;
+}};
 Tick GetSystemTick(){return{};}
 }
 namespace util {
@@ -83,13 +90,18 @@ Result CreateDirectory(const char*){return 0;}
 Result CreateFile(const char*,s64){exists=true;return fault==2?2:0;}
 Result OpenFile(FileHandle*out,const char*,int){if(fault==3)return 3;*out=1;opened++;return 0;}
 std::atomic<bool> block_close{false},close_entered{false},release_close{false};
+std::atomic<unsigned> writer_ready{0},writer_alive{0};
 void CloseFile(FileHandle){
  ++closed;
- if(block_close){close_entered=true;while(!release_close)std::this_thread::yield();}
+ if(block_close && file.find("stage=ack.begin")!=std::string::npos){close_entered=true;while(!release_close)std::this_thread::yield();}
 }
 Result GetFileSize(s64*out,FileHandle){*out=file.size();return fault==4?4:0;}
 Result SetFileSize(FileHandle,s64 n){if(fault==5)return 5;file.resize(n);return 0;}
-Result WriteFile(FileHandle,s64 offset,const void*data,size_t n,int){if(fault==6)return 6;assert(offset>=0);file.resize(offset+n);std::memcpy(&file[offset],data,n);return 0;}
+Result WriteFile(FileHandle,s64 offset,const void*data,size_t n,int){if(fault==6)return 6;assert(offset>=0);file.resize(offset+n);std::memcpy(&file[offset],data,n);
+ std::string_view line(static_cast<const char*>(data),n);
+ if(line.find("ldn.writer.ready ")!=line.npos)++writer_ready;
+ if(line.find("ldn.writer.alive ")!=line.npos)++writer_alive;
+ return 0;}
 }
 namespace log {Result Initialize();void LogFormatImpl(const char*,...);}
 }
@@ -116,6 +128,9 @@ struct MitmProcessInfo {struct {u64 value;} process_id; ncm::ProgramId program_i
 }
 namespace ams::mitm::ldn {
 struct QueryRoot { /* SHOULD MITM */ };
+}
+namespace ams::mitm::bsd {
+struct QueryRoot { /* BSD SHOULD MITM */ };
 }
 int main(){
  for(int failure=1;failure<=6;failure++) {
@@ -192,14 +207,49 @@ int main(){
  request(143,0x01006f8002326000ULL);  // Animal Crossing
  request(144,0x010000000000100dULL);  // Album
  request(145,0x420000000007e51aULL);  // Overlay loader
+ assert(ams::mitm::bsd::QueryRoot::ShouldMitm({{146},{0x010047700d540000ULL}}));
+ assert(!ams::mitm::bsd::QueryRoot::ShouldMitm({{144},{0x010000000000100dULL}}));
+ assert(!ams::mitm::bsd::QueryRoot::ShouldMitm({{145},{0x420000000007e51aULL}}));
+ auto bsd_info = info; bsd_info.bsd_service = true;
+ ams::log::RecordLdnAccept("accept.done",bsd_info,0);
  ams::log::DrainLdnAcceptTraceUntilExit(&server);
+ assert(file.find("bsd.query version=test seq=1 pid=146 title=010047700d540000 skipped=0")!=std::string::npos);
+ assert(file.find("bsd.accept version=test")!=std::string::npos);
  assert(file.find("ldn.query version=test seq=2 pid=143 title=01006f8002326000 skipped=1")!=std::string::npos);
  assert(file.find("pid=142")==std::string::npos);
+ {
+  // No game, SM query, accept, or explicit reconnect during this test.
+  file.clear(); assert(SetLogging(0)==0);
+  const unsigned ready=fs::writer_ready,alive=fs::writer_alive;
+  fs::block_close=false;
+  ams::os::ThreadType idle{};
+  std::thread idle_writer([&]{ams::os::test_tid=19;ams::log::DrainLdnAcceptTraceUntilExit(&idle);});
+  assert(SetLogging(1)==0);
+  const auto epoch=ams::log::LoggingSession();
+  const auto wait_until=[](auto test){
+   const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(1);
+   while(!test() && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
+   assert(test());
+  };
+  wait_until([&]{return fs::writer_ready.load()==ready+1;});
+  ams::os::test_ms=2000;wait_until([&]{return ams::os::writer_observed_ms.load()==2000;});
+  assert(fs::writer_alive.load()==alive);
+  ams::os::test_ms=2001;wait_until([&]{return fs::writer_alive.load()==alive+1;});
+  ams::os::test_ms=2010;wait_until([&]{return ams::os::writer_observed_ms.load()==2010;});
+  assert(fs::writer_alive.load()==alive+1);
+  assert(SetLogging(0)==0);ams::os::test_ms=9000;assert(SetLogging(1)==0);
+  wait_until([&]{return fs::writer_ready.load()==ready+2;});
+  idle.stopped=true;idle_writer.join();
+  const std::string marker="ldn.writer.ready version=test session="+std::to_string(epoch);
+  assert(file.find("t: 19] "+marker)!=std::string::npos);
+  assert(fs::writer_alive.load()==alive+1);
+  puts("PASS independent writer confirms enabled epoch and reports at most once per two seconds without a game request");
+ }
  puts("PASS actual diagnostic logger: SD failure disables logging, handles close, concurrent hex/text and bounded file");
 }
 '''.replace('/* SOURCE */',source).replace('/* BSD */',bsd).replace('/* ACCEPT TRACE */',accept)
 code=code.replace('/* FIRST APP */',first_app).replace('/* LAST APP */',last_app)
-code=code.replace('/* APPLICATION CHECK */',application_check).replace('/* SHOULD MITM */',query)
+code=code.replace('/* APPLICATION CHECK */',application_check).replace('/* SHOULD MITM */',query).replace('/* BSD SHOULD MITM */',bsd_query)
 with tempfile.TemporaryDirectory(prefix='native-logging-') as tmp:
  cpp=Path(tmp)/'test.cpp';cpp.write_text(code);binary=Path(tmp)/'test'
  subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-pthread',str(cpp),'-o',str(binary)],check=True)

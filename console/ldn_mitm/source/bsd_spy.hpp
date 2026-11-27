@@ -12,6 +12,7 @@
 #pragma once
 #include <stratosphere.hpp>
 #include "tcp_stream_hooks.hpp"
+#include "ldn_accept_trace.hpp"
 
 #define AMS_IBSD_SPY(C, H)                                                                                                                                  \
     AMS_SF_METHOD_INFO(C, H,  2, Result, Socket,  (ams::sf::Out<s32> out_ret, ams::sf::Out<s32> out_errno, s32 domain, s32 type, s32 protocol),           \
@@ -72,7 +73,9 @@ namespace ams::mitm::bsd {
 
             // Solo los juegos (aplicaciones): ni el sistema ni este mismo sysmodule.
             static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
-                return ncm::IsApplicationId(client_info.program_id);
+                const bool application = ncm::IsApplicationId(client_info.program_id);
+                if (application) log::RecordBsdQuery(client_info.process_id.value, client_info.program_id.value);
+                return application;
             }
 
             Result Socket(sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 domain, s32 type, s32 protocol);

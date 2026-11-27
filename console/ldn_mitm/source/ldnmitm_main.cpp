@@ -178,17 +178,19 @@ namespace ams {
                 std::shared_ptr<::Service> fsrv;
                 sm::MitmProcessInfo client_info;
                 log::LdnAcceptInfo info{.pointer_capacity = LdnMitmManagerOptions::PointerBufferSize, .session_limit = MaxSessions};
-                if (port_index == PortIndex_Ldn) log::RecordLdnAccept("ack.begin", info);
+                info.bsd_service = port_index == PortIndex_Bsd;
+                log::RecordLdnAccept("ack.begin", info);
                 server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
-                if (port_index == PortIndex_Bsd) {
-                    const Result rc = this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::bsd::IBsdSpy, mitm::bsd::BsdSpyService>(decltype(fsrv)(fsrv), client_info), fsrv);
-                    return this->RecoverAcceptFailure(server, rc);
-                }
-
                 info.pid = client_info.process_id.value;
                 info.title = client_info.program_id.value;
                 info.forward_pointer_size = fsrv->pointer_buffer_size;
                 log::RecordLdnAccept("ack.done", info);
+                if (port_index == PortIndex_Bsd) {
+                    const Result rc = this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::bsd::IBsdSpy, mitm::bsd::BsdSpyService>(decltype(fsrv)(fsrv), client_info), fsrv);
+                    log::RecordLdnAccept("accept.done", info, rc.GetValue());
+                    return this->RecoverAcceptFailure(server, rc);
+                }
+
                 auto object = sf::CreateSharedObjectEmplaced<mitm::ldn::ILdnMitMService, mitm::ldn::LdnMitMService>(decltype(fsrv)(fsrv), client_info);
                 log::RecordLdnAccept("object.ready", info);
                 g_traced_accept = &info;

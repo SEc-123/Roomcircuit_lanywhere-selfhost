@@ -12,20 +12,32 @@ namespace ams::log {
             std::atomic<u64> sequence{}, session{}, pid{}, title{};
         };
         static_assert(std::atomic<u64>::is_always_lock_free);
-        constinit QuerySnapshot g_query;
+        constinit QuerySnapshot g_ldn_query, g_bsd_query;
 
-        void DrainLdnQuery(u64 &seen) {
-            const u64 seq = g_query.sequence.load();
+        void DrainQuery(const char *service, const QuerySnapshot &query, u64 &seen) {
+            const u64 seq = query.sequence.load();
             if (seq == seen || (seq & 1u)) return;
-            const u64 session = g_query.session.load();
-            const u64 pid = g_query.pid.load();
-            const u64 title = g_query.title.load();
-            if (seq != g_query.sequence.load()) return;  // Retry on the next drain iteration.
+            const u64 session = query.session.load();
+            const u64 pid = query.pid.load();
+            const u64 title = query.title.load();
+            if (seq != query.sequence.load()) return;  // Retry on the next drain iteration.
             const u64 skipped = (seq - seen) / 2 - 1;
             seen = seq;
-            LogFormatForSession(session, "ldn.query version=%s seq=%" PRIu64 " pid=%" PRIu64
+            LogFormatForSession(session, "%s.query version=%s seq=%" PRIu64 " pid=%" PRIu64
                                 " title=%016" PRIx64 " skipped=%" PRIu64 "\n",
-                                GITDESCVER, seq / 2, pid, title, skipped);
+                                service, GITDESCVER, seq / 2, pid, title, skipped);
+        }
+
+        void RecordQuery(QuerySnapshot &query, u64 pid, u64 title) {
+            const u64 session = LoggingSession();
+            if (!session) return;
+            // Atmosphere runs all MITM queries on one thread. Odd marks a write in progress.
+            const u64 seq = query.sequence.load();
+            query.sequence.store(seq + 1);
+            query.session.store(session);
+            query.pid.store(pid);
+            query.title.store(title);
+            query.sequence.store(seq + 2);
         }
 
         struct Record {
@@ -45,17 +57,8 @@ namespace ams::log {
         u64 g_queue_session{};
     }
 
-    void RecordLdnQuery(u64 pid, u64 title) {
-        const u64 session = LoggingSession();
-        if (!session) return;
-        // Atmosphere runs all MITM queries on one thread. Odd marks a write in progress.
-        const u64 seq = g_query.sequence.load();
-        g_query.sequence.store(seq + 1);
-        g_query.session.store(session);
-        g_query.pid.store(pid);
-        g_query.title.store(title);
-        g_query.sequence.store(seq + 2);
-    }
+    void RecordLdnQuery(u64 pid, u64 title) { RecordQuery(g_ldn_query, pid, title); }
+    void RecordBsdQuery(u64 pid, u64 title) { RecordQuery(g_bsd_query, pid, title); }
 
     void RecordLdnAccept(const char *stage, const LdnAcceptInfo &info, u32 result) {
         const u64 session = LoggingSession();
@@ -86,9 +89,29 @@ namespace ams::log {
     }
 
     void DrainLdnAcceptTraceUntilExit(os::ThreadType *service_thread) {
-        u64 seen_query = 0;
+        constexpr s64 HeartbeatIntervalMs = 2000;
+        u64 seen_query = 0, seen_bsd_query = 0, writer_session = 0;
+        s64 last_report_ms = 0;
         for (;;) {
-            DrainLdnQuery(seen_query);
+            const u64 session = LoggingSession();
+            if (session && session != writer_session) {
+                writer_session = session;
+                last_report_ms = os::GetSystemTick().ToTimeSpan().GetMilliSeconds();
+                LogFormatForSession(session, "ldn.writer.ready version=%s session=%" PRIu64 "\n", GITDESCVER, session);
+            }
+            DrainQuery("ldn", g_ldn_query, seen_query);
+            DrainQuery("bsd", g_bsd_query, seen_bsd_query);
+            if (session) {
+                const s64 now = os::GetSystemTick().ToTimeSpan().GetMilliSeconds();
+                if (now - last_report_ms >= HeartbeatIntervalMs) {
+                    last_report_ms = now;
+                    LogFormatForSession(session, "ldn.writer.alive version=%s session=%" PRIu64
+                                        " ldn_drained_seq=%" PRIu64 " bsd_drained_seq=%" PRIu64 "\n",
+                                        GITDESCVER, session,
+                                        g_ldn_query.session.load() == session ? seen_query / 2 : 0,
+                                        g_bsd_query.session.load() == session ? seen_bsd_query / 2 : 0);
+                }
+            }
             const bool stopped = os::TryWaitThread(service_thread);
             Record entry{};
             u32 dropped{};
@@ -106,9 +129,9 @@ namespace ams::log {
                 g_dropped = 0;
             }
             // Only this consumer writes these records to SD. A hard power-off can lose queued stages.
-            LogFormatForSession(entry.session, "ldn.accept version=%s at=%" PRId64 " tid=%" PRIu64 " stage=%s pid=%" PRIu64
+            LogFormatForSession(entry.session, "%s.accept version=%s at=%" PRId64 " tid=%" PRIu64 " stage=%s pid=%" PRIu64
                       " title=%016" PRIx64 " rc=%08x pointer=%u/%u max_sessions=%u dropped=%u\n",
-                      GITDESCVER, entry.milliseconds, entry.thread, entry.stage, entry.info.pid,
+                      entry.info.bsd_service ? "bsd" : "ldn", GITDESCVER, entry.milliseconds, entry.thread, entry.stage, entry.info.pid,
                       entry.info.title, entry.result, entry.info.forward_pointer_size,
                       entry.info.pointer_capacity, entry.info.session_limit, dropped);
         }

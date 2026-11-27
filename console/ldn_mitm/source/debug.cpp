@@ -59,8 +59,9 @@ namespace ams::log {
             const u64 next = g_last_session == UINT64_MAX ? 1 : g_last_session + 1;
             char line[144];
             const int n = util::TSNPrintf(line, sizeof(line),
-                "[ts: %" PRId64 "ms] ldn.logging version=%s session=%" PRIu64 " enabled=1\n",
-                static_cast<s64>(os::GetSystemTick().ToTimeSpan().GetMilliSeconds()), GITDESCVER, next);
+                "[ts: %" PRId64 "ms t: %" PRIu64 "] ldn.logging version=%s session=%" PRIu64 " enabled=1\n",
+                static_cast<s64>(os::GetSystemTick().ToTimeSpan().GetMilliSeconds()),
+                static_cast<u64>(os::GetThreadId(os::GetCurrentThread())), GITDESCVER, next);
             if (n <= 0 || static_cast<size_t>(n) >= sizeof(line)) return MAKERESULT(0xCB, 32);
             R_TRY(AppendLocked(line, static_cast<size_t>(n)));
             g_last_session = next;
