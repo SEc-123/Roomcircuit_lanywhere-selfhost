@@ -63,6 +63,7 @@ namespace ams::mitm::ldn {
             Result CloseStation();
             Result Disconnect();
             Result SetAdvertiseData(sf::InAutoSelectBuffer data);
+            Result SetProtocol(u32 protocol);
             Result AttachStateChangeEvent(sf::Out<sf::CopyHandle> handle);
             Result Scan(sf::Out<u32> count, sf::OutAutoSelectArray<NetworkInfo> buffer, u16 channel, ScanFilter filter);
             Result Connect(ConnectNetworkData dat, const NetworkInfo &data);

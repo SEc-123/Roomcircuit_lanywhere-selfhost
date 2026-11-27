@@ -214,6 +214,13 @@ namespace ams::mitm::ldn {
         return ResultSuccess();
     }
 
+    Result ICommunicationService::SetProtocol(u32 protocol) {
+        // The game selects a radio protocol during setup. Acknowledge the request
+        // while keeping the existing virtual LDN transport.
+        LogFormat("ICommunicationService::SetProtocol: %u", protocol);
+        return ResultSuccess();
+    }
+
     Result ICommunicationService::ScanPrivate() {
         return UnsupportedLdnOperation("ScanPrivate");
     }
