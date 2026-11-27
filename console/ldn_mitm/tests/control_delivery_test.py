@@ -93,7 +93,9 @@ int main(){
    lanywhere::Reset(direct);const auto info=Info(42,8);
    LANDiscovery idle,visitor;Scanner(idle,99);idle.roomScanActive=false;Visitor(visitor,info);
    lanywhere::Queue(0,lanywhere::LdnMsg::Sync,&info,sizeof(info));
-   if(idle_first)idle.pollRoom();visitor.pollRoom();if(!idle_first)idle.pollRoom();
+   if(idle_first) { idle.pollRoom(); }
+   visitor.pollRoom();
+   if(!idle_first) { idle.pollRoom(); }
    assert(visitor.state==CommState::StationConnected&&!lanywhere::Pending());cases++;
   }
   lanywhere::Reset(direct);
