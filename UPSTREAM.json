@@ -3,7 +3,7 @@
   "repository": "https://github.com/augustocco/lanywhere",
   "commit": "7f2bb47bacc972f9ae11ae9a48e35991d09a9837",
   "license": "GPL-2.0-only",
-  "derived_version": "0.9.10",
+  "derived_version": "0.9.11",
   "submodules": {
     "console/Atmosphere-libs": {
       "repository": "https://github.com/Atmosphere-NX/Atmosphere-libs.git",
@@ -59,9 +59,13 @@
     {
       "component": "console/Atmosphere-libs",
       "files": [
-        "libstratosphere/source/os/impl/os_thread_manager_impl.os.horizon.cpp"
+        "libstratosphere/source/os/impl/os_thread_manager_impl.os.horizon.cpp",
+        "libstratosphere/include/stratosphere/sf/hipc/sf_hipc_server_manager.hpp",
+        "libstratosphere/include/stratosphere/sf/hipc/sf_hipc_server_session_manager.hpp",
+        "libstratosphere/source/sf/hipc/sf_hipc_server_manager.cpp",
+        "libstratosphere/source/sf/hipc/sf_hipc_server_session_manager.cpp"
       ],
-      "reason": "Return thread, memory and handle resource-limit failures to callers while preserving cleanup, retry and programmer-error behavior."
+      "reason": "Return recoverable thread resource errors. Preserve session-slot lifetime on failed accepts, reject clients that exceed listener capacity, and expose optional accept-stage diagnostics."
     },
     {
       "component": "console/libultrahand",

@@ -28,8 +28,7 @@ namespace ams::mitm::ldn {
 
     LdnMitMService::LdnMitMService(std::shared_ptr<::Service> &&s, const sm::MitmProcessInfo &c) : sf::MitmServiceImplBase(std::forward<std::shared_ptr<::Service>>(s), c)
     {
-        LogFormat("ldn service.created pid=%" PRIu64 " title=%016" PRIx64,
-                  c.process_id.value, c.program_id.value);
+        // The accept worker must not perform SD I/O during the service handoff.
     }
 
     Result LdnMitMService::CreateUserLocalCommunicationService(sf::Out<sf::SharedPointer<ICommunicationInterface>> out) {

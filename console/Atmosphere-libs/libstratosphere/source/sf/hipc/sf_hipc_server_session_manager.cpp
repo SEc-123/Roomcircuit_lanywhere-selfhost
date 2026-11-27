@@ -137,18 +137,21 @@ namespace ams::sf::hipc {
     Result ServerSessionManager::RegisterMitmSessionImpl(ServerSession *session_memory, os::NativeHandle mitm_session_handle, cmif::ServiceObjectHolder &&obj, std::shared_ptr<::Service> &&fsrv) {
         AMS_ABORT_UNLESS(ServerManagerBase::CanAnyManageMitmServers());
 
+        /* Check the negotiated size while the slot is still unconstructed. */
+        const auto pointer_buffer = this->GetSessionPointerBuffer(session_memory);
+        AMS_ABORT_UNLESS(fsrv != nullptr);
+        R_UNLESS(pointer_buffer.GetSize() >= fsrv->pointer_buffer_size, sf::hipc::ResultPointerBufferTooSmall());
+        const auto negotiated_size = fsrv->pointer_buffer_size;
+
         /* Create session object. */
         std::construct_at(session_memory, mitm_session_handle, std::forward<cmif::ServiceObjectHolder>(obj), std::forward<std::shared_ptr<::Service>>(fsrv));
 
         /* Assign session resources. */
-        session_memory->m_pointer_buffer = this->GetSessionPointerBuffer(session_memory);
+        session_memory->m_pointer_buffer = cmif::PointerAndSize(pointer_buffer.GetAddress(), negotiated_size);
         session_memory->m_saved_message  = this->GetSessionSavedMessageBuffer(session_memory);
 
-        /* Validate session pointer buffer. */
-        AMS_ABORT_UNLESS(session_memory->m_pointer_buffer.GetSize() >= util::GetReference(session_memory->m_forward_service)->pointer_buffer_size);
-        session_memory->m_pointer_buffer = cmif::PointerAndSize(session_memory->m_pointer_buffer.GetAddress(), util::GetReference(session_memory->m_forward_service)->pointer_buffer_size);
-
         /* Register to wait list. */
+        this->OnMitmAcceptStage(MitmAcceptStage::RegisteringWait);
         this->RegisterServerSessionToWait(session_memory);
         R_SUCCEED();
     }
@@ -158,7 +161,9 @@ namespace ams::sf::hipc {
 
         /* Create session handle. */
         os::NativeHandle mitm_session_handle;
+        this->OnMitmAcceptStage(MitmAcceptStage::SlotReserved);
         R_TRY(svc::AcceptSession(std::addressof(mitm_session_handle), mitm_port_handle));
+        this->OnMitmAcceptStage(MitmAcceptStage::KernelAccepted);
 
         auto session_guard = SCOPE_GUARD { os::CloseNativeHandle(mitm_session_handle); };
 

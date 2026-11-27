@@ -101,13 +101,18 @@ namespace ams::sf::hipc {
     };
 
     class ServerSessionManager {
+        public:
+            enum class MitmAcceptStage { SlotReserved, KernelAccepted, RegisteringWait };
+        protected:
+            virtual void OnMitmAcceptStage(MitmAcceptStage stage) { AMS_UNUSED(stage); }
         private:
             template<typename Constructor>
             Result CreateSessionImpl(ServerSession **out, const Constructor &ctor) {
                 /* Allocate session. */
                 ServerSession *session_memory = this->AllocateSession();
                 R_UNLESS(session_memory != nullptr, sf::hipc::ResultOutOfSessionMemory());
-                ON_RESULT_FAILURE { this->DestroySession(session_memory); };
+                /* ctor transfers a constructed session to the manager only on success. */
+                ON_RESULT_FAILURE { this->FreeSession(session_memory); };
 
                 /* Register session. */
                 R_TRY(ctor(session_memory));

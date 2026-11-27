@@ -8,9 +8,19 @@ extract=importlib.util.module_from_spec(spec);spec.loader.exec_module(extract)
 bsd=extract.function((ROOT/'console/ldn_mitm/source/bsd_spy.cpp').read_text(),'void WriteLine(')
 source=(ROOT/'console/ldn_mitm/source/debug.cpp').read_text()
 source='\n'.join(line for line in source.splitlines() if not line.startswith('#include'))
+accept_header = (ROOT/'console/ldn_mitm/source/ldn_accept_trace.hpp').read_text()
+accept_source = (ROOT/'console/ldn_mitm/source/ldn_accept_trace.cpp').read_text()
+accept = '\n'.join(line for line in (accept_header + '\n' + accept_source).splitlines()
+                  if not line.startswith(('#include', '#pragma once')))
+root_service = (ROOT/'console/ldn_mitm/source/ldnmitm_service.hpp').read_text()
+assert 'LogFormat' not in extract.function(root_service, 'static bool ShouldMitm(')
 code=r'''
 #include <algorithm>
 #include <atomic>
+#include <array>
+#include <cinttypes>
+#include <condition_variable>
+#include <chrono>
 #include <cassert>
 #include <cstdarg>
 #include <cstdio>
@@ -20,7 +30,7 @@ code=r'''
 #include <string>
 #include <thread>
 #include <vector>
-using u8=uint8_t;using u32=uint32_t;using s64=int64_t;
+using u64=uint64_t;using u8=uint8_t;using u32=uint32_t;using s64=int64_t;
 #define R_TRY(v) do{auto result=(v);if(result)return result;}while(0)
 #define R_FAILED(v) ((v)!=0)
 #define R_SUCCEEDED(v) ((v)==0)
@@ -34,11 +44,18 @@ void*armGetTls(){static thread_local u8 tls[0x100];return tls;}
 static unsigned opened=0,closed=0;static int fault=0;static bool exists=false;static std::string file;
 namespace ams {
 using Result=int;
+struct TimeSpan {static int FromSeconds(int s){return s;}};
 namespace os {
+using SdkMutex=std::mutex;
+struct SdkConditionVariable {
+ std::condition_variable_any cv;
+ void TimedWait(SdkMutex &m,int){cv.wait_for(m,std::chrono::milliseconds(5));}
+ void Signal(){cv.notify_one();}
+};
 struct Mutex:std::recursive_mutex{Mutex(bool){}};
-struct ThreadType{};ThreadType*GetCurrentThread(){static ThreadType thread;return &thread;}
+struct ThreadType{std::atomic<bool> stopped{false};}; bool TryWaitThread(ThreadType *t){return t->stopped.load();} ThreadType*GetCurrentThread(){static ThreadType thread;return &thread;}
 unsigned long GetThreadId(const ThreadType*){return 7;}
-struct Tick{Tick ToTimeSpan(){return{};}unsigned long GetMilliSeconds()const{return 1;}};
+struct Tick{Tick ToTimeSpan(){return{};}s64 GetMilliSeconds()const{return 1;}};
 Tick GetSystemTick(){return{};}
 }
 namespace util {
@@ -52,7 +69,11 @@ Result HasFile(bool*out,const char*){*out=exists;return fault==1?1:0;}
 Result CreateDirectory(const char*){return 0;}
 Result CreateFile(const char*,s64){exists=true;return fault==2?2:0;}
 Result OpenFile(FileHandle*out,const char*,int){if(fault==3)return 3;*out=1;opened++;return 0;}
-void CloseFile(FileHandle){closed++;}
+std::atomic<bool> block_close{false},close_entered{false},release_close{false};
+void CloseFile(FileHandle){
+ ++closed;
+ if(block_close){close_entered=true;while(!release_close)std::this_thread::yield();}
+}
 Result GetFileSize(s64*out,FileHandle){*out=file.size();return fault==4?4:0;}
 Result SetFileSize(FileHandle,s64 n){if(fault==5)return 5;file.resize(n);return 0;}
 Result WriteFile(FileHandle,s64 offset,const void*data,size_t n,int){if(fault==6)return 6;assert(offset>=0);file.resize(offset+n);std::memcpy(&file[offset],data,n);return 0;}
@@ -69,6 +90,10 @@ const char *rc_storage_path_gen(unsigned gen,const char*oldPath,const char*v1,co
 static const char*LogPath(){return "sdmc:/lanywhere/bsd.log";}
 static bool DebugEnabled(){return true;}
 /* BSD */
+#define constinit
+#define GITDESCVER "test"
+#define LogFormat(fmt,...) ::ams::log::LogFormatImpl(fmt "\n", ##__VA_ARGS__)
+/* ACCEPT TRACE */
 int main(){
  for(int failure=1;failure<=6;failure++) {
   exists=false;file.clear();fault=failure;
@@ -83,9 +108,27 @@ int main(){
  ams::log::Finalize();u32 enabled;GetLogging(&enabled);assert(!enabled);
  fault=0;file.assign(256*1024,'x');WriteLine("socket %d",7);assert(file.size()<256&&opened==closed);
  fault=5;file.assign(256*1024,'x');WriteLine("socket %d",7);assert(file.size()==256*1024&&opened==closed);
+ // A flushed line can be visible while CloseFile still holds the SD logger lock.
+ // The MITM query never logs, and the accept worker continues through that stall.
+ file.clear(); fault=0;
+ ams::os::ThreadType server{};
+ ams::log::LdnAcceptInfo info{143,0x01006f8002326000ull,128,4096,48};
+ ams::log::RecordLdnAccept("disabled",info);
+ assert(SetLogging(1)==0);
+ fs::block_close=true;
+ ams::log::RecordLdnAccept("ack.begin",info);
+ std::thread writer([&]{ams::log::DrainLdnAcceptTraceUntilExit(&server);});
+ while(!fs::close_entered)std::this_thread::yield();
+ assert(file.find("stage=ack.begin")!=std::string::npos && file.find("stage=disabled")==std::string::npos);
+ for(int i=0;i<72;i++)ams::log::RecordLdnAccept("kernel.accepted",info);
+ ams::log::RecordLdnAccept("accept.done",info,0xfeed);
+ server.stopped=true;fs::release_close=true;writer.join();
+ assert(file.find("stage=accept.done pid=143 title=01006f8002326000 rc=0000feed pointer=128/4096 max_sessions=48")!=std::string::npos);
+ assert(file.find("dropped=9")!=std::string::npos);
+ puts("PASS accept worker records progress/returned error during stalled SD close; bounded queue retains last stage");
  puts("PASS actual diagnostic logger: SD failure disables logging, handles close, concurrent hex/text and bounded file");
 }
-'''.replace('/* SOURCE */',source).replace('/* BSD */',bsd)
+'''.replace('/* SOURCE */',source).replace('/* BSD */',bsd).replace('/* ACCEPT TRACE */',accept)
 with tempfile.TemporaryDirectory(prefix='native-logging-') as tmp:
  cpp=Path(tmp)/'test.cpp';cpp.write_text(code);binary=Path(tmp)/'test'
  subprocess.run(shlex.split(os.environ.get('CXX','c++'))+['-std=c++17','-Wall','-Wextra','-Werror','-pthread',str(cpp),'-o',str(binary)],check=True)

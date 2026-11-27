@@ -34,6 +34,31 @@ namespace ams::sf::hipc {
     }
     #endif
 
+    Result ServerManagerBase::RecoverAcceptFailure(Server *server, Result result) {
+        if (R_SUCCEEDED(result) || sf::hipc::ResultPointerBufferTooSmall::Includes(result)) {
+            /* A rejected pointer buffer has already been disconnected by the accept guard. */
+            R_SUCCEED();
+        }
+        #if defined(ATMOSPHERE_OS_HORIZON)
+        if (sf::hipc::ResultOutOfSessionMemory::Includes(result)) {
+            /* Slot reservation failed before dequeue. Discard this pending client once. */
+            os::NativeHandle rejected;
+            result = svc::AcceptSession(std::addressof(rejected), server->m_port_handle);
+            if (R_SUCCEEDED(result)) {
+                os::CloseNativeHandle(rejected);
+                R_SUCCEED();
+            }
+        }
+        if (svc::ResultNotFound::Includes(result)) {
+            /* No pending client remains on the signaled port. */
+            R_SUCCEED();
+        }
+        #else
+        AMS_UNUSED(server);
+        #endif
+        R_RETURN(result);
+    }
+
     void ServerManagerBase::RegisterServerSessionToWait(ServerSession *session) {
         session->m_has_received = false;
 

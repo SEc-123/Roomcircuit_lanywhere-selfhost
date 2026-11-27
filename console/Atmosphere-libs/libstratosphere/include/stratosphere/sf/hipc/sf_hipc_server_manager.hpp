@@ -188,6 +188,8 @@ namespace ams::sf::hipc {
                 AMS_ABORT("OnNeedsToAccept must be overridden when using indexed ports");
             }
 
+            Result RecoverAcceptFailure(Server *server, Result result);
+
             template<typename Interface>
             Result AcceptImpl(Server *server, SharedPointer<Interface> p) {
                 R_RETURN(ServerSessionManager::AcceptSession(server->m_port_handle, std::move(p)));

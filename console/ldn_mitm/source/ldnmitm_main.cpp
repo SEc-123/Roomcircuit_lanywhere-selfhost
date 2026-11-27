@@ -32,6 +32,8 @@ extern "C" {
 }
 
 #include "ldnmitm_service.hpp"
+#include "ldn_accept_trace.hpp"
+#include <atomic>
 #include "bsd_spy.hpp"
 #include "lanywhere_service.hpp"
 #include "appointment_notifier.hpp"
@@ -147,31 +149,54 @@ namespace ams {
 
             enum PortIndex { PortIndex_Ldn = 0, PortIndex_Bsd = 1, PortIndex_Lanywhere = 2, PortIndex_Count };
 
+            // The LDN port holder is unlinked during each handoff and relinked on return.
+            // Only that worker reads the borrowed context; BSD workers ignore the observer.
+            std::atomic<const os::ThreadType *> g_ldn_accept_worker{};
+            const log::LdnAcceptInfo *g_traced_accept = nullptr;
+
             class ServerManager final : public sf::hipc::ServerManager<PortIndex_Count, LdnMitmManagerOptions, MaxSessions> {
                         private:
                             virtual ams::Result OnNeedsToAccept(int port_index, Server *server) override;
+                            void OnMitmAcceptStage(MitmAcceptStage stage) override {
+                                if (g_ldn_accept_worker.load() != os::GetCurrentThread()) return;
+                                switch (stage) {
+                                    case MitmAcceptStage::SlotReserved:    log::RecordLdnAccept("slot.reserved", *g_traced_accept); break;
+                                    case MitmAcceptStage::KernelAccepted:  log::RecordLdnAccept("kernel.accepted", *g_traced_accept); break;
+                                    case MitmAcceptStage::RegisteringWait: log::RecordLdnAccept("wait.registering", *g_traced_accept); break;
+                                }
+                            }
             };
 
             ServerManager g_server_manager;
 
             Result ServerManager::OnNeedsToAccept(int port_index, Server *server) {
-                // LANywhere: servicio de control propio (no es un mitm).
                 if (port_index == PortIndex_Lanywhere) {
-                    return this->AcceptImpl(server, sf::CreateSharedObjectEmplaced<mitm::lanywhere::ILanywhereService, mitm::lanywhere::LanywhereService>());
+                    const Result rc = this->AcceptImpl(server, sf::CreateSharedObjectEmplaced<mitm::lanywhere::ILanywhereService, mitm::lanywhere::LanywhereService>());
+                    return this->RecoverAcceptFailure(server, rc);
                 }
-                /* Acknowledge the mitm session. */
+
                 std::shared_ptr<::Service> fsrv;
                 sm::MitmProcessInfo client_info;
-                if (port_index == PortIndex_Ldn) LogFormat("ldn-diag-20261127 accept.ack.begin version=%s", GITDESCVER);
+                log::LdnAcceptInfo info{.pointer_capacity = LdnMitmManagerOptions::PointerBufferSize, .session_limit = MaxSessions};
+                if (port_index == PortIndex_Ldn) log::RecordLdnAccept("ack.begin", info);
                 server->AcknowledgeMitmSession(std::addressof(fsrv), std::addressof(client_info));
                 if (port_index == PortIndex_Bsd) {
-                    return this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::bsd::IBsdSpy, mitm::bsd::BsdSpyService>(decltype(fsrv)(fsrv), client_info), fsrv);
+                    const Result rc = this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::bsd::IBsdSpy, mitm::bsd::BsdSpyService>(decltype(fsrv)(fsrv), client_info), fsrv);
+                    return this->RecoverAcceptFailure(server, rc);
                 }
-                LogFormat("ldn accept.ack.done pid=%" PRIu64 " title=%016" PRIx64,
-                          client_info.process_id.value, client_info.program_id.value);
-                const Result rc = this->AcceptMitmImpl(server, sf::CreateSharedObjectEmplaced<mitm::ldn::ILdnMitMService, mitm::ldn::LdnMitMService>(decltype(fsrv)(fsrv), client_info), fsrv);
-                LogFormat("ldn accept.done pid=%" PRIu64 " rc=%#x", client_info.process_id.value, rc.GetValue());
-                return rc;
+
+                info.pid = client_info.process_id.value;
+                info.title = client_info.program_id.value;
+                info.forward_pointer_size = fsrv->pointer_buffer_size;
+                log::RecordLdnAccept("ack.done", info);
+                auto object = sf::CreateSharedObjectEmplaced<mitm::ldn::ILdnMitMService, mitm::ldn::LdnMitMService>(decltype(fsrv)(fsrv), client_info);
+                log::RecordLdnAccept("object.ready", info);
+                g_traced_accept = &info;
+                g_ldn_accept_worker.store(os::GetCurrentThread());
+                ON_SCOPE_EXIT { g_ldn_accept_worker.store(nullptr); g_traced_accept = nullptr; };
+                const Result rc = this->AcceptMitmImpl(server, std::move(object), fsrv);
+                log::RecordLdnAccept("accept.done", info, rc.GetValue());
+                return this->RecoverAcceptFailure(server, rc);
             }
 
             alignas(os::MemoryPageSize) u8 g_extra_thread_stacks[NumExtraThreads][ThreadStackSize];
@@ -291,6 +316,7 @@ namespace ams {
         os::SetThreadNamePointer(&mitm::g_thread, "ldn_mitm::MainThread");
         os::StartThread(&mitm::g_thread);
 
+        log::DrainLdnAcceptTraceUntilExit(&mitm::g_thread);
         os::WaitThread(&mitm::g_thread);
     }
 

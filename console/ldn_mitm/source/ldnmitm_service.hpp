@@ -17,8 +17,8 @@ namespace ams::mitm::ldn {
         public:
             LdnMitMService(std::shared_ptr<::Service> &&s, const sm::MitmProcessInfo &c);
             
-            static bool ShouldMitm(const sm::MitmProcessInfo &client_info) {
-                LogFormat("should_mitm pid: %" PRIu64 " tid: %" PRIx64, client_info.process_id, client_info.program_id);
+            // SM waits for this answer while holding its global service registry lock.
+            static bool ShouldMitm(const sm::MitmProcessInfo &) {
                 return true;
             }
         // protected:
