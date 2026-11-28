@@ -694,8 +694,11 @@ struct Impl {
                 RememberMapping(decoded, Le32(decoded + 8), source);
                 if (active && (hosting ? HostAllows(true) : peers[0].fork) &&
                     !std::memcmp(decoded, network_info + 0x20, 6)) {
-                    const int member = AddPeer(source, Le32(decoded + 8), true);
-                    if (member >= 0)
+                    const uint32_t real = Le32(decoded + 8);
+                    // Only CONNECT establishes a host's peer protocol. A delayed
+                    // heartbeat from an earlier room must not pin a new peer.
+                    const int member = hosting ? PeerFor(source) : AddPeer(source, real, true);
+                    if (member >= 0 && peers[member].fork && peers[member].real == real)
                         peers[member].last = monotonic_ms();
                 }
             } else if (fork && kind == 5 && active && bytes == 12 &&
