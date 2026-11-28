@@ -43,7 +43,8 @@ static void Controls() {uint8_t from,kind,b[0x500];ssize_t n;while((n=lanplay::T
  Emit("{\"event\":\"control\",\"from\":"+std::to_string(from)+",\"kind\":"+std::to_string(kind)+",\"size\":"+std::to_string(n)+"}");
  if(lanplay::State().hosting&&kind==3&&n==64){unsigned slot=1;const uint32_t ip=lanplay::Le32(b);while(slot<8&&info[0x68+slot*64+11]&&lanplay::Le32(info.data()+0x68+slot*64)!=ip)slot++;
   if(slot>=capacity){lanplay::SendControl(from,5,nullptr,0);Emit("{\"event\":\"rejected\"}");continue;}
-  if(!info[0x68+slot*64+11])info[0x67]++;std::memcpy(info.data()+0x68+slot*64,b,64);info[0x68+slot*64+10]=slot;member_slots[from]=slot;Sync();
+  if(!info[0x68+slot*64+11]) { info[0x67]++; }
+  std::memcpy(info.data()+0x68+slot*64,b,64);info[0x68+slot*64+10]=slot;member_slots[from]=slot;Sync();
  }else if(kind==4&&n==0x480){std::memcpy(info.data(),b,n);Membership();}
  else if(kind==255&&lanplay::State().hosting){auto it=member_slots.find(from);if(it!=member_slots.end()){std::memset(info.data()+0x68+it->second*64,0,64);info[0x67]--;member_slots.erase(it);Sync();}}
  else if(kind==255)Snapshot("disconnected");
