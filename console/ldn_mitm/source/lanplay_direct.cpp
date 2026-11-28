@@ -624,7 +624,9 @@ struct Impl {
             }
             int index = PeerFor(address);
             if (index < 0)
-                index = AddPeer(address, address, false);
+                // A guest learns later arrivals from its selected host's SYNC.
+                // Virtual-address fork nodes still use fork game framing.
+                index = AddPeer(address, address, !hosting && peers[0].fork);
             if (index >= 0)
                 peers[index].admitted = true;
         }
@@ -690,7 +692,8 @@ struct Impl {
                 }
             } else if (fork && kind == 4 && bytes == 12) {
                 RememberMapping(decoded, Le32(decoded + 8), source);
-                if (active && !std::memcmp(decoded, network_info + 0x20, 6)) {
+                if (active && (hosting ? HostAllows(true) : peers[0].fork) &&
+                    !std::memcmp(decoded, network_info + 0x20, 6)) {
                     const int member = AddPeer(source, Le32(decoded + 8), true);
                     if (member >= 0)
                         peers[member].last = monotonic_ms();

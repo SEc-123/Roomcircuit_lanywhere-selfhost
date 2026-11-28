@@ -13,6 +13,7 @@ function create({ send, now = Date.now, maxStreams = 128, maxPerMember = 8,
     const active = m => !!(m?.room && m.room.members[m.index] === m && m.socket &&
         !m.socket.destroyed && !m.socket.writableEnded);
     const members = m => memberships.get(m) || new Set();
+    const hasOriginated = m => [...members(m)].some(f => f.a === m);
     const admitted = m => active(m) && (!m.room.gameId ||
         (!!m.room.published && m.room.published.connected.has(m)));
     const key = (origin, receiver, h) => `${origin.token}:${receiver.token}:${h.nonce}:${h.id}`;
@@ -72,12 +73,14 @@ function create({ send, now = Date.now, maxStreams = 128, maxPerMember = 8,
             }
             let ledger = ledgers.get(member);
             if (ledger && ledger.socket !== member.socket) {
-                if (members(member).size) {
+                if (hasOriginated(member)) {
                     reset(member, peer.ip, h, REASON.SESSION); return { ok: false, reason: 'nonce-active' };
                 }
                 ledger = null;
             }
-            if (ledger && ledger.nonce !== h.nonce && members(member).size) {
+            // The ledger belongs to this initiator. Incoming streams carry
+            // another peer's nonce and may arrive first after reconnection.
+            if (ledger && ledger.nonce !== h.nonce && hasOriginated(member)) {
                 reset(member, peer.ip, h, REASON.SESSION); return { ok: false, reason: 'nonce-active' };
             }
             // A nonce identifies an LDN session, not permission to reuse IDs on

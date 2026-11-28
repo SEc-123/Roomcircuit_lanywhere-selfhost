@@ -95,7 +95,7 @@ class NativeLanPlayTransport(unittest.TestCase):
                 ["node", str(ROOT / "console/ldn_mitm/tests/lanplay_direct_test.cjs"), str(driver)],
                 check=True, timeout=130,
             )
-            for fixture in ["lanplay_protocol_lock", "lanplay_fragment_queue"]:
+            for fixture in ["lanplay_protocol_lock", "lanplay_fragment_queue", "lanplay_multi"]:
                 executable = Path(temp) / fixture
                 subprocess.run(
                     shlex.split(os.environ.get("CXX", "c++"))

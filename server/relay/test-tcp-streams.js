@@ -114,6 +114,28 @@ test('socket generations and room session changes invalidate existing streams', 
     }
 });
 
+test('incoming streams do not block a resumed peer from connecting a third member', () => {
+    for (const newSocket of [false, true]) {
+        const x = fixture(), { a, b, c, tx, router } = x;
+        assert(tx(a, b, OP.OPEN, { id: 7 }).ok);
+        router.closeMember(a);
+        if (newSocket) a.socket = { destroyed: false, writableEnded: false };
+        assert(tx(b, a, OP.OPEN, { id: 1, nonce: 81n }).ok);
+        assert(tx(a, b, OP.OPEN_OK, { owner: 1, id: 1, nonce: 81n, aux: 8 }).ok);
+        const id = newSocket ? 1 : 8;
+        assert(tx(a, c, OP.OPEN, { id, nonce: 72n }).ok);
+        assert(tx(c, a, OP.OPEN_OK, { owner: 1, id, nonce: 72n, aux: 8 }).ok);
+        assert(tx(b, a, OP.DATA, { owner: 0, id: 1, nonce: 81n }, Buffer.from('in')).ok);
+        assert(tx(a, c, OP.DATA, { owner: 0, id, nonce: 72n }, Buffer.from('out')).ok);
+        assert.equal(router.snapshot().streams, 2);
+        // A genuinely active outgoing session still cannot switch its nonce.
+        assert.equal(tx(a, b, OP.OPEN, { id: id + 1, nonce: 73n }).reason, 'nonce-active');
+        router.closeMember(a, REASON.BACKPRESSURE);
+        assert.equal(tx(a, c, OP.OPEN, { id, nonce: 74n }).reason, 'reused-id');
+        assert(tx(a, c, OP.OPEN, { id: id + 1, nonce: 74n }).ok);
+    }
+});
+
 test('legacy readiness is explicit and only accepted from marked virtual peers', () => {
     for (const mode of ['legacy', 'unmarked', 'false-reliable', 'legacy-origin']) {
         const x = fixture();
