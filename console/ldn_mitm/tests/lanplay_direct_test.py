@@ -111,10 +111,11 @@ class NativeLanPlayTransport(unittest.TestCase):
                     check=True, timeout=60,
                 )
                 if fixture == "lanplay_multi":
-                    subprocess.run(
-                        ["node", str(ROOT / "console/ldn_mitm/tests/lanplay_stale_heartbeat_test.cjs"), str(executable)],
-                        check=True, timeout=30,
-                    )
+                    for scenario in ["lanplay_stale_heartbeat", "lanplay_membership_churn"]:
+                        subprocess.run(
+                            ["node", str(ROOT / f"console/ldn_mitm/tests/{scenario}_test.cjs"), str(executable)],
+                            check=True, timeout=30,
+                        )
 
 
 if __name__ == "__main__":

@@ -609,6 +609,21 @@ struct Impl {
         }
     }
     void SyncPeers(const uint8_t *info) {
+        if (!hosting) {
+            // The selected host's validated SYNC is authoritative membership.
+            // Standard peers need not broadcast a fork BYE when they leave.
+            for (unsigned member = 1; member < peers.size(); member++) {
+                if (!peers[member].address)
+                    continue;
+                bool present = false;
+                for (unsigned i = 0; i < 8; i++) {
+                    const auto *node = info + 0x68 + 64 * i;
+                    present |= node[11] && Le32(node) == peers[member].address;
+                }
+                if (!present)
+                    DropPeer(member);
+            }
+        }
         bool self_present = false;
         for (auto &peer : peers)
             peer.admitted = false;
